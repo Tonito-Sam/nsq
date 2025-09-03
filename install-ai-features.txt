@@ -1,0 +1,34 @@
+# AI Features for CreatePostModal
+
+## NPM Packages to Install
+
+# For spam detection
+# Use a simple keyword-based or custom spam filter (no npm needed)
+
+# For keyword extraction (hashtag generation)
+keyword-extractor
+
+# For toxicity detection
+# Use HuggingFace Inference API (free tier) or similar cloud API for toxicity (no npm needed)
+
+# For sentiment analysis
+sentiment
+
+# For image captioning (BLIP via Replicate API, or you can use a local model if you want to self-host)
+
+# For translation (LibreTranslate public API, no npm needed)
+
+# For voice-to-text (Web Speech API, no npm needed)
+
+---
+
+## Install with:
+npm install keyword-extractor sentiment axios
+
+---
+
+## Next Steps
+- Integrate each feature in CreatePostModal after installing these packages.
+- Add API keys/config for Replicate if using their BLIP endpoint for image captioning.
+- Use fetch for LibreTranslate API.
+- Use browser's SpeechRecognition for voice-to-text.
