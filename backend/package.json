@@ -1,0 +1,16 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "main": "server.cjs",
+  "scripts": {
+    "dev": "nodemon server.cjs",
+    "start": "node server.cjs"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.1.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
