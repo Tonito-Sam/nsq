@@ -26,7 +26,3 @@ app.listen(PORT, () => {
   console.log(`✅ Backend running on port ${PORT}`);
 });
 
-"scripts": {
-  "dev": "nodemon server.cjs",
-  "start": "node server.cjs"
-}
