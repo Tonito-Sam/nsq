@@ -14,7 +14,7 @@ interface LiveStreamChatProps {
 
 export const LiveStreamChat: React.FC<LiveStreamChatProps> = ({ comments }) => {
   return (
-    <div className="absolute top-4 right-4 w-80 max-h-[50vh] pointer-events-none">
+  <div className="absolute top-4 right-4 w-80 max-h-[50vh]">
       <div className="bg-black/40 backdrop-blur-sm rounded-2xl p-4 shadow-xl">
         <div className="text-white font-semibold mb-3 flex items-center gap-2">
           <span className="w-2 h-2 bg-green-400 rounded-full"></span>

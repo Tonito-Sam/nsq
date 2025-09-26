@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -23,78 +24,147 @@ interface Product extends ProductRow {
   };
 }
 
+// React Query keys
+const QUERY_KEYS = {
+  products: ['products'] as const,
+  cartCount: ['cartCount'] as const,
+} as const;
+
 const Square = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [addingToCart, setAddingToCart] = useState<string | null>(null);
-  const [cartCount, setCartCount] = useState(0);
 
-  useEffect(() => {
-    fetchProducts();
-  }, []);
+  // Fetch products with React Query
+  const { data: products = [], isLoading } = useQuery({
+    queryKey: QUERY_KEYS.products,
+    queryFn: async () => {
+      try {
+        // Get products
+        const { data: productsData, error: productsError } = await supabase
+          .from('store_products')
+          .select('*')
+          .eq('is_active', true)
+          .order('created_at', { ascending: false });
 
-  // Fetch cart count
-  const fetchCartCount = async () => {
-    if (!user) {
-      setCartCount(0);
-      return;
-    }
-    const { count, error } = await supabase
-      .from('cart_items')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', user.id);
-    if (!error && typeof count === 'number') setCartCount(count);
-  };
+        if (productsError) throw productsError;
 
-  const fetchProducts = async () => {
-    try {
-      // Get products
-      const { data: productsData, error: productsError } = await supabase
-        .from('store_products')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false });
+        // Type assertion to ProductRow[]
+        const typedProducts = (productsData || []) as ProductRow[];
 
-      if (productsError) throw productsError;
+        // Get all unique store_ids from products
+        const storeIds = Array.from(new Set(typedProducts.map(p => p.store_id).filter(Boolean)));
+        
+        // Fetch all stores in one query
+        const { data: storesData, error: storesError } = await supabase
+          .from('user_stores')
+          .select('id, store_name, verification_status, is_active')
+          .in('id', storeIds);
+        
+        if (storesError) throw storesError;
+        
+        const storesMap = new Map((storesData || []).map(store => [store.id, store]));
 
-      // Type assertion to ProductRow[]
-      const typedProducts = (productsData || []) as ProductRow[];
+        // Attach store info, but always keep the original store_id for navigation
+        return typedProducts.map(product => {
+          const storeData = storesMap.get(product.store_id);
+          return {
+            ...product,
+            store: storeData
+              ? {
+                  store_name: storeData.store_name,
+                  verification_status: storeData.verification_status,
+                  id: storeData.id,
+                }
+              : undefined,
+          };
+        });
+      } catch (error) {
+        console.error('Error fetching products:', error);
+        throw error;
+      }
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+  });
 
-      // Get all unique store_ids from products
-      const storeIds = Array.from(new Set(typedProducts.map(p => p.store_id).filter(Boolean)));
-      // Fetch all stores in one query
-      const { data: storesData, error: storesError } = await supabase
-        .from('user_stores')
-        .select('id, store_name, verification_status, is_active')
-        .in('id', storeIds);
-      if (storesError) throw storesError;
-      const storesMap = new Map((storesData || []).map(store => [store.id, store]));
+  // Fetch cart count with React Query
+  const { data: cartCount = 0 } = useQuery({
+    queryKey: QUERY_KEYS.cartCount,
+    queryFn: async () => {
+      if (!user) return 0;
+      
+      const { count, error } = await supabase
+        .from('cart_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id);
+      
+      if (error) throw error;
+      return count || 0;
+    },
+    enabled: !!user,
+    staleTime: 2 * 60 * 1000, // 2 minutes
+    gcTime: 5 * 60 * 1000, // 5 minutes
+  });
 
-      // Attach store info, but always keep the original store_id for navigation
-      const productsWithStores = typedProducts.map(product => {
-        const storeData = storesMap.get(product.store_id);
-        return {
-          ...product,
-          store: storeData
-            ? {
-                store_name: storeData.store_name,
-                verification_status: storeData.verification_status,
-                id: storeData.id,
-              }
-            : undefined,
-        };
+  // Add to cart mutation
+  const addToCartMutation = useMutation({
+    mutationFn: async (product: Product) => {
+      if (!user) throw new Error('User not authenticated');
+
+      // Check if item already exists in cart
+      const { data: existing, error: checkError } = await supabase
+        .from('cart_items')
+        .select('id, quantity')
+        .eq('user_id', user.id)
+        .eq('product_id', product.id)
+        .single();
+      
+      if (checkError && checkError.code !== 'PGRST116') throw checkError;
+      
+      if (existing) {
+        // If already in cart, increment quantity
+        const { error: updateError } = await supabase
+          .from('cart_items')
+          .update({ quantity: existing.quantity + 1 })
+          .eq('id', existing.id);
+        
+        if (updateError) throw updateError;
+        return { action: 'updated', product };
+      } else {
+        // If not in cart, insert new row
+        const { error } = await supabase
+          .from('cart_items')
+          .insert({
+            user_id: user.id,
+            product_id: product.id,
+            quantity: 1,
+          });
+        
+        if (error) throw error;
+        return { action: 'added', product };
+      }
+    },
+    onSuccess: ({ action, product }) => {
+      // Invalidate cart count query
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cartCount });
+      
+      toast({
+        title: action === 'added' ? 'Added to Cart' : 'Cart Updated',
+        description: `${product.title} ${action === 'added' ? 'has been added to' : 'quantity increased in'} your cart.`,
       });
-      setProducts(productsWithStores);
-    } catch (error) {
-      console.error('Error fetching products:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    onError: (error) => {
+      console.error('Error adding to cart:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to add to cart. Please try again.',
+        variant: 'destructive',
+      });
+    },
+  });
 
   const handleAddToCart = async (product: Product) => {
     if (!user) {
@@ -105,53 +175,7 @@ const Square = () => {
       });
       return;
     }
-    setAddingToCart(product.id);
-    try {
-      // Check if item already exists in cart
-      const { data: existing, error: checkError } = await supabase
-        .from('cart_items')
-        .select('id, quantity')
-        .eq('user_id', user.id)
-        .eq('product_id', product.id)
-        .single();
-      if (checkError && checkError.code !== 'PGRST116') throw checkError;
-      if (existing) {
-        // If already in cart, increment quantity
-        const { error: updateError } = await supabase
-          .from('cart_items')
-          .update({ quantity: existing.quantity + 1 })
-          .eq('id', existing.id);
-        if (updateError) throw updateError;
-        toast({
-          title: 'Cart Updated',
-          description: `${product.title} quantity increased in your cart.`,
-        });
-        fetchCartCount();
-      } else {
-        // If not in cart, insert new row
-        const { error } = await supabase
-          .from('cart_items')
-          .insert({
-            user_id: user.id,
-            product_id: product.id,
-            quantity: 1,
-          });
-        if (error) throw error;
-        toast({
-          title: 'Added to Cart',
-          description: `${product.title} has been added to your cart.`,
-        });
-        fetchCartCount();
-      }
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: 'Failed to add to cart. Please try again.',
-        variant: 'destructive',
-      });
-    } finally {
-      setAddingToCart(null);
-    }
+    addToCartMutation.mutate(product);
   };
 
   const filteredProducts = products.filter(product =>
@@ -160,7 +184,7 @@ const Square = () => {
     product.category?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">
         <Header />
@@ -264,7 +288,10 @@ const Square = () => {
                     by {product.store && product.store.store_name ? (
                       <span
                         className="text-purple-700 hover:underline cursor-pointer"
-                        onClick={() => navigate(`/store/${product.store.id}`)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/store/${product.store!.id}`);
+                        }}
                       >
                         {product.store.store_name}
                       </span>
@@ -280,7 +307,10 @@ const Square = () => {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => setSelectedProduct(product)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedProduct(product);
+                          }}
                         >
                           <MessageSquare className="h-4 w-4" />
                         </Button>
@@ -288,10 +318,13 @@ const Square = () => {
                       <Button
                         size="sm"
                         className="bg-purple-600 hover:bg-purple-700"
-                        onClick={() => handleAddToCart(product)}
-                        disabled={addingToCart === product.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAddToCart(product);
+                        }}
+                        disabled={addToCartMutation.isPending && addToCartMutation.variables?.id === product.id}
                       >
-                        {addingToCart === product.id ? (
+                        {addToCartMutation.isPending && addToCartMutation.variables?.id === product.id ? (
                           <span className="flex items-center"><span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-1"></span>Adding...</span>
                         ) : (
                           <ShoppingCart className="h-4 w-4" />

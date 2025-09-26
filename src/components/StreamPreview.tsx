@@ -17,6 +17,7 @@ interface StreamPreviewProps {
   error: string;
   setPermissionsGranted: (granted: boolean) => void;
   setPreviewStream: (stream: MediaStream | null) => void;
+  resetStream: () => void;
 }
 
 export const StreamPreview: React.FC<StreamPreviewProps> = ({
@@ -34,6 +35,7 @@ export const StreamPreview: React.FC<StreamPreviewProps> = ({
   error,
   setPermissionsGranted,
   setPreviewStream,
+  resetStream,
 }) => {
   const stopPreview = () => {
     if (previewStream) {
@@ -77,12 +79,11 @@ export const StreamPreview: React.FC<StreamPreviewProps> = ({
                 <FaVideo />
                 Start Preview
               </button>
-              <button
-                className="py-4 px-6 rounded-2xl bg-white/10 backdrop-blur-sm text-white border border-white/20 hover:bg-white/20 transition-colors"
-                onClick={flipCamera}
-                title="Switch camera"
+                <button
+                onClick={resetStream}
+                className="px-3 py-1.5 md:px-4 md:py-2 rounded-full bg-white/10 backdrop-blur-sm text-white hover:bg-white/20 transition-all duration-200 text-sm md:text-base"
               >
-                <FaSyncAlt />
+                Reset
               </button>
             </div>
           </div>

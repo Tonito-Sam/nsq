@@ -3,7 +3,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, useNavigate, useParams, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useParams, useLocation } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ShowProvider } from "@/contexts/ShowContext";
@@ -17,6 +17,7 @@ import MyStore from "./pages/MyStore";
 import Square from "./pages/Square";
 import Wallet from "./pages/Wallet";
 import Studio from "./pages/Studio";
+import Studio2 from "./pages/studio2";
 import ReelViewPage from "./pages/ReelViewPage";
 import PostViewPage from "./pages/PostViewPage";
 import Messages from "./pages/Messages";
@@ -194,6 +195,7 @@ const App = () => {
                     <Route path="/square" element={<Square />} />
                     <Route path="/wallet" element={<Wallet />} />
                     <Route path="/studio" element={<Studio />} />
+                    <Route path="/studio2" element={<Studio2 />} />
                     <Route path="/studio/reel/:id" element={<ReelViewPage />} />
                     <Route path="/post/:id" element={<PostViewPage />} />
                     <Route path="/studio/upload" element={<UploadReels />} />

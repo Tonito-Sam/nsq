@@ -247,11 +247,20 @@ export const PostContent: React.FC<PostContentProps> = ({
                 webkit-playsinline="true"
                 x5-playsinline="true"
                 disablePictureInPicture
+                onError={e => {
+                  console.error('Video failed to load:', url, e);
+                  const fallback = e.currentTarget.nextElementSibling;
+                  if (fallback) fallback.style.display = 'flex';
+                }}
+                style={{ background: '#222' }}
               >
                 <source src={url} type="video/mp4" />
                 <source src={url} type="video/webm" />
                 Your browser does not support the video tag.
               </video>
+              <div style={{display:'none',position:'absolute',top:0,left:0,right:0,bottom:0,background:'#222',color:'#fff',alignItems:'center',justifyContent:'center',zIndex:2,fontSize:'1rem'}}>
+                Video failed to load or play.
+              </div>
             </div>
           ))}
         </div>

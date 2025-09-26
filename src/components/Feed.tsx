@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { useInfiniteQuery, useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { CreatePost } from './CreatePost';
 import { PostCard } from './PostCard';
 import { Moments } from './Moments';
@@ -62,136 +63,37 @@ interface Post {
   };
 }
 
-interface StudioShow {
-  id: string;
-  title: string;
-  description?: string;
-  video_url?: string;
-  thumbnail_url?: string;
-  duration?: number;
-  scheduled_time?: string;
-  end_time?: string;
-  is_live: boolean;
-  is_active: boolean;
-  created_at: string;
-}
+// React Query keys
+const QUERY_KEYS = {
+  posts: ['posts'] as const,
+  studioShows: ['studioShows'] as const,
+  reactions: (postIds: string[]) => ['reactions', postIds] as const,
+  comments: (postId: string) => ['comments', postId] as const,
+} as const;
 
 export const Feed = () => {
   const { user } = useAuth();
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const queryClient = useQueryClient();
   const [showRepostModal, setShowRepostModal] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
-  const [hasMore, setHasMore] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showCommentsOverlay, setShowCommentsOverlay] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [likeCount, setLikeCount] = useState(88);
-  const [studioShows, setStudioShows] = useState<StudioShow[]>([]);
-  const [currentShowIndex, setCurrentShowIndex] = useState(0); // Track current show index
+  const [currentShowIndex, setCurrentShowIndex] = useState(0);
+  const [openComments, setOpenComments] = useState<{ [postId: string]: boolean }>({});
   
   const feedRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
   
   const [pullToRefresh, setPullToRefresh] = useState({
     active: false,
     startY: 0,
     distance: 0
   });
-  const [postReactions, setPostReactions] = useState<{[postId: string]: { counts: {[type: string]: number}, userReaction: string | null }}>({});
-  const [openComments, setOpenComments] = useState<{ [postId: string]: boolean }>({});
-  const [replyToCommentId, setReplyToCommentId] = useState<string | null>(null);
-  const [replyToCommentPostId, setReplyToCommentPostId] = useState<string | null>(null);
-  const [replyMessage, setReplyMessage] = useState('');
 
-  // Helper function to format time
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  // Handle chat scroll
-  const handleScroll = () => {
-    const el = chatContainerRef.current;
-    if (!el) return;
-    const threshold = 80;
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    // You can use this for auto-scroll logic if needed
-  };
-
-  // Handle send message
-  const handleSendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim()) return;
-    
-    const message: ChatMessage = {
-      id: Date.now().toString(),
-      username: user?.user_metadata?.first_name || user?.email || 'Anonymous',
-      message: newMessage,
-      timestamp: new Date(),
-      avatar: user?.user_metadata?.avatar_url,
-      isModerator: false,
-      isVip: false
-    };
-    
-    setMessages(prev => [...prev, message]);
-    setNewMessage('');
-  };
-
-  // Fetch studio shows from database
-  const fetchStudioShows = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('studio_shows')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(10);
-
-      if (error) {
-        console.error('Error fetching studio shows:', error);
-        return;
-      }
-
-      setStudioShows(data || []);
-    } catch (err) {
-      console.error('Failed to fetch studio shows:', err);
-    }
-  };
-
-  const fetchReactionsForPosts = async (postsList: Post[]) => {
-    if (!user?.id) return;
-    const postIds = postsList.map(p => p.id);
-    if (postIds.length === 0) return;
-
-    const { data: reactions, error: reactionsError } = await supabase
-      .from('likes')
-      .select('post_id, reaction_type, user_id')
-      .in('post_id', postIds);
-
-    if (reactionsError) {
-      console.error('Error fetching reactions:', reactionsError);
-      return;
-    }
-
-    const reactionsByPost: {[postId: string]: { counts: {[type: string]: number}, userReaction: string | null }} = {};
-    postsList.forEach(post => {
-      reactionsByPost[post.id] = { counts: {}, userReaction: null };
-    });
-
-    (reactions || []).forEach(r => {
-      if (!r.post_id || !r.reaction_type) return;
-      if (!reactionsByPost[r.post_id]) reactionsByPost[r.post_id] = { counts: {}, userReaction: null };
-      reactionsByPost[r.post_id].counts[r.reaction_type] = (reactionsByPost[r.post_id].counts[r.reaction_type] || 0) + 1;
-      if (r.user_id === user.id) reactionsByPost[r.post_id].userReaction = r.reaction_type;
-    });
-
-    setPostReactions(reactionsByPost);
-  };
-
-  // Helper to parse/normalize media_urls on all posts
+  // Helper function to process media URLs
   const processPostMediaUrls = (post: any): any => {
     let media_urls: string[] | undefined = undefined;
     if (Array.isArray(post.media_urls) && post.media_urls.length > 0) {
@@ -213,16 +115,19 @@ export const Feed = () => {
     return { ...post, media_urls, media_url: (media_urls && media_urls.length > 0) ? media_urls[0] : post.media_url };
   };
 
-  // Updated fetchPosts to ensure comments_count is properly fetched and updated
-  const fetchPosts = async (refresh = false) => {
-    try {
-      if (refresh) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
-
-      const { data, error: fetchError, count } = await supabase
+  // Infinite query for posts with optimal caching
+  const {
+    data: postsData,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading: postsLoading,
+    error: postsError,
+    refetch: refetchPosts,
+  } = useInfiniteQuery({
+    queryKey: QUERY_KEYS.posts,
+    queryFn: async ({ pageParam = 0 }) => {
+      const { data, error, count } = await supabase
         .from('posts')
         .select(`
           id,
@@ -256,29 +161,25 @@ export const Feed = () => {
         .is('group_id', null)
         .neq('post_type', 'moment')
         .order('created_at', { ascending: false })
-        .limit(refresh ? 10 : posts.length + 10);
+        .range(pageParam * 10, (pageParam + 1) * 10 - 1);
 
-      if (fetchError) throw fetchError;
-      
-      // Fetch actual comment counts for each post
-      const postsWithCommentCounts = await Promise.all(
+      if (error) throw error;
+
+      // Process posts with comment counts and original posts
+      const processedPosts = await Promise.all(
         (data || []).map(async (post) => {
+          // Get actual comment count
           const { count: commentCount } = await supabase
             .from('comments')
             .select('*', { count: 'exact', head: true })
             .eq('post_id', post.id);
           
-          return {
-            ...post,
-            comments_count: commentCount || 0
+          const processedPost = { 
+            ...processPostMediaUrls(post), 
+            comments_count: commentCount || 0 
           };
-        })
-      );
-      
-      const postsWithOriginal = await Promise.all(
-        postsWithCommentCounts.map(async (post) => {
-          const processedPost = processPostMediaUrls(post);
           
+          // Handle reposts
           if (post.post_type === 'repost' && post.media_url) {
             const { data: originalPost } = await supabase
               .from('posts')
@@ -308,205 +209,84 @@ export const Feed = () => {
               media_urls: undefined,
             };
           }
+          
           return processedPost;
         })
       );
 
-      setPosts(postsWithOriginal);
-      setHasMore((count || 0) > postsWithOriginal.length);
-      setError(null);
-      await fetchReactionsForPosts(postsWithOriginal);
-    } catch (err) {
-      console.error('Error fetching posts:', err);
-      setError('Failed to load posts. Please try again.');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+      return {
+        posts: processedPosts,
+        nextPage: data && data.length === 10 ? pageParam + 1 : undefined,
+        totalCount: count || 0,
+      };
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.nextPage,
+    staleTime: 30 * 1000, // 30 seconds
+    gcTime: 5 * 60 * 1000, // 5 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: true,
+  });
 
-  const handleLoadMore = async () => {
-    if (!loadingMore && hasMore) {
-      try {
-        setLoadingMore(true);
-        const { data, error: fetchError, count } = await supabase
-          .from('posts')
-          .select(`
-            id,
-            content,
-            created_at,
-            likes_count,
-            comments_count,
-            shares_count,
-            reposts_count,
-            post_type,
-            media_url,
-            media_urls,
-            voice_note_url,
-            voice_duration,
-            poll_options,
-            event_date,
-            event_location,
-            location,
-            feeling,
-            user_id,
-            user:users!posts_user_id_fkey(
-              first_name,
-              last_name,
-              username,
-              avatar_url,
-              verified,
-              heading,
-              bio
-            )
-          `, { count: 'exact' })
-          .is('group_id', null)
-          .neq('post_type', 'moment')
-          .order('created_at', { ascending: false })
-          .range(posts.length, posts.length + 9);
+  // Query for studio shows with caching
+  const { data: studioShows = [] } = useQuery({
+    queryKey: QUERY_KEYS.studioShows,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('studio_shows')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .limit(10);
 
-        if (fetchError) throw fetchError;
-        
-        const newPosts = await Promise.all(
-          (data || []).map(async (post) => {
-            const processedPost = processPostMediaUrls(post);
-            
-            if (post.post_type === 'repost' && post.media_url) {
-              const { data: originalPost } = await supabase
-                .from('posts')
-                .select(`
-                  id,
-                  content,
-                  media_url,
-                  media_urls,
-                  created_at,
-                  post_type,
-                  user:users!posts_user_id_fkey(
-                    first_name,
-                    last_name,
-                    username,
-                    avatar_url
-                  )
-                `)
-                .eq('id', post.media_url)
-                .single();
-              
-              const processedOriginalPost = originalPost ? processPostMediaUrls(originalPost) : null;
-              
-              return {
-                ...processedPost,
-                original_post: processedOriginalPost,
-                media_url: null,
-                media_urls: undefined,
-              };
-            }
-            return processedPost;
-          })
-        );
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 2 * 60 * 1000, // 2 minutes
+    gcTime: 10 * 60 * 1000, // 10 minutes
+  });
 
-        setPosts(prev => {
-          const existingIds = new Set(prev.map(p => p.id));
-          const uniqueNewPosts = newPosts.filter(p => !existingIds.has(p.id));
-          return [...prev, ...uniqueNewPosts];
-        });
+  // Get all posts from pages
+  const posts: Post[] = postsData?.pages.flatMap(page => page.posts) || [];
 
-        setHasMore((count || 0) > posts.length + newPosts.length);
-        await fetchReactionsForPosts(newPosts);
-      } catch (err) {
-        console.error('Error loading more posts:', err);
-        setError('Failed to load more posts. Please try again.');
-      } finally {
-        setLoadingMore(false);
-      }
-    }
-  };
+  // Query for reactions with caching
+  const { data: postReactions = {} } = useQuery({
+    queryKey: QUERY_KEYS.reactions(posts.map(p => p.id)),
+    queryFn: async () => {
+      if (!user?.id || posts.length === 0) return {};
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (window.scrollY === 0) {
-      setPullToRefresh({
-        active: true,
-        startY: e.touches[0].clientY,
-        distance: 0
+      const postIds = posts.map(p => p.id);
+      const { data: reactions, error } = await supabase
+        .from('likes')
+        .select('post_id, reaction_type, user_id')
+        .in('post_id', postIds);
+
+      if (error) throw error;
+
+      const reactionsByPost: {[postId: string]: { counts: {[type: string]: number}, userReaction: string | null }} = {};
+      posts.forEach(post => {
+        reactionsByPost[post.id] = { counts: {}, userReaction: null };
       });
-    }
-  };
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (pullToRefresh.active) {
-      const distance = e.touches[0].clientY - pullToRefresh.startY;
-      if (distance > 0) {
-        setPullToRefresh(prev => ({
-          ...prev,
-          distance: Math.min(distance, 100)
-        }));
-      }
-    }
-  };
+      (reactions || []).forEach(r => {
+        if (!r.post_id || !r.reaction_type) return;
+        if (!reactionsByPost[r.post_id]) reactionsByPost[r.post_id] = { counts: {}, userReaction: null };
+        reactionsByPost[r.post_id].counts[r.reaction_type] = (reactionsByPost[r.post_id].counts[r.reaction_type] || 0) + 1;
+        if (r.user_id === user.id) reactionsByPost[r.post_id].userReaction = r.reaction_type;
+      });
 
-  const handleTouchEnd = () => {
-    if (pullToRefresh.active && pullToRefresh.distance > 50) {
-      fetchPosts(true);
-    }
-    setPullToRefresh({
-      active: false,
-      startY: 0,
-      distance: 0
-    });
-  };
+      return reactionsByPost;
+    },
+    enabled: !!user?.id && posts.length > 0,
+    staleTime: 60 * 1000, // 1 minute
+    gcTime: 5 * 60 * 1000, // 5 minutes
+  });
 
-  useEffect(() => {
-    fetchPosts();
-    fetchStudioShows();
+  // Mutations for optimized updates
+  const reactMutation = useMutation({
+    mutationFn: async ({ postId, reactionType }: { postId: string; reactionType: string }) => {
+      if (!user?.id) throw new Error('Not authenticated');
 
-    // Live update for comments_count using Supabase subscription
-    const commentsSubscription = supabase
-      .channel('comments-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, (payload) => {
-        const postId = payload.new?.post_id || payload.old?.post_id;
-        if (postId) {
-          handleCommentCreated(postId);
-        }
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(commentsSubscription);
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleScroll = () => {
-      if (
-        window.innerHeight + window.scrollY >= document.body.offsetHeight - 500 &&
-        !loadingMore && 
-        hasMore
-      ) {
-        handleLoadMore();
-      }
-    };
-
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, [loadingMore, hasMore, posts.length]);
-
-  const handleNewPost = () => {
-    fetchPosts(true);
-  };
-
-  const handleReact = async (postId: string, reactionType: string) => {
-    if (!user?.id) return;
-    // Optimistically update UI
-    setPostReactions(prev => ({
-      ...prev,
-      [postId]: {
-        counts: {
-          ...(prev[postId]?.counts || {}),
-          [reactionType]: ((prev[postId]?.counts?.[reactionType] || 0) + 1)
-        },
-        userReaction: reactionType
-      }
-    }));
-    try {
       const { data: existingReaction } = await supabase
         .from('likes')
         .select('id, reaction_type')
@@ -536,68 +316,85 @@ export const Feed = () => {
             });
         }
       }
-      // Re-fetch to ensure backend is in sync
-      await fetchReactionsForPosts(posts.filter(p => p.id === postId));
-    } catch (error) {
+
+      return { postId, reactionType };
+    },
+    onSuccess: () => {
+      // Invalidate reactions query to refetch
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.reactions(posts.map(p => p.id)) });
+    },
+    onError: (error) => {
       console.error('Error handling reaction:', error);
+      toast({ description: 'Failed to update reaction', variant: 'destructive' });
+    },
+  });
+
+  const deletePostMutation = useMutation({
+    mutationFn: async (postId: string) => {
+      const { error } = await supabase.from('posts').delete().eq('id', postId);
+      if (error) throw error;
+      return postId;
+    },
+    onSuccess: (postId) => {
+      // Optimistically remove from cache
+      queryClient.setQueryData(QUERY_KEYS.posts, (old: any) => {
+        if (!old) return old;
+        return {
+          ...old,
+          pages: old.pages.map((page: any) => ({
+            ...page,
+            posts: page.posts.filter((post: Post) => post.id !== postId)
+          }))
+        };
+      });
+      toast({ title: 'Deleted', description: 'Post deleted successfully.' });
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to delete post.' });
+    },
+  });
+
+  // Infinite scroll implementation with Intersection Observer
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    if (loadMoreRef.current) {
+      observer.observe(loadMoreRef.current);
     }
+
+    return () => {
+      if (loadMoreRef.current) {
+        observer.unobserve(loadMoreRef.current);
+      }
+    };
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  // Event handlers
+  const handleReact = (postId: string, reactionType: string) => {
+    reactMutation.mutate({ postId, reactionType });
   };
 
-  // Update handleComment to refresh comment count when comments are opened/closed
   const handleComment = async (postId: string) => {
     setOpenComments(prev => ({ ...prev, [postId]: !prev[postId] }));
     
-    // Refresh comment count for this specific post
-    try {
-      const { count: commentCount } = await supabase
-        .from('comments')
-        .select('*', { count: 'exact', head: true })
-        .eq('post_id', postId);
-      
-      setPosts(prev => prev.map(post => 
-        post.id === postId 
-          ? { ...post, comments_count: commentCount || 0 }
-          : post
-      ));
-    } catch (error) {
-      console.error('Error updating comment count:', error);
-    }
+    // Invalidate comments query for this post
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.comments(postId) });
   };
 
-  // Add a function to handle when a new comment is created
-  const handleCommentCreated = async (postId: string) => {
-    try {
-      const { count: commentCount } = await supabase
-        .from('comments')
-        .select('*', { count: 'exact', head: true })
-        .eq('post_id', postId);
-      setPosts(prev => prev.map(post => 
-        post.id === postId 
-          ? { ...post, comments_count: commentCount || 0 }
-          : post
-      ));
-    } catch (error) {
-      console.error('Error updating comment count after creation:', error);
-    }
+  const handleDeletePost = (postId: string) => {
+    deletePostMutation.mutate(postId);
   };
 
-  // Handle reply to comment
-  const handleReplyToComment = async (commentId: string, postId: string) => {
-    if (!replyMessage.trim()) return;
-    try {
-      await supabase.from('comments').insert({
-        post_id: postId,
-        parent_comment_id: commentId,
-        user_id: user.id,
-        content: replyMessage
-      });
-      setReplyMessage('');
-      setReplyToCommentId(null);
-      setReplyToCommentPostId(null);
-      handleCommentCreated(postId);
-    } catch (error) {
-      console.error('Error replying to comment:', error);
-    }
+  const handleNewPost = () => {
+    // Invalidate posts query to refetch
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.posts });
   };
 
   const handleRepost = (postId: string) => {
@@ -608,27 +405,10 @@ export const Feed = () => {
     }
   };
 
-  const handleRepostComplete = async () => {
+  const handleRepostComplete = () => {
     setShowRepostModal(false);
     setSelectedPost(null);
-    
-    if (!user?.id) return;
-    
-    if (selectedPost && selectedPost.user_id !== user.id) {
-      try {
-        await supabase.rpc('create_notification', {
-          target_user_id: selectedPost.user_id,
-          notification_type: 'repost',
-          notification_title: 'Post Echoed',
-          notification_message: `${user.user_metadata?.first_name || user.email} echoed your post`,
-          notification_data: { postId: selectedPost.id, userId: user.id }
-        });
-      } catch (error) {
-        console.error('Error creating repost notification:', error);
-      }
-    }
-    
-    fetchPosts(true);
+    queryClient.invalidateQueries({ queryKey: QUERY_KEYS.posts });
   };
 
   const handleShare = (postId: string) => {
@@ -638,20 +418,6 @@ export const Feed = () => {
     });
   };
 
-  const handleDeletePost = async (postId: string) => {
-    try {
-      const { error } = await supabase.from('posts').delete().eq('id', postId);
-      if (error) {
-        toast({ title: 'Error', description: 'Failed to delete post.' });
-      } else {
-        toast({ title: 'Deleted', description: 'Post deleted successfully.' });
-        setPosts(prev => prev.filter(post => post.id !== postId));
-      }
-    } catch (e) {
-      toast({ title: 'Error', description: 'Failed to delete post.' });
-    }
-  };
-
   const handleHidePost = async (postId: string) => {
     if (!user?.id) return;
     try {
@@ -659,37 +425,102 @@ export const Feed = () => {
         user_id: user.id,
         post_id: postId
       }, { onConflict: 'user_id,post_id' });
-      if (error) {
-        toast({ title: 'Error', description: 'Failed to hide post.' });
-      } else {
-        toast({ title: 'Hidden', description: 'Post hidden from your feed.' });
-        setPosts(prev => prev.filter(post => post.id !== postId));
-      }
+      
+      if (error) throw error;
+      
+      // Optimistically remove from cache
+      queryClient.setQueryData(QUERY_KEYS.posts, (old: any) => {
+        if (!old) return old;
+        return {
+          ...old,
+          pages: old.pages.map((page: any) => ({
+            ...page,
+            posts: page.posts.filter((post: Post) => post.id !== postId)
+          }))
+        };
+      });
+      
+      toast({ title: 'Hidden', description: 'Post hidden from your feed.' });
     } catch (e) {
       toast({ title: 'Error', description: 'Failed to hide post.' });
     }
   };
 
+  // Pull-to-refresh handlers
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (window.scrollY === 0) {
+      setPullToRefresh({
+        active: true,
+        startY: e.touches[0].clientY,
+        distance: 0
+      });
+    }
+  };
 
-  // Get current show and stats
-  const currentShow = studioShows && studioShows.length > 0 ? studioShows[currentShowIndex] : null;
-  // These would be fetched from backend per show in a real app
-  const watching = currentShow ? (currentShow.is_live ? 1247 : 0) : 0;
-  const likes = currentShow ? 88 : 0;
-  const comments = currentShow ? 0 : 0;
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (pullToRefresh.active) {
+      const distance = e.touches[0].clientY - pullToRefresh.startY;
+      if (distance > 0) {
+        setPullToRefresh(prev => ({
+          ...prev,
+          distance: Math.min(distance, 100)
+        }));
+      }
+    }
+  };
 
-  const handleLike = () => {
-    // Implement your like logic here
+  const handleTouchEnd = () => {
+    if (pullToRefresh.active && pullToRefresh.distance > 50) {
+      refetchPosts();
+    }
+    setPullToRefresh({
+      active: false,
+      startY: 0,
+      distance: 0
+    });
+  };
+
+  // Chat functions
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMessage.trim()) return;
+    
+    const message: ChatMessage = {
+      id: Date.now().toString(),
+      username: user?.user_metadata?.first_name || user?.email || 'Anonymous',
+      message: newMessage,
+      timestamp: new Date(),
+      avatar: user?.user_metadata?.avatar_url,
+      isModerator: false,
+      isVip: false
+    };
+    
+    setMessages(prev => [...prev, message]);
+    setNewMessage('');
   };
 
   const handleCommentClick = () => {
-    setShowCommentsOverlay((prev) => !prev);
+    setShowCommentsOverlay(prev => !prev);
   };
 
-  // Handler to sync current show from VideoContainer
   const handleCurrentShowChange = (index: number) => {
     setCurrentShowIndex(index);
   };
+
+  // Loading state
+  if (postsLoading && posts.length === 0) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
+      </div>
+    );
+  }
+
+  const currentShow = studioShows && studioShows.length > 0 ? studioShows[currentShowIndex] : null;
 
   return (
     <div 
@@ -699,6 +530,7 @@ export const Feed = () => {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
+      {/* Pull to refresh indicator */}
       <div 
         className={`fixed top-0 left-0 right-0 flex justify-center pt-2 transition-opacity duration-300 ${
           pullToRefresh.active ? 'opacity-100' : 'opacity-0 pointer-events-none'
@@ -723,12 +555,11 @@ export const Feed = () => {
           onCurrentShowChange={handleCurrentShowChange}
           onCommentClick={handleCommentClick}
         />
-        {/* MobileOverlayBar removed: overlay now handled in VideoContainer */}
       </div>
-      {/* Reduced margin to close gap between VideoContainer and Moments */}
+
       <div className="mb-4 sm:mb-2" />
 
-      {/* Dimmed background to close overlay when clicking outside */}
+      {/* Comments overlay */}
       {showCommentsOverlay && (
         <div
           className="fixed inset-0 bg-black/40 z-40"
@@ -736,7 +567,7 @@ export const Feed = () => {
         />
       )}
 
-      {/* Slide-up Live Comments Overlay */}
+      {/* Live comments overlay */}
       <div
         className={`
           fixed bottom-0 left-0 right-0 z-50 transition-transform duration-300 ease-in-out
@@ -748,14 +579,14 @@ export const Feed = () => {
         <div className="p-4 text-white font-semibold border-b border-white/20 flex items-center justify-between">
           <span>Live Chat</span>
           {currentShow && (
-            <span className="text-xs text-gray-300 font-normal">NOW SHOWING: <span className="font-semibold text-white">{currentShow.title}</span></span>
+            <span className="text-xs text-gray-300 font-normal">
+              NOW SHOWING: <span className="font-semibold text-white">{currentShow.title}</span>
+            </span>
           )}
         </div>
 
-        {/* Chat Messages */}
         <div
           ref={chatContainerRef}
-          onScroll={handleScroll}
           className="flex-1 overflow-y-auto space-y-3 mb-4 pr-1 scroll-smooth p-4"
         >
           {messages.map((msg) => (
@@ -797,9 +628,7 @@ export const Feed = () => {
           ))}
         </div>
 
-        {/* Input Field with Like and Send */}
         <form onSubmit={handleSendMessage} className="flex items-center space-x-2 mt-auto border-t border-white/20 p-4">
-          {/* Like Button */}
           <Button
             type="button"
             size="icon"
@@ -810,7 +639,6 @@ export const Feed = () => {
             <Heart className="w-5 h-5 fill-current" />
           </Button>
 
-          {/* Message Input */}
           <Input
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
@@ -819,7 +647,6 @@ export const Feed = () => {
             maxLength={200}
           />
 
-          {/* Send Button */}
           <Button type="submit" size="sm" className="h-9 px-3" disabled={!newMessage.trim()}>
             <Send className="h-4 w-4" />
           </Button>
@@ -827,30 +654,23 @@ export const Feed = () => {
       </div>
 
       <div className="mb-4" />
-      <div className="mb-4" />
-    
       <Moments />
       <div className="mb-4" />
       <CreatePost onPostCreated={handleNewPost} />
       
-      {error && (
+      {postsError && (
         <div className="p-4 mb-4 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg">
-          {error}
+          Failed to load posts. Please try again.
         </div>
       )}
 
-      {(loading || refreshing) && posts.length === 0 ? (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {posts.length === 0 ? (
-            <div className="text-center py-8">
-              <div className="text-gray-500 dark:text-gray-400">No posts yet. Be the first to share something!</div>
-            </div>
-          ) : (
-            posts.map((post) => (
+      <div className="space-y-4">
+        {posts.length === 0 ? (
+          <div className="text-center py-8">
+            <div className="text-gray-500 dark:text-gray-400">No posts yet. Be the first to share something!</div>
+          </div>
+        ) : (
+          posts.map((post) => (
             <PostCard
               key={post.id}
               post={{
@@ -863,36 +683,32 @@ export const Feed = () => {
               reactionCounts={postReactions[post.id]?.counts || {}}
               userReaction={postReactions[post.id]?.userReaction || null}
               onReact={(reactionType) => handleReact(post.id, reactionType)}
-              onLike={handleReact}
               onComment={handleComment}
               onRepost={handleRepost}
               onShare={() => handleShare(post.id)}
               onDeletePost={handleDeletePost}
               onHidePost={handleHidePost}
               showComments={!!openComments[post.id]}
-              onCommentCreated={() => handleCommentCreated(post.id)}
               reactionIcons={[
                 { type: 'like', icon: <Heart className="w-5 h-5" /> },
                 { type: 'heart-break', icon: <HeartCrack className="w-5 h-5 text-red-500" /> },
                 { type: 'crying', icon: <Frown className="w-5 h-5 text-blue-400" /> }
               ]}
-              onReplyToComment={(commentId: string) => {
-                setReplyToCommentId(commentId);
-                setReplyToCommentPostId(post.id);
-              }}
             />
-            ))
-          )}
-        </div>
-      )}
+          ))
+        )}
+      </div>
 
-      {loadingMore && (
+      {/* Infinite scroll trigger element */}
+      <div ref={loadMoreRef} className="h-2 w-full" />
+
+      {isFetchingNextPage && (
         <div className="flex justify-center py-4">
           <Loader2 className="h-6 w-6 animate-spin text-gray-500" />
         </div>
       )}
 
-      {!hasMore && posts.length > 0 && (
+      {!hasNextPage && posts.length > 0 && (
         <div className="flex flex-col items-center gap-2 py-4 text-gray-500 dark:text-gray-400">
           <span>You're all squared up...</span>
           <button
@@ -911,33 +727,6 @@ export const Feed = () => {
           onClose={() => setShowRepostModal(false)}
           onRepost={handleRepostComplete}
         />
-      )}
-
-      {/* Reply to comment form (example, should be rendered inside comments UI) */}
-      {replyToCommentId && replyToCommentPostId && (
-        <div className="fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-gray-900 p-4 border-t border-gray-200 dark:border-gray-700">
-          <form
-            onSubmit={e => {
-              e.preventDefault();
-              handleReplyToComment(replyToCommentId, replyToCommentPostId);
-            }}
-            className="flex items-center gap-2"
-          >
-            <Input
-              value={replyMessage}
-              onChange={e => setReplyMessage(e.target.value)}
-              placeholder="Reply to comment..."
-              className="flex-1"
-              maxLength={200}
-            />
-            <Button type="submit" disabled={!replyMessage.trim()}>
-              <Send className="h-4 w-4" />
-            </Button>
-            <Button type="button" variant="ghost" onClick={() => { setReplyToCommentId(null); setReplyToCommentPostId(null); }}>
-              Cancel
-            </Button>
-          </form>
-        </div>
       )}
     </div>
   );

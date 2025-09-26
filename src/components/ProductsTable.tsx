@@ -27,15 +27,18 @@ interface Product {
   store_id: string; // Added for consistency
 }
 
+
 interface ProductsTableProps {
   products: Product[];
   onDeleteProduct: (productId: string) => void;
+  onEditProduct: (product: Product) => void;
   storeCurrency: string;
 }
 
 export const ProductsTable: React.FC<ProductsTableProps> = ({
   products,
   onDeleteProduct,
+  onEditProduct,
   storeCurrency
 }) => {
   const getProductTypeColor = (type: string) => {
@@ -118,7 +121,7 @@ export const ProductsTable: React.FC<ProductsTableProps> = ({
               </TableCell>
               <TableCell className="text-right">
                 <div className="flex items-center justify-end space-x-2">
-                  <Button variant="outline" size="sm">
+                  <Button variant="outline" size="sm" onClick={() => onEditProduct(product)}>
                     <Edit className="h-4 w-4" />
                   </Button>
                   <Button 

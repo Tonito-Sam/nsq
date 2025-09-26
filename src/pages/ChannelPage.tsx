@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { supabase } from '../integrations/supabase/client';
-import { Card } from '../components/ui/card';
-import { Badge } from '../components/ui/badge';
-import { Button } from '../components/ui/button';
+import { supabase } from '@/integrations/supabase/client';
+import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { UserPlus, UserCheck, ArrowLeft, Eye, Heart, Play, TrendingUp, DollarSign, Calendar, CreditCard, Menu } from 'lucide-react';
-import { MobileBottomNav } from '../components/MobileBottomNav';
-import { VideoEngagementSidebar } from '../components/VideoEngagementSidebar';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '../components/ui/sheet';
-import { useMediaQuery } from '../hooks/useMediaQuery';
-import ReactPlayer from 'react-player';
+import { Header } from '@/components/Header';
+import { MobileBottomNav } from '@/components/MobileBottomNav';
+import { VideoEngagementSidebar } from '@/components/VideoEngagementSidebar';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 const ChannelPage: React.FC = () => {
   const { channelId } = useParams<{ channelId: string }>();
@@ -20,6 +20,7 @@ const ChannelPage: React.FC = () => {
   const [editVideo, setEditVideo] = useState<any>(null);
   const [editForm, setEditForm] = useState<{ caption: string; description: string }>({ caption: '', description: '' });
   const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null);
+  
   // Fetch current user
   useEffect(() => {
     const fetchUser = async () => {
@@ -28,8 +29,8 @@ const ChannelPage: React.FC = () => {
     };
     fetchUser();
   }, []);
+
   const [videos, setVideos] = useState<any[]>([]);
-  const [streamVideos, setStreamVideos] = useState<any[]>([]);
   const [subscribed, setSubscribed] = useState(false);
   const [subscriberCount, setSubscriberCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -47,7 +48,7 @@ const ChannelPage: React.FC = () => {
       // Total views, likes, and uploads for each segment
       const [{ data: allVideos }, { data: allStreams }] = await Promise.all([
         supabase.from('studio_videos').select('*').eq('channel_id', channelId),
-        supabase.from('studio_videos').select('*').eq('channel_id', channelId).eq('is_stream', true),
+        supabase.from('studio_streams').select('*').eq('channel_id', channelId),
       ]);
       const totalViews = (allVideos || []).reduce((sum, v) => sum + (v.views || 0), 0);
       const totalLikes = (allVideos || []).reduce((sum, v) => sum + (v.likes || 0), 0);
@@ -97,18 +98,21 @@ const ChannelPage: React.FC = () => {
     fetchMonetizationData();
   }, [channelId]);
 
+  // Check if current user is channel owner
+  const isOwner = currentUserId && channel && channel.owner_id === currentUserId;
+
   useEffect(() => {
     const fetchChannel = async () => {
       setLoading(true);
       const { data: channelData } = await supabase.from('studio_channels').select('*').eq('id', channelId).single();
       setChannel(channelData);
       const { data: videoData } = await supabase.from('studio_videos').select('*').eq('channel_id', channelId).order('created_at', { ascending: false });
+      // Fetch streams from studio_streams
+      const { data: streamData } = await supabase.from('studio_streams').select('*').eq('channel_id', channelId).order('created_at', { ascending: false });
       // Only show public videos to non-owners
       const visibleVideos = isOwner ? videoData : (videoData || []).filter((v: any) => v.visibility === 'public');
-  setVideos(visibleVideos || []);
-  // Fetch stream videos from studio_streams table
-  const { data: streamData } = await supabase.from('studio_streams').select('*').eq('channel_id', channelId).order('created_at', { ascending: false });
-  setStreamVideos(streamData || []);
+      setVideos(visibleVideos);
+      setStreamVideos(streamData || []);
       const { count } = await supabase.from('studio_channel_subscribers').select('id', { count: 'exact', head: true }).eq('channel_id', channelId);
       setSubscriberCount(count || 0);
       // Fetch user likes for these videos
@@ -118,8 +122,6 @@ const ChannelPage: React.FC = () => {
     };
     if (channelId) fetchChannel();
   }, [channelId]);
-  // Check if current user is channel owner
-  const isOwner = currentUserId && channel && channel.owner_id === currentUserId;
 
   // Toggle video visibility (publish/unpublish)
   const handleToggleVisibility = async (videoId: string, currentVisibility: string) => {
@@ -157,9 +159,11 @@ const ChannelPage: React.FC = () => {
   const closeEditModal = () => {
     setEditVideo(null);
   };
+  
   const handleEditChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setEditForm({ ...editForm, [e.target.name]: e.target.value });
   };
+  
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editVideo) return;
@@ -219,12 +223,34 @@ const ChannelPage: React.FC = () => {
   // Split videos into categories
   const reelsVideos = videos.filter(v => !v.is_series && !v.is_stream);
   const seriesVideos = videos.filter(v => v.is_series);
-  // streamVideos now comes from video_streams table
+  const [streamVideos, setStreamVideos] = useState<any[]>([]);
 
-  const isDesktop = useMediaQuery('(min-width: 768px)');
+  const isMobile = useIsMobile();
+  const isDesktop = !isMobile;
 
-  if (loading) return <div className="p-8 text-center">Loading...</div>;
-  if (!channel) return <div className="p-8 text-center">Channel not found.</div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">
+        <Header />
+        <div className="max-w-7xl mx-auto px-4 py-8 pb-32 lg:pb-8">
+          <div className="text-center">Loading...</div>
+        </div>
+        <MobileBottomNav />
+      </div>
+    );
+  }
+
+  if (!channel) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">
+        <Header />
+        <div className="max-w-7xl mx-auto px-4 py-8 pb-32 lg:pb-8">
+          <div className="text-center">Channel not found.</div>
+        </div>
+        <MobileBottomNav />
+      </div>
+    );
+  }
 
   // Sidebar Content Component
   const SidebarContent = () => (
@@ -338,202 +364,121 @@ const ChannelPage: React.FC = () => {
   );
 
   return (
-    <div className="max-w-6xl mx-auto p-4 pb-20 relative flex flex-col md:flex-row gap-8">
-      <div className="flex-1">
-        {/* Mobile Header with Back Arrow and Hamburger Menu */}
-        <div className="flex items-center justify-between mb-4 md:hidden">
-          <button
-            className="flex items-center text-gray-600 dark:text-gray-200 bg-white/80 dark:bg-black/60 rounded-full p-2 shadow-md"
-            onClick={() => navigate('/studio')}
-            aria-label="Back to Studio"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
-          
-          <Sheet>
-            <SheetTrigger asChild>
-              <button
-                className="flex items-center text-gray-600 dark:text-gray-200 bg-white/80 dark:bg-black/60 rounded-full p-2 shadow-md"
-                aria-label="Open Menu"
-              >
-                <Menu className="h-5 w-5" />
-              </button>
-            </SheetTrigger>
-            <SheetContent side="right" className="w-full p-6 overflow-y-auto">
-              <SheetHeader>
-                <SheetTitle>Channel Analytics</SheetTitle>
-              </SheetHeader>
-              <div className="mt-6">
-                <SidebarContent />
-              </div>
-            </SheetContent>
-          </Sheet>
-        </div>
-
-        {/* Channel Info */}
-        <div className="flex items-center gap-4 mb-6 mt-4 md:mt-0">
-          <div className="flex-1">
-            <h1 className="text-2xl font-bold mb-1">{channel.name}</h1>
-            <div className="text-gray-400 mb-2">{channel.description}</div>
-            <Badge>{subscriberCount} Subscribers</Badge>
+    <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">
+      <Header />
+      
+      <div className="max-w-6xl mx-auto p-4 pb-32 lg:pb-8 relative flex flex-col md:flex-row gap-8">
+        <div className="flex-1">
+          {/* Mobile Header with Back Arrow and Hamburger Menu */}
+          <div className="flex items-center justify-between mb-4 md:hidden">
+            <button
+              className="flex items-center text-gray-600 dark:text-gray-200 bg-white/80 dark:bg-black/60 rounded-full p-2 shadow-md"
+              onClick={() => navigate('/studio')}
+              aria-label="Back to Studio"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+            
+            <Sheet>
+              <SheetTrigger asChild>
+                <button
+                  className="flex items-center text-gray-600 dark:text-gray-200 bg-white/80 dark:bg-black/60 rounded-full p-2 shadow-md"
+                  aria-label="Open Menu"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
+              </SheetTrigger>
+              <SheetContent side="right" className="w-full p-6 overflow-y-auto">
+                <SheetHeader>
+                  <SheetTitle>Channel Analytics</SheetTitle>
+                </SheetHeader>
+                <div className="mt-6">
+                  <SidebarContent />
+                </div>
+              </SheetContent>
+            </Sheet>
           </div>
-          <Button onClick={handleSubscribe} variant={subscribed ? 'default' : 'outline'}>
-            {subscribed ? <UserCheck className="h-4 w-4 mr-1" /> : <UserPlus className="h-4 w-4 mr-1" />}
-            {subscribed ? 'Subscribed' : 'Subscribe'}
-          </Button>
-        </div>
-        
-        {/* Modern Tabs/Desktop, Horizontal Scroll/Mobile */}
-        <div className="w-full">
-          {isDesktop ? (
-            <Tabs defaultValue="reels" className="w-full">
-              <TabsList className="w-full flex justify-center gap-2 bg-transparent mb-4">
-                <TabsTrigger value="reels">Reels & Videos</TabsTrigger>
-                <TabsTrigger value="series">Series</TabsTrigger>
-                <TabsTrigger value="streams">Streams</TabsTrigger>
-              </TabsList>
-              <TabsContent value="reels">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  {reelsVideos.length === 0 ? (
-                    <div className="col-span-2 text-center text-gray-400">No videos yet.</div>
-                  ) : (
-                    reelsVideos.map(video => (
-                      <Card key={video.id} className="overflow-hidden relative">
-                        <div className="relative">
-                          <video src={video.video_url} controls className="w-full h-64 object-cover bg-black" poster={video.thumbnail_url || undefined} />
-                          <VideoEngagementSidebar video={video} isLiked={userLikes.has(video.id)} onLike={handleLike} />
-                          {isOwner && (
-                            <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
-                              <Button size="sm" variant="outline" onClick={() => openEditModal(video)}>Edit</Button>
-                              <Button size="sm" variant="secondary" onClick={() => handleToggleVisibility(video.id, video.visibility)}>
-                                {video.visibility === 'public' ? 'Unpublish' : 'Publish'}
-                              </Button>
-                              <Button size="sm" variant="destructive" onClick={() => confirmDeleteVideo(video.id)}>Delete</Button>
-                            </div>
-                          )}
-                          {isOwner && (
-                            <Badge variant="outline" className="absolute bottom-2 right-2 bg-white/80 text-xs">
-                              {video.visibility === 'private' ? 'Private' : 'Public'}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="p-3">
-                          <div className="font-semibold mb-1">{video.caption}</div>
-                          <div className="text-xs text-gray-400 mb-2">{new Date(video.created_at).toLocaleString()}</div>
-                        </div>
-                      </Card>
-                    ))
-                  )}
-                </div>
-              </TabsContent>
-              <TabsContent value="series">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  {seriesVideos.length === 0 ? (
-                    <div className="col-span-2 text-center text-gray-400">No series yet.</div>
-                  ) : (
-                    seriesVideos.map(video => (
-                      <Card key={video.id} className="overflow-hidden relative">
-                        <div className="relative">
-                          <video src={video.video_url} controls className="w-full h-64 object-cover bg-black" poster={video.thumbnail_url || undefined} />
-                          <VideoEngagementSidebar video={video} isLiked={userLikes.has(video.id)} onLike={handleLike} />
-                          {isOwner && (
-                            <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
-                              <Button size="sm" variant="outline" onClick={() => openEditModal(video)}>Edit</Button>
-                              <Button size="sm" variant="secondary" onClick={() => handleToggleVisibility(video.id, video.visibility)}>
-                                {video.visibility === 'public' ? 'Unpublish' : 'Publish'}
-                              </Button>
-                              <Button size="sm" variant="destructive" onClick={() => confirmDeleteVideo(video.id)}>Delete</Button>
-                            </div>
-                          )}
-                          {isOwner && (
-                            <Badge variant="outline" className="absolute bottom-2 right-2 bg-white/80 text-xs">
-                              {video.visibility === 'private' ? 'Private' : 'Public'}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="p-3">
-                          <div className="font-semibold mb-1">{video.series_title || video.caption}</div>
-                          <div className="text-xs text-gray-400 mb-2">{video.series_description}</div>
-                          <div className="text-xs text-purple-500 font-semibold">Subscription: ${video.subscription_amount} / {video.subscription_cycle}</div>
-                        </div>
-                      </Card>
-                    ))
-                  )}
-                </div>
-              </TabsContent>
-              <TabsContent value="streams">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  {streamVideos.length === 0 ? (
-                    <div className="col-span-2 text-center text-gray-400">No streams yet.</div>
-                  ) : (
-                    streamVideos.map(video => (
-                      <Card key={video.id} className="overflow-hidden relative">
-                        <div className="relative">
-                          <ReactPlayer url={video.video_url} controls width="100%" height="256px" light={video.thumbnail_url || undefined} />
-                          <VideoEngagementSidebar video={video} isLiked={userLikes.has(video.id)} onLike={handleLike} />
-                          {isOwner && (
-                            <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
-                              <Button size="sm" variant="outline" onClick={() => openEditModal(video)}>Edit</Button>
-                              <Button size="sm" variant="secondary" onClick={() => handleToggleVisibility(video.id, video.visibility)}>
-                                {video.visibility === 'public' ? 'Unpublish' : 'Publish'}
-                              </Button>
-                              <Button size="sm" variant="destructive" onClick={() => confirmDeleteVideo(video.id)}>Delete</Button>
-                            </div>
-                          )}
-                          {isOwner && (
-                            <Badge variant="outline" className="absolute bottom-2 right-2 bg-white/80 text-xs">
-                              {video.visibility === 'private' ? 'Private' : 'Public'}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="p-3">
-                          <div className="font-semibold mb-1">{video.caption}</div>
-                          <div className="text-xs text-gray-400 mb-2">{new Date(video.created_at).toLocaleString()}</div>
-                          <div className="text-xs text-blue-500 font-semibold">Stream</div>
-                        </div>
-                      </Card>
-                    ))
-                  )}
-                </div>
-              </TabsContent>
-            </Tabs>
-          ) : (
-            <div className="space-y-8">
-              <div>
-                <h4 className="text-lg font-bold mb-2">Reels & Videos</h4>
-                <div className="flex gap-4 overflow-x-auto pb-2 snap-x">
-                  {reelsVideos.length === 0 ? (
-                    <div className="text-center text-gray-400">No videos yet.</div>
-                  ) : (
-                    reelsVideos.map(video => (
-                      <div key={video.id} className="min-w-[220px] snap-center">
-                        <Card className="overflow-hidden relative">
+
+          {/* Channel Info */}
+          <div className="flex items-center gap-4 mb-6 mt-4 md:mt-0">
+            <div className="flex-1">
+              <h1 className="text-2xl font-bold mb-1">{channel.name}</h1>
+              <div className="text-gray-400 mb-2">{channel.description}</div>
+              <Badge>{subscriberCount} Subscribers</Badge>
+            </div>
+            <Button onClick={handleSubscribe} variant={subscribed ? 'default' : 'outline'}>
+              {subscribed ? <UserCheck className="h-4 w-4 mr-1" /> : <UserPlus className="h-4 w-4 mr-1" />}
+              {subscribed ? 'Subscribed' : 'Subscribe'}
+            </Button>
+          </div>
+          
+          {/* Modern Tabs/Desktop, Horizontal Scroll/Mobile */}
+          <div className="w-full">
+            {isDesktop ? (
+              <Tabs defaultValue="reels" className="w-full">
+                <TabsList className="w-full flex justify-center gap-2 bg-transparent mb-4">
+                  <TabsTrigger value="reels">Reels & Videos</TabsTrigger>
+                  <TabsTrigger value="series">Series</TabsTrigger>
+                  <TabsTrigger value="streams">Streams</TabsTrigger>
+                </TabsList>
+                <TabsContent value="reels">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    {reelsVideos.length === 0 ? (
+                      <div className="col-span-2 text-center text-gray-400">No videos yet.</div>
+                    ) : (
+                      reelsVideos.map(video => (
+                        <Card key={video.id} className="overflow-hidden relative">
                           <div className="relative">
-                            <video src={video.video_url} controls className="w-full h-48 object-cover bg-black" poster={video.thumbnail_url || undefined} />
+                            <video src={video.video_url} controls className="w-full h-64 object-cover bg-black" poster={video.thumbnail_url || undefined} />
                             <VideoEngagementSidebar video={video} isLiked={userLikes.has(video.id)} onLike={handleLike} />
+                            {isOwner && (
+                              <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
+                                <Button size="sm" variant="outline" onClick={() => openEditModal(video)}>Edit</Button>
+                                <Button size="sm" variant="secondary" onClick={() => handleToggleVisibility(video.id, video.visibility)}>
+                                  {video.visibility === 'public' ? 'Unpublish' : 'Publish'}
+                                </Button>
+                                <Button size="sm" variant="destructive" onClick={() => confirmDeleteVideo(video.id)}>Delete</Button>
+                              </div>
+                            )}
+                            {isOwner && (
+                              <Badge variant="outline" className="absolute bottom-2 right-2 bg-white/80 text-xs">
+                                {video.visibility === 'private' ? 'Private' : 'Public'}
+                              </Badge>
+                            )}
                           </div>
                           <div className="p-3">
                             <div className="font-semibold mb-1">{video.caption}</div>
                             <div className="text-xs text-gray-400 mb-2">{new Date(video.created_at).toLocaleString()}</div>
                           </div>
                         </Card>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div>
-                <h4 className="text-lg font-bold mb-2">Series</h4>
-                <div className="flex gap-4 overflow-x-auto pb-2 snap-x">
-                  {seriesVideos.length === 0 ? (
-                    <div className="text-center text-gray-400">No series yet.</div>
-                  ) : (
-                    seriesVideos.map(video => (
-                      <div key={video.id} className="min-w-[220px] snap-center">
-                        <Card className="overflow-hidden relative">
+                      ))
+                    )}
+                  </div>
+                </TabsContent>
+                <TabsContent value="series">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    {seriesVideos.length === 0 ? (
+                      <div className="col-span-2 text-center text-gray-400">No series yet.</div>
+                    ) : (
+                      seriesVideos.map(video => (
+                        <Card key={video.id} className="overflow-hidden relative">
                           <div className="relative">
-                            <video src={video.video_url} controls className="w-full h-48 object-cover bg-black" poster={video.thumbnail_url || undefined} />
+                            <video src={video.video_url} controls className="w-full h-64 object-cover bg-black" poster={video.thumbnail_url || undefined} />
                             <VideoEngagementSidebar video={video} isLiked={userLikes.has(video.id)} onLike={handleLike} />
+                            {isOwner && (
+                              <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
+                                <Button size="sm" variant="outline" onClick={() => openEditModal(video)}>Edit</Button>
+                                <Button size="sm" variant="secondary" onClick={() => handleToggleVisibility(video.id, video.visibility)}>
+                                  {video.visibility === 'public' ? 'Unpublish' : 'Publish'}
+                                </Button>
+                                <Button size="sm" variant="destructive" onClick={() => confirmDeleteVideo(video.id)}>Delete</Button>
+                              </div>
+                            )}
+                            {isOwner && (
+                              <Badge variant="outline" className="absolute bottom-2 right-2 bg-white/80 text-xs">
+                                {video.visibility === 'private' ? 'Private' : 'Public'}
+                              </Badge>
+                            )}
                           </div>
                           <div className="p-3">
                             <div className="font-semibold mb-1">{video.series_title || video.caption}</div>
@@ -541,23 +486,34 @@ const ChannelPage: React.FC = () => {
                             <div className="text-xs text-purple-500 font-semibold">Subscription: ${video.subscription_amount} / {video.subscription_cycle}</div>
                           </div>
                         </Card>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div>
-                <h4 className="text-lg font-bold mb-2">Streams</h4>
-                <div className="flex gap-4 overflow-x-auto pb-2 snap-x">
-                  {streamVideos.length === 0 ? (
-                    <div className="text-center text-gray-400">No streams yet.</div>
-                  ) : (
-                    streamVideos.map(video => (
-                      <div key={video.id} className="min-w-[220px] snap-center">
-                        <Card className="overflow-hidden relative">
+                      ))
+                    )}
+                  </div>
+                </TabsContent>
+                <TabsContent value="streams">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    {streamVideos.length === 0 ? (
+                      <div className="col-span-2 text-center text-gray-400">No streams yet.</div>
+                    ) : (
+                      streamVideos.map(video => (
+                        <Card key={video.id} className="overflow-hidden relative">
                           <div className="relative">
-                            <video src={video.video_url} controls className="w-full h-48 object-cover bg-black" poster={video.thumbnail_url || undefined} />
+                            <video src={video.video_url} controls className="w-full h-64 object-cover bg-black" poster={video.thumbnail_url || undefined} />
                             <VideoEngagementSidebar video={video} isLiked={userLikes.has(video.id)} onLike={handleLike} />
+                            {isOwner && (
+                              <div className="absolute top-2 right-2 flex flex-col gap-1 z-10">
+                                <Button size="sm" variant="outline" onClick={() => openEditModal(video)}>Edit</Button>
+                                <Button size="sm" variant="secondary" onClick={() => handleToggleVisibility(video.id, video.visibility)}>
+                                  {video.visibility === 'public' ? 'Unpublish' : 'Publish'}
+                                </Button>
+                                <Button size="sm" variant="destructive" onClick={() => confirmDeleteVideo(video.id)}>Delete</Button>
+                              </div>
+                            )}
+                            {isOwner && (
+                              <Badge variant="outline" className="absolute bottom-2 right-2 bg-white/80 text-xs">
+                                {video.visibility === 'private' ? 'Private' : 'Public'}
+                              </Badge>
+                            )}
                           </div>
                           <div className="p-3">
                             <div className="font-semibold mb-1">{video.caption}</div>
@@ -565,75 +521,148 @@ const ChannelPage: React.FC = () => {
                             <div className="text-xs text-blue-500 font-semibold">Stream</div>
                           </div>
                         </Card>
-                      </div>
-                    ))
-                  )}
+                      ))
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
+            ) : (
+              <div className="space-y-8">
+                <div>
+                  <h4 className="text-lg font-bold mb-2">Reels & Videos</h4>
+                  <div className="flex gap-4 overflow-x-auto pb-2 snap-x">
+                    {reelsVideos.length === 0 ? (
+                      <div className="text-center text-gray-400">No videos yet.</div>
+                    ) : (
+                      reelsVideos.map(video => (
+                        <div key={video.id} className="min-w-[220px] snap-center">
+                          <Card className="overflow-hidden relative">
+                            <div className="relative">
+                              <video src={video.video_url} controls className="w-full h-48 object-cover bg-black" poster={video.thumbnail_url || undefined} />
+                              <VideoEngagementSidebar video={video} isLiked={userLikes.has(video.id)} onLike={handleLike} />
+                            </div>
+                            <div className="p-3">
+                              <div className="font-semibold mb-1">{video.caption}</div>
+                              <div className="text-xs text-gray-400 mb-2">{new Date(video.created_at).toLocaleString()}</div>
+                            </div>
+                          </Card>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-lg font-bold mb-2">Series</h4>
+                  <div className="flex gap-4 overflow-x-auto pb-2 snap-x">
+                    {seriesVideos.length === 0 ? (
+                      <div className="text-center text-gray-400">No series yet.</div>
+                    ) : (
+                      seriesVideos.map(video => (
+                        <div key={video.id} className="min-w-[220px] snap-center">
+                          <Card className="overflow-hidden relative">
+                            <div className="relative">
+                              <video src={video.video_url} controls className="w-full h-48 object-cover bg-black" poster={video.thumbnail_url || undefined} />
+                              <VideoEngagementSidebar video={video} isLiked={userLikes.has(video.id)} onLike={handleLike} />
+                            </div>
+                            <div className="p-3">
+                              <div className="font-semibold mb-1">{video.series_title || video.caption}</div>
+                              <div className="text-xs text-gray-400 mb-2">{video.series_description}</div>
+                              <div className="text-xs text-purple-500 font-semibold">Subscription: ${video.subscription_amount} / {video.subscription_cycle}</div>
+                            </div>
+                          </Card>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <h4 className="text-lg font-bold mb-2">Streams</h4>
+                  <div className="flex gap-4 overflow-x-auto pb-2 snap-x">
+                    {streamVideos.length === 0 ? (
+                      <div className="text-center text-gray-400">No streams yet.</div>
+                    ) : (
+                      streamVideos.map(video => (
+                        <div key={video.id} className="min-w-[220px] snap-center">
+                          <Card className="overflow-hidden relative">
+                            <div className="relative">
+                              <video src={video.video_url} controls className="w-full h-48 object-cover bg-black" poster={video.thumbnail_url || undefined} />
+                              <VideoEngagementSidebar video={video} isLiked={userLikes.has(video.id)} onLike={handleLike} />
+                            </div>
+                            <div className="p-3">
+                              <div className="font-semibold mb-1">{video.caption}</div>
+                              <div className="text-xs text-gray-400 mb-2">{new Date(video.created_at).toLocaleString()}</div>
+                              <div className="text-xs text-blue-500 font-semibold">Stream</div>
+                            </div>
+                          </Card>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
         
-        {/* Mobile Bottom Nav */}
-        <div className="md:hidden"><MobileBottomNav /></div>
-      </div>
-      
-      {/* Desktop Sidebar */}
-      {insights && (
-        <aside className="hidden md:block w-80 h-fit sticky top-24">
-          <SidebarContent />
-        </aside>
-      )}
+        {/* Desktop Sidebar */}
+        {insights && (
+          <aside className="hidden md:block w-80 h-fit sticky top-24">
+            <SidebarContent />
+          </aside>
+        )}
 
-      {/* Edit Video Modal */}
-      {editVideo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white dark:bg-gray-900 rounded-lg shadow-lg p-6 w-full max-w-md">
-            <h2 className="text-lg font-bold mb-4">Edit Video</h2>
-            <form onSubmit={handleEditSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Caption</label>
-                <input
-                  type="text"
-                  name="caption"
-                  value={editForm.caption}
-                  onChange={handleEditChange}
-                  className="w-full border rounded px-3 py-2 bg-gray-100 dark:bg-gray-800"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Description</label>
-                <textarea
-                  name="description"
-                  value={editForm.description}
-                  onChange={handleEditChange}
-                  className="w-full border rounded px-3 py-2 bg-gray-100 dark:bg-gray-800"
-                  rows={3}
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="outline" onClick={closeEditModal}>Cancel</Button>
-                <Button type="submit" variant="default">Save</Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Confirmation Modal */}
-      {deletingVideoId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white dark:bg-gray-900 rounded-lg shadow-lg p-6 w-full max-w-sm">
-            <h2 className="text-lg font-bold mb-4">Delete Video</h2>
-            <p className="mb-4">Are you sure you want to delete this video? This action cannot be undone.</p>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={cancelDelete}>Cancel</Button>
-              <Button type="button" variant="destructive" onClick={handleDelete}>Delete</Button>
+        {/* Edit Video Modal */}
+        {editVideo && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white dark:bg-gray-900 rounded-lg shadow-lg p-6 w-full max-w-md">
+              <h2 className="text-lg font-bold mb-4">Edit Video</h2>
+              <form onSubmit={handleEditSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Caption</label>
+                  <input
+                    type="text"
+                    name="caption"
+                    value={editForm.caption}
+                    onChange={handleEditChange}
+                    className="w-full border rounded px-3 py-2 bg-gray-100 dark:bg-gray-800"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Description</label>
+                  <textarea
+                    name="description"
+                    value={editForm.description}
+                    onChange={handleEditChange}
+                    className="w-full border rounded px-3 py-2 bg-gray-100 dark:bg-gray-800"
+                    rows={3}
+                  />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="outline" onClick={closeEditModal}>Cancel</Button>
+                  <Button type="submit" variant="default">Save</Button>
+                </div>
+              </form>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Delete Confirmation Modal */}
+        {deletingVideoId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white dark:bg-gray-900 rounded-lg shadow-lg p-6 w-full max-w-sm">
+              <h2 className="text-lg font-bold mb-4">Delete Video</h2>
+              <p className="mb-4">Are you sure you want to delete this video? This action cannot be undone.</p>
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" onClick={cancelDelete}>Cancel</Button>
+                <Button type="button" variant="destructive" onClick={handleDelete}>Delete</Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      
+      <MobileBottomNav />
     </div>
   );
 };

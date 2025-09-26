@@ -59,6 +59,7 @@ const LiveStream = () => {
   const [currentCamera, setCurrentCamera] = useState<"user" | "environment">("user");
   const [streamDuration, setStreamDuration] = useState(0);
   const [streamStartTime, setStreamStartTime] = useState<Date | null>(null);
+  const [showMobileChat, setShowMobileChat] = useState(false);
 
   const previewRef = useRef<HTMLVideoElement>(null);
   const playbackRef = useRef<HTMLVideoElement>(null);
@@ -246,8 +247,8 @@ const LiveStream = () => {
         return;
       }
 
-      // Make real API call to Livepeer backend
-      const response = await fetch('http://localhost:5000/api/livepeer/create-stream', {
+  // Make real API call to Livepeer backend
+  const response = await fetch('https://nsq-98et.onrender.com/api/livepeer/create-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: streamName.trim() }),
@@ -448,12 +449,7 @@ const LiveStream = () => {
                 </div>
               )}
 
-              <button
-                onClick={resetStream}
-                className="px-3 py-1.5 md:px-4 md:py-2 rounded-full bg-white/10 backdrop-blur-sm text-white hover:bg-white/20 transition-all duration-200 text-sm md:text-base"
-              >
-                Reset
-              </button>
+            
             </div>
           </div>
 
@@ -475,6 +471,7 @@ const LiveStream = () => {
                 error={error}
                 setPermissionsGranted={setPermissionsGranted}
                 setPreviewStream={setPreviewStream}
+                resetStream={resetStream}
               />
             ) : (
               <div className="relative w-full h-[75vh] md:h-[80vh]">
@@ -559,8 +556,13 @@ const LiveStream = () => {
                   <LiveStreamChat comments={comments} />
                 </div>
 
-                <div className="block md:hidden fixed left-0 right-0 bottom-0 z-50 bg-black/90 rounded-t-2xl p-2 max-h-[40vh] overflow-y-auto">
-                  <LiveStreamChat comments={comments} />
+                {/* Mobile chat popup */}
+                <div className="block md:hidden fixed left-0 right-0 bottom-0 z-50">
+                  {showMobileChat && (
+                    <div className="bg-black/90 rounded-t-2xl p-2 max-h-[40vh] overflow-y-auto">
+                      <LiveStreamChat comments={comments} />
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -588,8 +590,12 @@ const LiveStream = () => {
                 <div className="absolute left-4 bottom-16 z-40">
                   <button
                     onClick={() => {
-                      const el = document.getElementById("livestream-comment-input") as HTMLInputElement | null;
-                      if (el) el.focus();
+                      if (window.innerWidth < 768) {
+                        setShowMobileChat((prev) => !prev);
+                      } else {
+                        const el = document.getElementById("livestream-comment-input") as HTMLInputElement | null;
+                        if (el) el.focus();
+                      }
                     }}
                     className="relative p-2 rounded-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg hover:scale-105 transition-transform duration-200"
                     title="Comments"

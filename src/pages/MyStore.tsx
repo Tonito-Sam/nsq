@@ -11,12 +11,15 @@ import { StoreSettings } from '@/components/StoreSettings';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { StoreDashboard } from '@/components/store/StoreDashboard';
 import { StoreProductsSection } from '@/components/store/StoreProductsSection';
+import { EditProductModal } from '@/components/EditProductModal';
 import { MobileStoreNav } from '@/components/store/MobileStoreNav';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { EnhancedStoreSetupModal } from '@/components/EnhancedStoreSetupModal';
 import { Button } from '@/components/ui/button';
+
+
 
 interface Product {
   id: string;
@@ -49,6 +52,33 @@ const MyStore = () => {
   const { user } = useAuth();
   const [store, setStore] = useState<Store | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
+  const [editProduct, setEditProduct] = useState<Product | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const handleEditProduct = (product: Product) => {
+    setEditProduct(product);
+    setShowEditModal(true);
+  };
+
+  const handleSaveEditProduct = async (updatedProduct: Product) => {
+    try {
+      const { error } = await supabase
+        .from('store_products')
+        .update({
+          title: updatedProduct.title,
+          description: updatedProduct.description,
+          price: updatedProduct.price,
+          category: updatedProduct.category,
+          // Add more fields as needed
+        })
+        .eq('id', updatedProduct.id);
+      if (error) throw error;
+      setProducts(prev => prev.map(p => p.id === updatedProduct.id ? { ...p, ...updatedProduct } : p));
+      toast({ title: 'Success', description: 'Product updated successfully' });
+      setShowEditModal(false);
+    } catch (error) {
+      toast({ title: 'Error', description: 'Failed to update product', variant: 'destructive' });
+    }
+  };
   const [showAddForm, setShowAddForm] = useState(false);
   const [loading, setLoading] = useState(true);
   const [storeLoading, setStoreLoading] = useState(true);
@@ -200,13 +230,23 @@ const MyStore = () => {
       
       case 'products':
         return (
-          <StoreProductsSection
-            products={products}
-            loading={loading}
-            storeCurrency={store?.base_currency || 'ZAR'}
-            onAddProduct={() => setShowAddForm(true)}
-            onDeleteProduct={handleDeleteProduct}
-          />
+          <>
+            <StoreProductsSection
+              products={products}
+              loading={loading}
+              storeCurrency={store?.base_currency || 'ZAR'}
+              onAddProduct={() => setShowAddForm(true)}
+              onDeleteProduct={handleDeleteProduct}
+              onEditProduct={handleEditProduct}
+            />
+            {/* Edit Product Modal */}
+            <EditProductModal
+              open={showEditModal}
+              product={editProduct}
+              onClose={() => setShowEditModal(false)}
+              onSave={handleSaveEditProduct}
+            />
+          </>
         );
 
       case 'chat':

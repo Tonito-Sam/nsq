@@ -1,11 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import leoProfanity from 'leo-profanity';
-
-// Add custom life-threatening words to leo-profanity
-const customThreatWords = [
-  'murder', 'murdered', 'murdering', 'kill', 'killed', 'killing', 'stab', 'stabbed', 'stabbing', 'assassinate', 'assassinated', 'assassinating', 'slaughter', 'slaughtered', 'slaughtering', 'execute', 'executed', 'executing', 'behead', 'beheaded', 'beheading', 'decapitate', 'decapitated', 'decapitating', 'strangle', 'strangled', 'strangling', 'shoot', 'shot', 'shooting', 'hang', 'hanged', 'hanging', 'lynch', 'lynched', 'lynching', 'poison', 'poisoned', 'poisoning', 'drown', 'drowned', 'drowning', 'suffocate', 'suffocated', 'suffocating', 'burn alive', 'burned alive', 'burning alive', 'torture', 'tortured', 'torturing', 'massacre', 'massacred', 'massacring', 'suicide', 'suicidal', 'homicide', 'homicidal', 'manslaughter', 'genocide', 'genocidal', 'exterminate', 'exterminated', 'exterminating', 'eliminate', 'eliminated', 'eliminating', 'terminate', 'terminated', 'terminating', 'butcher', 'butchered', 'butchering', 'bludgeon', 'bludgeoned', 'bludgeoning', 'maim', 'maimed', 'maiming', 'disembowel', 'disemboweled', 'disemboweling', 'disfigure', 'disfigured', 'disfiguring', 'rape', 'raped', 'raping', 'abduct', 'abducted', 'abducting', 'kidnap', 'kidnapped', 'kidnapping', 'molest', 'molested', 'molesting', 'abuse', 'abused', 'abusing', 'assault', 'assaulted', 'assaulting', 'batter', 'battered', 'battering', 'beat', 'beaten', 'beating', 'threaten', 'threatened', 'threatening', 'terrorize', 'terrorized', 'terrorizing', 'violate', 'violated', 'violating'
-];
-leoProfanity.add(customThreatWords);
 import * as nsfwjs from 'nsfwjs';
 import * as tf from '@tensorflow/tfjs';
 import { Header } from '@/components/Header';
@@ -18,20 +12,43 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 
+// Add custom life-threatening words to leo-profanity
+const customThreatWords = [
+  'murder', 'murdered', 'murdering', 'kill', 'killed', 'killing', 'stab', 'stabbed', 'stabbing',
+  'assassinate', 'assassinated', 'assassinating', 'slaughter', 'slaughtered', 'slaughtering',
+  'execute', 'executed', 'executing', 'behead', 'beheaded', 'beheading', 'decapitate',
+  'decapitated', 'decapitating', 'strangle', 'strangled', 'strangling', 'shoot', 'shot',
+  'shooting', 'hang', 'hanged', 'hanging', 'lynch', 'lynched', 'lynching', 'poison',
+  'poisoned', 'poisoning', 'drown', 'drowned', 'drowning', 'suffocate', 'suffocated',
+  'suffocating', 'burn alive', 'burned alive', 'burning alive', 'torture', 'tortured',
+  'torturing', 'massacre', 'massacred', 'massacring', 'suicide', 'suicidal', 'homicide',
+  'homicidal', 'manslaughter', 'genocide', 'genocidal', 'exterminate', 'exterminated',
+  'exterminating', 'eliminate', 'eliminated', 'eliminating', 'terminate', 'terminated',
+  'terminating', 'butcher', 'butchered', 'butchering', 'bludgeon', 'bludgeoned', 'bludgeoning',
+  'maim', 'maimed', 'maiming', 'disembowel', 'disemboweled', 'disemboweling', 'disfigure',
+  'disfigured', 'disfiguring', 'rape', 'raped', 'raping', 'abduct', 'abducted', 'abducting',
+  'kidnap', 'kidnapped', 'kidnapping', 'molest', 'molested', 'molesting', 'abuse', 'abused',
+  'abusing', 'assault', 'assaulted', 'assaulting', 'batter', 'battered', 'battering', 'beat',
+  'beaten', 'beating', 'threaten', 'threatened', 'threatening', 'terrorize', 'terrorized',
+  'terrorizing', 'violate', 'violated', 'violating'
+];
+leoProfanity.add(customThreatWords);
+
 const UploadReels = () => {
-  // NSFWJS model state
   const [nsfwModel, setNsfwModel] = useState<nsfwjs.NSFWJS | null>(null);
-  React.useEffect(() => {
+  useEffect(() => {
     if (!nsfwModel) {
-      nsfwjs.load().then(setNsfwModel);
+      nsfwjs.load().then(setNsfwModel).catch(() => setNsfwModel(null));
     }
   }, [nsfwModel]);
+
   const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
 
   const [caption, setCaption] = useState('');
   const [videoFiles, setVideoFiles] = useState<File[]>([]);
+  const [videoPreviews, setVideoPreviews] = useState<string[]>([]);
   const [isSeries, setIsSeries] = useState(false);
   const [subscriptionCycle, setSubscriptionCycle] = useState('monthly');
   const [isPaid, setIsPaid] = useState(true);
@@ -40,38 +57,97 @@ const UploadReels = () => {
   const [seriesDescription, setSeriesDescription] = useState('');
   const [uploading, setUploading] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [progress, setProgress] = useState(0);
 
-  // Category list from Studio.tsx header
   const CATEGORY_OPTIONS = [
-    'All',
-    'Tech',
-    'Comedy',
-    'Sports',
-    'Education',
-    'Inspiration',
-    'Music',
-    'Gaming',
-    'Food',
-    'Fitness',
-    'Lifestyle',
-    'Art',
+    'All', 'Tech', 'Comedy', 'Sports', 'Education', 'Inspiration',
+    'Music', 'Gaming', 'Food', 'Fitness', 'Lifestyle', 'Art',
   ];
 
-  // Get video duration helper
+  // Clone File objects to avoid permission issues (especially on Android WebView)
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) {
+      setVideoFiles([]);
+      setVideoPreviews([]);
+      return;
+    }
+    // Clone files using File constructor
+    const clonedFiles: File[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        // Some browsers support File constructor for cloning
+        clonedFiles.push(new File([file], file.name, { type: file.type, lastModified: file.lastModified }));
+      } catch {
+        // Fallback: use original reference
+        clonedFiles.push(file);
+      }
+    }
+    setVideoFiles(clonedFiles);
+  };
+
+  // Generate stable preview URLs when files change
+  useEffect(() => {
+    if (!videoFiles.length) {
+      setVideoPreviews(prev => {
+        prev.forEach(url => URL.revokeObjectURL(url));
+        return [];
+      });
+      return;
+    }
+    const urls = videoFiles.map(file => URL.createObjectURL(file));
+    setVideoPreviews(prev => {
+      prev.forEach(url => URL.revokeObjectURL(url));
+      return urls;
+    });
+    return () => {
+      urls.forEach(url => URL.revokeObjectURL(url));
+    };
+  }, [videoFiles]);
+
+  // Get video duration (robust on Android WebView)
   const getVideoDuration = (file: File): Promise<number> => {
-    return new Promise((resolve, reject) => {
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.onloadedmetadata = () => {
-        window.URL.revokeObjectURL(video.src);
-        resolve(Math.floor(video.duration));
-      };
-      video.onerror = () => reject(new Error('Failed to load video metadata'));
-      video.src = URL.createObjectURL(file);
+    return new Promise((resolve) => {
+      try {
+        const url = URL.createObjectURL(file);
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.muted = true;
+        video.playsInline = true;
+        let done = false;
+        const finish = (val: number) => {
+          if (done) return;
+          done = true;
+          try { URL.revokeObjectURL(url); } catch {}
+          resolve(val);
+        };
+        const timeoutId = window.setTimeout(() => {
+          finish(-1);
+        }, 7000);
+        video.onloadedmetadata = () => {
+          window.clearTimeout(timeoutId);
+          if (!isFinite(video.duration) || video.duration === 0) {
+            video.currentTime = 0.001;
+            setTimeout(() => {
+              finish(Number.isFinite(video.duration) ? Math.floor(video.duration) : -1);
+            }, 250);
+          } else {
+            finish(Math.floor(video.duration));
+          }
+        };
+        video.onerror = () => {
+          window.clearTimeout(timeoutId);
+          finish(-1);
+        };
+        video.src = url;
+        try { video.load(); } catch {}
+      } catch {
+        resolve(-1);
+      }
     });
   };
 
-  // Hash a file using SHA-256, returning hex string
   async function hashFile(file: File): Promise<string> {
     const arrayBuffer = await file.arrayBuffer();
     const hashBuffer = await window.crypto.subtle.digest('SHA-256', arrayBuffer);
@@ -79,110 +155,135 @@ const UploadReels = () => {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  // Helper: scan video file for NSFW by extracting frames - FIXED VERSION
+  // Helper: scan video file for NSFW by extracting frames (robust + timeout)
   const scanVideoFile = async (file: File): Promise<boolean> => {
     if (!nsfwModel) return false;
     return new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
       const video = document.createElement('video');
       video.preload = 'metadata';
-      video.src = URL.createObjectURL(file);
+      video.src = url;
       video.muted = true;
+      video.playsInline = true;
       video.currentTime = 0;
       let nsfwFound = false;
       let checkedFrames = 0;
-      
+      let settled = false;
+      const settle = (val: boolean) => {
+        if (settled) return;
+        settled = true;
+        try { URL.revokeObjectURL(url); } catch {}
+        resolve(val);
+      };
+      const safetyTimeout = window.setTimeout(() => {
+        settle(false);
+      }, 8000);
       const checkFrame = async () => {
         if (nsfwFound || checkedFrames > 10) {
-          URL.revokeObjectURL(video.src);
-          resolve(nsfwFound);
+          window.clearTimeout(safetyTimeout);
+          settle(nsfwFound);
           return;
         }
-        
-        // FIXED: Ensure video has valid dimensions before creating canvas
         if (video.videoWidth === 0 || video.videoHeight === 0) {
-          console.warn('Video dimensions not ready, skipping frame');
           checkedFrames++;
-          if (video.currentTime + 2 < video.duration) {
+          if (video.currentTime + 2 < (video.duration || 60)) {
             video.currentTime += 2;
           } else {
-            resolve(nsfwFound);
+            window.clearTimeout(safetyTimeout);
+            settle(nsfwFound);
           }
           return;
         }
-        
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         const ctx = canvas.getContext('2d');
-        
         if (ctx && canvas.width > 0 && canvas.height > 0) {
           try {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             const img = tf.browser.fromPixels(canvas);
             const predictions = await nsfwModel.classify(img);
             img.dispose();
-            nsfwFound = predictions.some(p => (p.className === 'Porn' || p.className === 'Hentai' || p.className === 'Sexy') && p.probability > 0.7);
+            nsfwFound = predictions.some(
+              p => (p.className === 'Porn' || p.className === 'Hentai' || p.className === 'Sexy') && p.probability > 0.7
+            );
           } catch (error) {
-            console.warn('Error processing video frame:', error);
+            // swallow frame errors; keep scanning
           }
         }
-        
         checkedFrames++;
-        if (!nsfwFound && video.currentTime + 2 < video.duration) {
+        if (!nsfwFound && video.currentTime + 2 < (video.duration || 60)) {
           video.currentTime += 2;
         } else {
-          resolve(nsfwFound);
+          window.clearTimeout(safetyTimeout);
+          settle(nsfwFound);
         }
       };
-      
       video.onloadedmetadata = () => {
-        // Wait a bit more for video to be fully ready
-        setTimeout(checkFrame, 100);
+        setTimeout(checkFrame, 120);
       };
       video.onseeked = checkFrame;
       video.onerror = () => {
-        URL.revokeObjectURL(video.src);
-        resolve(false); // Skip NSFW check if video can't be loaded
+        window.clearTimeout(safetyTimeout);
+        settle(false);
       };
+      try { video.load(); } catch {}
     });
   };
 
   const handleUploadVideo = async () => {
-    if (!videoFiles.length || !caption || !user || selectedCategories.length === 0) return;
-    // Profanity check for caption
+    if (!videoFiles.length) {
+      toast({ description: 'No video files found for upload. Please re-select your video.', variant: 'destructive' });
+      setUploading(false);
+      return;
+    }
+    if (!caption || !user || selectedCategories.length === 0) return;
+
     if (leoProfanity.check(caption)) {
       toast({ description: 'Caption contains inappropriate language.', variant: 'destructive' });
       return;
     }
-    // NSFW check for all videos
+
     if (!nsfwModel) {
-      toast({ description: 'Content moderation model is still loading. Please wait a moment and try again.', variant: 'destructive' });
+      toast({ description: 'Moderation model is still loading. Try again in a few seconds.', variant: 'destructive' });
       return;
     }
+
     for (const file of videoFiles) {
       const isNSFW = await scanVideoFile(file);
       if (isNSFW) {
-        toast({ description: 'One or more videos contain inappropriate (NSFW/violent) content and cannot be uploaded.', variant: 'destructive' });
+        toast({ description: 'One or more videos contain NSFW content and cannot be uploaded.', variant: 'destructive' });
         return;
       }
     }
-    // 500MB = 524288000 bytes
-    if (videoFiles.some(file => file.size > 524288000)) {
-      toast({ description: 'Each video must be 500MB or less.', variant: 'destructive' });
+
+    // Size check (5GB = 5368709120 bytes)
+    if (videoFiles.some(file => file.size > 5368709120)) {
+      toast({ description: 'Each video must be 5GB or less.', variant: 'destructive' });
       return;
     }
+
     setUploading(true);
+    setProgress(0);
 
     try {
-      // Check all videos are <= 5 mins (300 seconds)
+      // Validate metadata before upload
       const durations = await Promise.all(videoFiles.map(file => getVideoDuration(file)));
-      if (durations.some(duration => duration > 300)) {
+      const failedDuration = durations.some(d => d === -1);
+      const tooLong = durations.some(d => d !== -1 && d > 300);
+
+      if (tooLong) {
         toast({ description: 'All videos must be 5 minutes or less.', variant: 'destructive' });
         setUploading(false);
         return;
       }
+      if (failedDuration) {
+        toast({
+          description: 'Could not read video length on this device. Continuing upload anyway.',
+          variant: 'default'
+        });
+      }
 
-      // Get user channel
       const { data: channel, error: channelError } = await supabase
         .from('studio_channels')
         .select('id')
@@ -190,18 +291,20 @@ const UploadReels = () => {
         .single();
 
       if (channelError || !channel) {
-        toast({ description: 'You must have a studio channel before uploading.', variant: 'destructive' });
+        toast({
+          description: `You must have a studio channel before uploading. Error: ${channelError ? channelError.message : 'No channel found.'}`,
+          variant: 'destructive'
+        });
         setUploading(false);
         return;
       }
 
-      // Upload files one by one, checking hash for creator/remixer
-      let lastInsertedId = null;
+      let lastInsertedId: string | null = null;
+
       for (let i = 0; i < videoFiles.length; i++) {
         const videoFile = videoFiles[i];
         const videoHash = await hashFile(videoFile);
 
-        // Check if this hash already exists in DB
         const { data: existing, error: hashError } = await supabase
           .from('studio_videos')
           .select('id, user_id')
@@ -209,7 +312,7 @@ const UploadReels = () => {
           .maybeSingle();
 
         if (hashError) {
-          toast({ description: 'Error checking video hash.', variant: 'destructive' });
+          toast({ description: `Error checking video hash: ${hashError.message || JSON.stringify(hashError)}`, variant: 'destructive' });
           setUploading(false);
           return;
         }
@@ -218,46 +321,73 @@ const UploadReels = () => {
         const badge_type = isOriginal ? 'creator' : 'remixer';
         const original_creator_id = existing ? existing.user_id : null;
 
-        // Upload video file
         const fileExt = videoFile.name.split('.').pop();
         const filePath = `${user.id}/reel_${Date.now()}_${i + 1}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from('studio-videos').upload(filePath, videoFile);
 
+        let uploadResult;
+        try {
+          uploadResult = await supabase.storage.from('studio-videos').upload(filePath, videoFile, {
+            cacheControl: '3600',
+            upsert: false,
+          });
+        } catch (err) {
+          toast({ description: `Exception during upload: ${err instanceof Error ? err.message : JSON.stringify(err)}`, variant: 'destructive' });
+          setUploading(false);
+          return;
+        }
+        const { error: uploadError } = uploadResult || {};
         if (uploadError) {
-          toast({ description: 'Failed to upload video file.', variant: 'destructive' });
+          toast({ description: `Failed to upload video file: ${uploadError.message || JSON.stringify(uploadError)}`, variant: 'destructive' });
           setUploading(false);
           return;
         }
 
-        const { data: urlData } = supabase.storage.from('studio-videos').getPublicUrl(filePath);
+        setProgress(Math.round(((i + 1) / videoFiles.length) * 100));
 
-        // Insert record into DB
-        const { data: inserted, error: dbError } = await supabase.from('studio_videos').insert({
-          user_id: user.id,
-          channel_id: channel.id,
-          video_url: urlData.publicUrl,
-          caption,
-          categories: selectedCategories,
-          likes: 0,
-          views: 0,
-          created_at: new Date().toISOString(),
-          video_hash: videoHash,
-          badge_type,
-          ...(original_creator_id ? { original_creator_id } : {}),
-          ...(isSeries
-            ? {
-                is_series: true,
-                series_title: seriesTitle,
-                series_description: seriesDescription,
-                subscription_cycle: subscriptionCycle,
-                subscription_amount: isPaid ? subscriptionAmount : 0,
-                is_paid: isPaid,
-              }
-            : {}),
-        }).select('id');
+        let urlData;
+        try {
+          const urlRes = supabase.storage.from('studio-videos').getPublicUrl(filePath);
+          urlData = urlRes.data;
+        } catch (err) {
+          toast({ description: `Exception getting public URL: ${err instanceof Error ? err.message : JSON.stringify(err)}`, variant: 'destructive' });
+          setUploading(false);
+          return;
+        }
 
+        let inserted, dbError;
+        try {
+          const dbRes = await supabase.from('studio_videos').insert({
+            user_id: user.id,
+            channel_id: channel.id,
+            video_url: urlData.publicUrl,
+            caption,
+            categories: selectedCategories,
+            likes: 0,
+            views: 0,
+            created_at: new Date().toISOString(),
+            video_hash: videoHash,
+            badge_type,
+            ...(original_creator_id ? { original_creator_id } : {}),
+            ...(isSeries
+              ? {
+                  is_series: true,
+                  series_title: seriesTitle,
+                  series_description: seriesDescription,
+                  subscription_cycle: subscriptionCycle,
+                  subscription_amount: isPaid ? subscriptionAmount : 0,
+                  is_paid: isPaid,
+                }
+              : {}),
+          }).select('id');
+          inserted = dbRes.data;
+          dbError = dbRes.error;
+        } catch (err) {
+          toast({ description: `Exception inserting DB record: ${err instanceof Error ? err.message : JSON.stringify(err)}`, variant: 'destructive' });
+          setUploading(false);
+          return;
+        }
         if (dbError) {
-          toast({ description: `Database error: ${dbError.message}`, variant: 'destructive' });
+          toast({ description: `Database error: ${dbError.message || JSON.stringify(dbError)}`, variant: 'destructive' });
           setUploading(false);
           return;
         }
@@ -269,18 +399,23 @@ const UploadReels = () => {
       toast({ description: 'Videos uploaded successfully!' });
       setCaption('');
       setVideoFiles([]);
+      videoPreviews.forEach(url => URL.revokeObjectURL(url));
+      setVideoPreviews([]);
       setIsSeries(false);
       setSeriesTitle('');
       setSeriesDescription('');
       setUploading(false);
+      setProgress(0);
+
       if (lastInsertedId) {
         navigate(`/studio?highlight=${lastInsertedId}`);
       } else {
         navigate('/studio');
       }
     } catch (error) {
-      toast({ description: 'Upload failed', variant: 'destructive' });
+      toast({ description: `Upload failed: ${error instanceof Error ? error.message : JSON.stringify(error)}`, variant: 'destructive' });
       setUploading(false);
+      setProgress(0);
     }
   };
 
@@ -304,24 +439,38 @@ const UploadReels = () => {
           type="file"
           accept="video/*"
           multiple
-          onChange={e => setVideoFiles(Array.from(e.target.files || []))}
+          onChange={handleFileChange}
           className="mb-2 bg-white dark:bg-gray-900 text-black dark:text-white border border-gray-300 dark:border-gray-700"
         />
 
+        {/* Progress Bar */}
+        {uploading && (
+          <div className="mb-4">
+            <div className="w-full bg-gray-200 rounded-full h-2.5">
+              <div
+                className="bg-purple-600 h-2.5 rounded-full transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <div className="text-xs text-gray-600 dark:text-gray-300 mt-1">{progress}%</div>
+          </div>
+        )}
+
         {/* Video Preview */}
-        {videoFiles.length > 0 && (
+        {videoPreviews.length > 0 && (
           <div className="mb-4 space-y-4">
-            {videoFiles.map((file, index) => (
+            {videoPreviews.map((url, index) => (
               <video
                 key={index}
-                src={URL.createObjectURL(file)}
+                src={url}
                 controls
+                playsInline
+                preload="metadata"
                 className="w-full rounded-lg border"
               />
             ))}
           </div>
         )}
-
 
         <Input
           type="text"
@@ -458,7 +607,7 @@ const UploadReels = () => {
             }
             className="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-2 rounded-lg"
           >
-            {uploading ? 'Uploading...' : `Upload${isSeries ? ' (≥ 5 videos for series)' : ' (≤ 5 min)'}`}
+            {uploading ? `Uploading… ${progress}%` : `Upload${isSeries ? ' (≥ 5 videos for series)' : ' (≤ 5 min)'}`}
           </Button>
           <Button variant="outline" onClick={() => navigate('/studio')}>
             Cancel
