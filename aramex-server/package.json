@@ -1,0 +1,12 @@
+{
+  "name": "aramex-server",
+  "version": "1.0.0",
+  "description": "Aramex API server for NexSq platform",
+  "main": "Program.cs",
+  "scripts": {
+    "start": "dotnet run --project aramex-nexsq-api-server.csproj"
+  },
+  "keywords": ["aramex", "api", "dotnet", "nexsq"],
+  "author": "Tonito-Sam",
+  "license": "MIT"
+}
