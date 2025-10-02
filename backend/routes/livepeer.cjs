@@ -47,6 +47,7 @@ router.post('/create-stream', async (req, res) => {
     const d = response.data;
     console.log('Livepeer API response:', JSON.stringify(d, null, 2));
     res.json({
+      id: d.id || d._id || d.stream_id || '',
       rtmpIngestUrl: 'rtmp://rtmp.livepeer.com/live',
       streamKey: d.streamKey || d.stream_key || '',
       playbackId: d.playbackId || d.playback_id || '',
@@ -55,6 +56,39 @@ router.post('/create-stream', async (req, res) => {
   } catch (error) {
     console.error('Livepeer API error:', error.response?.data || error.message);
     res.status(500).json({ error: 'Failed to create stream' });
+  }
+});
+
+// Create a WebRTC session to publish to Livepeer
+// Expects: { streamId: string, sdp: string }
+router.post('/create-webrtc-session', async (req, res) => {
+  const { streamId, sdp } = req.body;
+
+  if (!streamId || !sdp) {
+    return res.status(400).json({ error: 'streamId and sdp are required' });
+  }
+
+  try {
+    // Forward the client's SDP offer to Livepeer's WebRTC endpoint
+    // Livepeer expects an offer and returns an answer SDP
+    const url = `https://livepeer.studio/api/stream/${streamId}/webrtc`;
+    const response = await axios.post(
+      url,
+      { sdp },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.LIVEPEER_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const data = response.data;
+    // Return the answer SDP to the browser
+    res.json({ sdp: data.sdp || data.answer || data.sdpAnswer || '' , raw: data });
+  } catch (err) {
+    console.error('Livepeer WebRTC error:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Failed to create WebRTC session', details: err.response?.data || err.message });
   }
 });
 

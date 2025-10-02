@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { FaHeart, FaGift, FaCommentDots, FaEye, FaStop } from "react-icons/fa";
 import { Video } from "lucide-react";
 import Hls from "hls.js";
@@ -30,7 +30,6 @@ type Comment = {
 
 const LiveStream = () => {
   const navigate = useNavigate();
-  const location = useLocation();
   const { user } = useAuth();
   
   // User and channel state
@@ -64,6 +63,7 @@ const LiveStream = () => {
   const previewRef = useRef<HTMLVideoElement>(null);
   const playbackRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
   const heartId = useRef(0);
   const durationInterval = useRef<NodeJS.Timeout | null>(null);
 
@@ -247,8 +247,8 @@ const LiveStream = () => {
         return;
       }
 
-  // Make real API call to Livepeer backend
-  const response = await fetch('https://nsq-98et.onrender.com/api/livepeer/create-stream', {
+      // Make real API call to Livepeer backend
+      const response = await fetch('https://nsq-98et.onrender.com/api/livepeer/create-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: streamName.trim() }),
@@ -298,8 +298,16 @@ const LiveStream = () => {
         streamKey: livepeerData.streamKey,
         playbackId: livepeerData.playbackId,
       });
-      setIsBroadcasting(true);
-      setStreamStartTime(new Date());
+      // Attempt to publish the previewStream to Livepeer via WebRTC
+      try {
+        await startWebRtcPublish(livepeerData, previewStream);
+        setIsBroadcasting(true);
+        setStreamStartTime(new Date());
+      } catch (webrtcErr: any) {
+        console.error('WebRTC publish failed:', webrtcErr);
+        setError('Failed to publish stream via WebRTC: ' + (webrtcErr?.message || webrtcErr));
+        // keep preview available but don't mark broadcasting
+      }
       setStreamDuration(0);
     } catch (err: any) {
       console.error('Error creating stream:', err);
@@ -309,20 +317,114 @@ const LiveStream = () => {
     }
   };
 
-  const stopStream = () => {
+  const createPeerConnection = () => {
+    if (pcRef.current) return pcRef.current;
+
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+      ],
+    });
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('PeerConnection ICE state:', pc.iceConnectionState);
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log('PeerConnection state:', pc.connectionState);
+    };
+
+    pcRef.current = pc;
+    return pc;
+  };
+
+  const startWebRtcPublish = async (livepeerData: any, stream: MediaStream | null) => {
+    if (!stream) throw new Error('No media stream to publish');
+    if (!livepeerData || !livepeerData.playbackId) throw new Error('Missing livepeer playbackId/stream id');
+
+    const pc = createPeerConnection();
+
+    // Add local tracks
+    for (const track of stream.getTracks()) {
+      pc.addTrack(track, stream);
+    }
+
+    // Create offer
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // Send offer to backend which forwards to Livepeer
+    const resp = await fetch('/api/livepeer/create-webrtc-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ streamId: livepeerData.playbackId, sdp: offer.sdp }),
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error('Failed to create WebRTC session: ' + txt);
+    }
+
+    const data = await resp.json();
+    const answerSdp = data.sdp;
+    if (!answerSdp) throw new Error('No answer SDP from server');
+
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+    // Wait until connection established
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Timed out waiting for WebRTC connection'));
+      }, 15000);
+
+      const checkState = () => {
+        if (!pc) return;
+        if (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected') {
+          clearTimeout(timeout);
+          pc.removeEventListener('connectionstatechange', checkState as any);
+          resolve();
+        }
+      };
+
+      pc.addEventListener('connectionstatechange', checkState as any);
+      checkState();
+    });
+  };
+
+  const stopStream = async () => {
     setIsBroadcasting(false);
     setStreamStartTime(null);
     setStreamDuration(0);
+    
     if (durationInterval.current) {
       clearInterval(durationInterval.current);
       durationInterval.current = null;
     }
-    // Redirect to the user's channel page after saving/ending the stream
-    if (channel && channel.id) {
-      navigate(`/studio/${channel.id}`);
+
+    // Stop the camera stream
+    if (previewStream) {
+      previewStream.getTracks().forEach(track => track.stop());
+    }
+
+    // Close peer connection if exists
+    if (pcRef.current) {
+      try {
+        pcRef.current.getSenders().forEach(s => { try { s.track?.stop(); } catch(e){} });
+        pcRef.current.close();
+      } catch (e) {}
+      pcRef.current = null;
+    }
+
+    // If we have a stream row ID, navigate to StreamEndPreview page
+    if (streamRowId) {
+      navigate(`/stream-end-preview/${streamRowId}`);
     } else {
-      // fallback: go to studio main if channel missing
-      navigate('/studio');
+      // Fallback: if no stream was created, just redirect to studio
+      if (channel && channel.id) {
+        navigate(`/studio/${channel.id}`);
+      } else {
+        navigate('/studio');
+      }
     }
   };
 
@@ -665,4 +767,3 @@ const LiveStream = () => {
 };
 
 export default LiveStream;
- 

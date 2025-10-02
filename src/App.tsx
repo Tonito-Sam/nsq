@@ -253,6 +253,7 @@ const App = () => {
                     <Route path="/admin" element={<AdminRedirect />} />
                     <Route path="/wallet-topup-result" element={<WalletTopupResult />} />
                     <Route path="/stream/preview/:streamId" element={<StreamEndPreviewWrapper />} />
+                    <Route path="/stream-end-preview/:streamId" element={<StreamEndPreviewWrapper />} />
                     <Route path="*" element={<NotFound />} />
                   </Routes>
                 </BrowserRouter>

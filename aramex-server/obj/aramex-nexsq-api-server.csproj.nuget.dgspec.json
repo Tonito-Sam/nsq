@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\xampp\\htdocs\\1voice\\aramex-server\\aramex-nexsq-api-server.csproj": {}
+    "C:\\xampp\\htdocs\\nexsq\\aramex-server\\aramex-nexsq-api-server.csproj": {}
   },
   "projects": {
-    "C:\\xampp\\htdocs\\1voice\\aramex-server\\aramex-nexsq-api-server.csproj": {
+    "C:\\xampp\\htdocs\\nexsq\\aramex-server\\aramex-nexsq-api-server.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\xampp\\htdocs\\1voice\\aramex-server\\aramex-nexsq-api-server.csproj",
+        "projectUniqueName": "C:\\xampp\\htdocs\\nexsq\\aramex-server\\aramex-nexsq-api-server.csproj",
         "projectName": "aramex-nexsq-api-server",
-        "projectPath": "C:\\xampp\\htdocs\\1voice\\aramex-server\\aramex-nexsq-api-server.csproj",
+        "projectPath": "C:\\xampp\\htdocs\\nexsq\\aramex-server\\aramex-nexsq-api-server.csproj",
         "packagesPath": "C:\\Users\\Admin\\.nuget\\packages\\",
-        "outputPath": "C:\\xampp\\htdocs\\1voice\\aramex-server\\obj\\",
+        "outputPath": "C:\\xampp\\htdocs\\nexsq\\aramex-server\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\Admin\\AppData\\Roaming\\NuGet\\NuGet.Config"

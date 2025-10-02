@@ -1,9 +1,10 @@
 // resend-unverified.js
 import { createClient } from '@supabase/supabase-js';
+import 'dotenv/config';
 
 // Supabase project details
-const SUPABASE_URL = 'https://pfemdshixllwqqajsxxp.supabase.co';
-const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBmZW1kc2hpeGxsd3FxYWpzeHhwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0ODMxNTYwNywiZXhwIjoyMDYzODkxNjA3fQ.nwvuVQd9tCsmTlkmVpAGjfNbPCcWqrcDN453iBCre2A';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SERVICE_ROLE_KEY = process.env.SERVICE_ROLE_KEY;
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
