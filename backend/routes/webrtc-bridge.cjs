@@ -17,6 +17,16 @@ router.post('/create-session', async (req, res) => {
 
   try {
     const result = await bridge.createSession({ streamId, clientSdp: sdp, livepeerApiKey: LIVEPEER_API_KEY });
+    // If bridge signals WebRTC is unavailable, return a 503 with RTMP fallback details
+    if (result && result.webrtcUnavailable) {
+      return res.status(503).json({
+        error: 'webrtc_unavailable',
+        message: 'Livepeer WebRTC ingest is not available for this stream. Use RTMP as a fallback.',
+        rtmpIngestUrl: result.rtmpIngestUrl,
+        streamKey: result.streamKey,
+      });
+    }
+
     res.json(result);
   } catch (err) {
     console.error('webrtc-bridge create-session error:', err?.message || err);

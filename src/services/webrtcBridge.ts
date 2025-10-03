@@ -60,7 +60,23 @@ export async function startPublish(streamId: string, localStream: MediaStream) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ streamId, sdp: pc.localDescription?.sdp }),
   });
-  if (!resp.ok) throw new Error('create-session failed: ' + await resp.text());
+  if (!resp.ok) {
+    const txt = await resp.text();
+    // Try parse JSON
+    try {
+      const j = JSON.parse(txt);
+      if (j && j.error === 'webrtc_unavailable') {
+        const err: any = new Error('webrtc_unavailable');
+        err.code = 'webrtc_unavailable';
+        err.rtmpIngestUrl = j.rtmpIngestUrl;
+        err.streamKey = j.streamKey;
+        throw err;
+      }
+    } catch (e) {
+      // not JSON
+    }
+    throw new Error('create-session failed: ' + txt);
+  }
   const data = await resp.json();
   sessionId = data.sessionId;
   const answerSdp = data.sdp;
