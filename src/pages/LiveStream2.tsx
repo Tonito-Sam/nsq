@@ -367,11 +367,31 @@ const LiveStream = () => {
   const backendBase = 'https://nsq-98et.onrender.com/api/webrtc-bridge';
   const url = `${backendBase}/create-session`;
 
+    // Attempt to improve ICE by fetching TURN creds from backend
+    try {
+      const tResp = await fetch('https://nsq-98et.onrender.com/api/turn/creds');
+      if (tResp.ok) {
+        const tjson = await tResp.json();
+        if (tjson && tjson.url) {
+          const existing = (pc as any).getConfiguration ? (pc as any).getConfiguration() : { iceServers: [] };
+          const ice = Array.isArray(existing.iceServers) ? existing.iceServers.slice() : [{ urls: 'stun:stun.l.google.com:19302' }];
+          ice.push({ urls: tjson.url, username: tjson.username, credential: tjson.password });
+          try { pc.setConfiguration({ iceServers: ice }); } catch (e) { console.warn('Failed to set PC configuration with TURN', e); }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch TURN creds', e);
+    }
+
+    // log local ICE candidates for debugging
+    pc.onicecandidate = (ev) => { console.log('Local ICE candidate:', !!ev?.candidate); };
+
     // Send offer to backend which forwards to Livepeer
+    // IMPORTANT: use the Livepeer stream `id` (not playbackId) for WebRTC publish
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ streamId: livepeerData.playbackId, sdp: offer.sdp }),
+      body: JSON.stringify({ streamId: livepeerData.id, sdp: offer.sdp }),
     });
 
     // If server returned non-2xx, try to capture response text (HTML error pages will show here)
@@ -403,7 +423,7 @@ const LiveStream = () => {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Timed out waiting for WebRTC connection'));
-      }, 15000);
+      }, 30000);
 
       const checkState = () => {
         if (!pc) return;
