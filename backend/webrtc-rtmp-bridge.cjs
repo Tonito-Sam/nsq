@@ -107,96 +107,79 @@ async function createSession({ streamId, clientSdp, livepeerApiKey, timeout = 20
 
   sessions.set(sessionId, session);
 
-  // Wait for first track (or short timeout) BEFORE attempting Livepeer negotiation so we can detect WebRTC availability
-  try {
-    await Promise.race([
-      firstTrackPromise,
-      new Promise((r) => setTimeout(r, 5000)),
-    ]);
+  // Background: after receiving first track (or timeout) create offer to Livepeer
+  (async () => {
+    try {
+      await Promise.race([
+        firstTrackPromise,
+        new Promise((r) => setTimeout(r, 5000)),
+      ]);
 
-    if (session.closed) {
-      closeSession(sessionId);
-      return { webrtcUnavailable: true, rtmpIngestUrl: 'rtmp://rtmp.livepeer.com/live', streamKey: null };
-    }
+      if (session.closed) return;
 
-    // Create offer for Livepeer from pcLivepeer (tracks have been added in ontrack)
-    const offer = await pcLivepeer.createOffer();
-    await pcLivepeer.setLocalDescription(offer);
-    await waitForIceGatheringComplete(pcLivepeer, 10000);
+      // Create offer for Livepeer from pcLivepeer (tracks have been added in ontrack)
+      const offer = await pcLivepeer.createOffer();
+      await pcLivepeer.setLocalDescription(offer);
+      await waitForIceGatheringComplete(pcLivepeer, 10000);
 
-    // Send offer to Livepeer - try multiple endpoints to handle API variations / plan differences
-    const endpoints = [
-      `https://livepeer.studio/api/stream/${streamId}/webrtc`,
-      `https://livepeer.studio/api/stream/${streamId}/webRTCIngest`,
-      `https://livepeer.studio/api/stream/${streamId}/webrtcIngest`,
-      `https://livepeer.studio/api/stream/${streamId}/ingest`,
-      `https://livepeer.studio/api/stream/${streamId}/publish`
-    ];
+      // Send offer to Livepeer - try multiple endpoints to handle API variations / plan differences
+      const endpoints = [
+        `https://livepeer.studio/api/stream/${streamId}/webrtc`,
+        `https://livepeer.studio/api/stream/${streamId}/webRTCIngest`,
+        `https://livepeer.studio/api/stream/${streamId}/webrtcIngest`,
+        `https://livepeer.studio/api/stream/${streamId}/ingest`,
+        `https://livepeer.studio/api/stream/${streamId}/publish`
+      ];
 
-    let lpResp = null;
-    let lpData = null;
-    let usedUrl = null;
+      let lpResp = null;
+      let lpData = null;
+      let usedUrl = null;
 
-    for (const url of endpoints) {
-      try {
-        console.log(`[bridge:${sessionId}] trying Livepeer endpoint: ${url}`);
-        lpResp = await axios.post(url, { sdp: pcLivepeer.localDescription.sdp }, {
-          headers: { Authorization: `Bearer ${livepeerApiKey}`, 'Content-Type': 'application/json' },
-          timeout: 25000,
-        });
-        lpData = lpResp.data;
-        console.log(`[bridge:${sessionId}] Livepeer response from ${url}:`, lpResp.status, lpData ? (lpData.sdp ? 'has sdp' : Object.keys(lpData).length + ' keys') : 'no data');
-        if (lpData && lpData.sdp) {
-          usedUrl = url;
-          break;
+      for (const url of endpoints) {
+        try {
+          console.log(`[bridge:${sessionId}] trying Livepeer endpoint: ${url}`);
+          lpResp = await axios.post(url, { sdp: pcLivepeer.localDescription.sdp }, {
+            headers: { Authorization: `Bearer ${livepeerApiKey}`, 'Content-Type': 'application/json' },
+            timeout: 25000,
+          });
+          lpData = lpResp.data;
+          console.log(`[bridge:${sessionId}] Livepeer response from ${url}:`, lpResp.status, lpData ? (lpData.sdp ? 'has sdp' : Object.keys(lpData).length + ' keys') : 'no data');
+          if (lpData && lpData.sdp) {
+            usedUrl = url;
+            break;
+          }
+        } catch (err) {
+          // log and continue to next endpoint
+          console.warn(`[bridge:${sessionId}] endpoint ${url} failed:`, err.response ? `${err.response.status} ${JSON.stringify(err.response.data)}` : err.message);
+          lpResp = null;
+          lpData = null;
+          continue;
         }
-      } catch (err) {
-        // log and continue to next endpoint
-        console.warn(`[bridge:${sessionId}] endpoint ${url} failed:`, err.response ? `${err.response.status} ${JSON.stringify(err.response.data)}` : err.message);
-        lpResp = null;
-        lpData = null;
-        continue;
       }
+
+      if (!lpData || !lpData.sdp) {
+        throw new Error('Invalid Livepeer response from all endpoints: ' + (lpResp ? JSON.stringify(lpResp.data) : 'no response'));
+      }
+
+      // Apply Livepeer answer
+      await pcLivepeer.setRemoteDescription({ type: 'answer', sdp: lpData.sdp });
+      console.log(`[bridge:${sessionId}] Livepeer connection established via ${usedUrl}`);
+
+      // If livepeer connection becomes connected, extend session lifetime briefly
+      pcLivepeer.onconnectionstatechange = () => {
+        if (pcLivepeer.connectionState === 'connected') {
+          clearTimeout(session.cleanupTimer);
+          session.cleanupTimer = setTimeout(() => closeSession(sessionId), 5 * 60 * 1000);
+        }
+      };
+    } catch (err) {
+      console.error(`[bridge:${sessionId}] error while creating Livepeer offer:`, err?.message || err);
+      // Close on failures
+      try { closeSession(sessionId); } catch (e) {}
     }
+  })();
 
-    if (!lpData || !lpData.sdp) {
-      // Livepeer WebRTC not available — fetch stream info to provide RTMP fallback to client
-      try {
-        const sresp = await axios.get(`https://livepeer.studio/api/stream/${streamId}`, {
-          headers: { Authorization: `Bearer ${livepeerApiKey}` },
-          timeout: 10000,
-        });
-        const streamObj = sresp.data || {};
-        const streamKey = streamObj.streamKey || null;
-        const rtmpIngestUrl = streamObj.rtmpIngestUrl || 'rtmp://rtmp.livepeer.com/live';
-        // Close session since we won't attempt WebRTC
-        closeSession(sessionId);
-        return { webrtcUnavailable: true, rtmpIngestUrl, streamKey };
-      } catch (err) {
-        // fallback defaults
-        closeSession(sessionId);
-        return { webrtcUnavailable: true, rtmpIngestUrl: 'rtmp://rtmp.livepeer.com/live', streamKey: null };
-      }
-    }
-
-    // Apply Livepeer answer
-    await pcLivepeer.setRemoteDescription({ type: 'answer', sdp: lpData.sdp });
-    console.log(`[bridge:${sessionId}] Livepeer connection established via ${usedUrl}`);
-
-    // If livepeer connection becomes connected, extend session lifetime briefly
-    pcLivepeer.onconnectionstatechange = () => {
-      if (pcLivepeer.connectionState === 'connected') {
-        clearTimeout(session.cleanupTimer);
-        session.cleanupTimer = setTimeout(() => closeSession(sessionId), 5 * 60 * 1000);
-      }
-    };
-
-    return { sessionId, sdp: clientAnswerSdp };
-  } catch (err) {
-    console.error(`[bridge:${sessionId}] error while creating Livepeer offer:`, err?.message || err);
-    try { closeSession(sessionId); } catch (e) {}
-    return { webrtcUnavailable: true, rtmpIngestUrl: 'rtmp://rtmp.livepeer.com/live', streamKey: null };
-  }
+  return { sessionId, sdp: clientAnswerSdp };
 }
 
 async function addCandidate(sessionId, candidate) {

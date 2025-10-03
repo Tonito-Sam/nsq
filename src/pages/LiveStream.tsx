@@ -184,10 +184,10 @@ const LiveStream = () => {
     }
 
     try {
-      setLoading(true);
-      const { pc, sessionId } = await webrtcBridge.startPublish(streamInfo.streamId, previewStream);
-      peerConnectionRef.current = pc;
-      sessionIdRef.current = sessionId;
+  setLoading(true);
+  const { pc, sessionId } = await webrtcBridge.startPublish(streamInfo.streamId, previewStream);
+  peerConnectionRef.current = pc;
+  sessionIdRef.current = sessionId;
 
       pc.onconnectionstatechange = () => {
         console.log('WebRTC connection state:', pc.connectionState);
@@ -217,20 +217,7 @@ const LiveStream = () => {
       }, 5000);
     } catch (error: any) {
       console.error('❌ WebRTC streaming failed:', error);
-      // If the bridge indicates WebRTC is unavailable, open the OBS/RTMP modal and populate streamInfo
-      if (error && error.code === 'webrtc_unavailable') {
-        // Update streamInfo with RTMP fallback details
-        setStreamInfo((prev) => ({
-          playbackId: prev?.playbackId || '',
-          streamId: prev?.streamId || streamInfo?.streamId || '',
-          streamKey: error.streamKey || prev?.streamKey || streamInfo?.streamKey || '',
-          rtmpIngestUrl: error.rtmpIngestUrl || prev?.rtmpIngestUrl || streamInfo?.rtmpIngestUrl || 'rtmp://rtmp.livepeer.com/live',
-        }));
-        setShowStreamInfo(true);
-        setError('WebRTC ingest not available — showing RTMP/OBS instructions.');
-      } else {
-        setError(error.message || 'Failed to start WebRTC streaming.');
-      }
+      setError(error.message || 'Failed to start WebRTC streaming.');
       setIsBroadcasting(false);
       // Clean up
       if (peerConnectionRef.current) {
