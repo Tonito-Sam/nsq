@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { FaHeart, FaGift, FaCommentDots, FaEye, FaStop } from "react-icons/fa";
 import { Video } from "lucide-react";
-import Hls from "hls.js";
 import { Header } from "@/components/Header";
 import { MobileBottomNav } from "@/components/MobileBottomNav";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -15,9 +14,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from '@/hooks/useAuth';
 
 type StreamInfo = {
-  rtmpIngestUrl: string;
-  streamKey: string;
   playbackId: string;
+  streamId: string;
+  streamKey?: string;
+  rtmpIngestUrl?: string;
 };
 
 type Comment = {
@@ -30,6 +30,7 @@ type Comment = {
 
 const LiveStream = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   
   // User and channel state
@@ -59,11 +60,11 @@ const LiveStream = () => {
   const [streamDuration, setStreamDuration] = useState(0);
   const [streamStartTime, setStreamStartTime] = useState<Date | null>(null);
   const [showMobileChat, setShowMobileChat] = useState(false);
+  const [showStreamInfo, setShowStreamInfo] = useState(false);
 
   const previewRef = useRef<HTMLVideoElement>(null);
   const playbackRef = useRef<HTMLVideoElement>(null);
-  const hlsRef = useRef<Hls | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const heartId = useRef(0);
   const durationInterval = useRef<NodeJS.Timeout | null>(null);
 
@@ -173,6 +174,124 @@ const LiveStream = () => {
     return `${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
+  // WebRTC Streaming Function
+  const startWebRTCStreaming = async () => {
+    if (!previewStream || !streamInfo) {
+      setError("No camera access or stream info");
+      return;
+    }
+
+    try {
+      // Create WebRTC peer connection
+      const peerConnection = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+        ]
+      });
+
+      // Add local stream tracks
+      previewStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, previewStream);
+      });
+
+      // Handle ICE candidates
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('New ICE candidate:', event.candidate);
+        }
+      };
+
+      // Handle connection state
+      peerConnection.onconnectionstatechange = () => {
+        console.log('WebRTC connection state:', peerConnection.connectionState);
+        switch (peerConnection.connectionState) {
+          case 'connected':
+            console.log('🎉 WebRTC connected successfully! Stream is now live!');
+            setIsBroadcasting(true);
+            setStreamStartTime(new Date());
+            setError(""); // Clear any previous errors
+            break;
+          case 'disconnected':
+          case 'failed':
+            console.error('WebRTC connection failed');
+            setError("Stream connection lost. Please try again.");
+            setIsBroadcasting(false);
+            break;
+          case 'connecting':
+            console.log('WebRTC connecting...');
+            break;
+        }
+      };
+
+      // Create offer
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      console.log('Sending WebRTC offer to backend for stream:', streamInfo.streamId);
+
+      // Try the correct endpoint
+      const response = await fetch('https://nsq-98et.onrender.com/api/livepeer/create-webrtc-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          streamId: streamInfo.streamId,
+          sdp: offer.sdp
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || `Failed to create WebRTC session (status ${response.status})`);
+      }
+
+      if (!data.sdp) {
+        throw new Error('No SDP answer received from server');
+      }
+
+      console.log('✅ Received WebRTC answer from backend');
+
+      // Set remote description
+      await peerConnection.setRemoteDescription(new RTCSessionDescription({
+        type: 'answer',
+        sdp: data.sdp
+      }));
+
+      peerConnectionRef.current = peerConnection;
+      
+      // Set a timeout to check if connection succeeds
+      setTimeout(() => {
+        if (peerConnection.connectionState !== 'connected') {
+          console.warn('WebRTC connection taking longer than expected...');
+        }
+      }, 5000);
+      
+    } catch (error: any) {
+      console.error('❌ WebRTC streaming failed:', error);
+      
+      // More specific error messages
+      if (error.message.includes('404')) {
+        setError("WebRTC endpoint not found. Showing OBS setup instructions.");
+        setShowStreamInfo(true);
+      } else if (error.message.includes('Failed to create WebRTC session')) {
+        setError("WebRTC not supported. Showing OBS setup instructions.");
+        setShowStreamInfo(true);
+      } else {
+        setError(error.message || 'Failed to start WebRTC streaming. Showing OBS setup instructions.');
+        setShowStreamInfo(true);
+      }
+      
+      setIsBroadcasting(false);
+      
+      // Clean up on failure
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+        peerConnectionRef.current = null;
+      }
+    }
+  };
+
   const startCameraPreview = async () => {
     setError("");
     try {
@@ -247,18 +366,26 @@ const LiveStream = () => {
         return;
       }
 
-      // Make real API call to Livepeer backend
+      // Create stream via your backend
       const response = await fetch('https://nsq-98et.onrender.com/api/livepeer/create-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: streamName.trim() }),
       });
+
       const livepeerData = await response.json();
 
-      // Store stream in Supabase with real Livepeer data
+      if (!response.ok) {
+        throw new Error(livepeerData.error || 'Failed to create stream');
+      }
+
+      console.log('Livepeer stream created:', livepeerData);
+
+      // Store stream in Supabase
       const playbackUrl = livepeerData.playbackId
         ? `https://playback.livepeer.studio/hls/${livepeerData.playbackId}/index.m3u8`
         : '';
+
       const { data, error } = await supabase
         .from('studio_streams')
         .insert([
@@ -276,9 +403,11 @@ const LiveStream = () => {
             chat_enabled: true,
             likes: 0,
             gifts: [],
+            stream_type: 'webrtc',
+            playbackid: livepeerData.playbackId,
+            stream_id: livepeerData.id,
             streamkey: livepeerData.streamKey,
             rtmpingesturl: livepeerData.rtmpIngestUrl,
-            playbackid: livepeerData.playbackId,
           },
         ])
         .select()
@@ -294,104 +423,31 @@ const LiveStream = () => {
       setLikeCount(0);
       setGiftList([]);
       setStreamInfo({
-        rtmpIngestUrl: livepeerData.rtmpIngestUrl,
-        streamKey: livepeerData.streamKey,
         playbackId: livepeerData.playbackId,
+        streamId: livepeerData.id,
+        streamKey: livepeerData.streamKey,
+        rtmpIngestUrl: livepeerData.rtmpIngestUrl,
       });
-      // Attempt to publish the previewStream to Livepeer via WebRTC
-      try {
-        await startWebRtcPublish(livepeerData, previewStream);
-        setIsBroadcasting(true);
-        setStreamStartTime(new Date());
-      } catch (webrtcErr: any) {
-        console.error('WebRTC publish failed:', webrtcErr);
-        setError('Failed to publish stream via WebRTC: ' + (webrtcErr?.message || webrtcErr));
-        // keep preview available but don't mark broadcasting
-      }
-      setStreamDuration(0);
+
+      // Start WebRTC streaming immediately
+      await startWebRTCStreaming();
+      
     } catch (err: any) {
       console.error('Error creating stream:', err);
       setError(err.message || 'Failed to create stream');
+      setIsBroadcasting(false);
     } finally {
       setLoading(false);
     }
   };
 
-  const createPeerConnection = () => {
-    if (pcRef.current) return pcRef.current;
-
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-      ],
-    });
-
-    pc.oniceconnectionstatechange = () => {
-      console.log('PeerConnection ICE state:', pc.iceConnectionState);
-    };
-
-    pc.onconnectionstatechange = () => {
-      console.log('PeerConnection state:', pc.connectionState);
-    };
-
-    pcRef.current = pc;
-    return pc;
-  };
-
-  const startWebRtcPublish = async (livepeerData: any, stream: MediaStream | null) => {
-    if (!stream) throw new Error('No media stream to publish');
-    if (!livepeerData || !livepeerData.playbackId) throw new Error('Missing livepeer playbackId/stream id');
-
-    const pc = createPeerConnection();
-
-    // Add local tracks
-    for (const track of stream.getTracks()) {
-      pc.addTrack(track, stream);
+  const stopStream = () => {
+    // Close WebRTC connection
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
     }
 
-    // Create offer
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    // Send offer to backend which forwards to Livepeer
-    const resp = await fetch('/api/livepeer/create-webrtc-session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ streamId: livepeerData.playbackId, sdp: offer.sdp }),
-    });
-
-    if (!resp.ok) {
-      const txt = await resp.text();
-      throw new Error('Failed to create WebRTC session: ' + txt);
-    }
-
-    const data = await resp.json();
-    const answerSdp = data.sdp;
-    if (!answerSdp) throw new Error('No answer SDP from server');
-
-    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-
-    // Wait until connection established
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Timed out waiting for WebRTC connection'));
-      }, 15000);
-
-      const checkState = () => {
-        if (!pc) return;
-        if (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected') {
-          clearTimeout(timeout);
-          pc.removeEventListener('connectionstatechange', checkState as any);
-          resolve();
-        }
-      };
-
-      pc.addEventListener('connectionstatechange', checkState as any);
-      checkState();
-    });
-  };
-
-  const stopStream = async () => {
     setIsBroadcasting(false);
     setStreamStartTime(null);
     setStreamDuration(0);
@@ -401,30 +457,16 @@ const LiveStream = () => {
       durationInterval.current = null;
     }
 
-    // Stop the camera stream
+    // Stop all media tracks
     if (previewStream) {
       previewStream.getTracks().forEach(track => track.stop());
     }
 
-    // Close peer connection if exists
-    if (pcRef.current) {
-      try {
-        pcRef.current.getSenders().forEach(s => { try { s.track?.stop(); } catch(e){} });
-        pcRef.current.close();
-      } catch (e) {}
-      pcRef.current = null;
-    }
-
-    // If we have a stream row ID, navigate to StreamEndPreview page
-    if (streamRowId) {
-      navigate(`/stream-end-preview/${streamRowId}`);
+    // Redirect to the user's channel page
+    if (channel && channel.id) {
+      navigate(`/studio/${channel.id}`);
     } else {
-      // Fallback: if no stream was created, just redirect to studio
-      if (channel && channel.id) {
-        navigate(`/studio/${channel.id}`);
-      } else {
-        navigate('/studio');
-      }
+      navigate('/studio');
     }
   };
 
@@ -435,6 +477,7 @@ const LiveStream = () => {
     setIsBroadcasting(false);
     setStreamStartTime(null);
     setStreamDuration(0);
+    setShowStreamInfo(false);
     if (durationInterval.current) {
       clearInterval(durationInterval.current);
       durationInterval.current = null;
@@ -454,11 +497,10 @@ const LiveStream = () => {
       playbackRef.current.removeAttribute("src");
       playbackRef.current.load();
     }
-    if (hlsRef.current) {
-      try {
-        hlsRef.current.destroy();
-      } catch (e) {}
-      hlsRef.current = null;
+    
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
     }
   };
 
@@ -550,9 +592,17 @@ const LiveStream = () => {
                   </span>
                 </div>
               )}
-
-            
             </div>
+
+            {/* OBS Setup Button */}
+            {streamInfo && !isBroadcasting && (
+              <button
+                onClick={() => setShowStreamInfo(true)}
+                className="px-3 py-1 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition-colors"
+              >
+                OBS Setup
+              </button>
+            )}
           </div>
 
           {/* Main streaming area */}
@@ -746,7 +796,66 @@ const LiveStream = () => {
           <GiftModal showGifts={showGifts} setShowGifts={setShowGifts} sendGift={sendGift} />
         )}
 
-        {error && (
+        {/* OBS Setup Modal */}
+        {showStreamInfo && streamInfo && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-6">
+              <h3 className="text-xl font-bold mb-4">OBS Studio Setup</h3>
+              <p className="text-gray-600 mb-4">
+                WebRTC streaming is not available. Please use OBS Studio to broadcast:
+              </p>
+              
+              <div className="space-y-3 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Server URL:
+                  </label>
+                  <input 
+                    type="text" 
+                    value={streamInfo.rtmpIngestUrl || 'rtmp://rtmp.livepeer.com/live'} 
+                    readOnly 
+                    className="w-full p-2 border border-gray-300 rounded bg-gray-50 text-sm"
+                    onFocus={(e) => e.target.select()}
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Stream Key:
+                  </label>
+                  <input 
+                    type="text" 
+                    value={streamInfo.streamKey || ''} 
+                    readOnly 
+                    className="w-full p-2 border border-gray-300 rounded bg-gray-50 text-sm font-mono"
+                    onFocus={(e) => e.target.select()}
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowStreamInfo(false)}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() => {
+                    setIsBroadcasting(true);
+                    setStreamStartTime(new Date());
+                    setShowStreamInfo(false);
+                  }}
+                  className="flex-1 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+                >
+                  Start Stream Anyway
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {error && !showStreamInfo && (
           <div className="fixed top-4 left-2 right-2 md:left-4 md:right-4 z-50 flex justify-center">
             <div className="bg-red-500/90 backdrop-blur-sm text-white px-4 md:px-6 py-2 md:py-3 rounded-xl md:rounded-2xl shadow-lg max-w-md text-sm md:text-base">
               {error}

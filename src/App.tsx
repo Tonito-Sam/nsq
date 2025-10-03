@@ -54,7 +54,7 @@ import SavedPostsPage from "./pages/SavedPosts";
 import WalletTopupResult from "./pages/WalletTopupResult";
 import UploadReels from "./pages/UploadReels";
 import RecordReel from "./pages/RecordReel";
-import LiveStream from "./pages/LiveStream";
+import LiveStream from "./pages/LiveStream2";
 import StudioSettings from "./pages/StudioSettings";
 import ForgotPassword from "./pages/ForgotPassword";
 import GroupDetails from "./pages/groups/[groupId]";

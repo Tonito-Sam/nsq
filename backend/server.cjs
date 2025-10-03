@@ -21,6 +21,10 @@ app.use(express.json());
 const livepeerRoutes = require('./routes/livepeer.cjs');
 app.use('/api/livepeer', livepeerRoutes);
 
+// WebRTC -> RTMP bridge route
+const webrtcBridgeRoutes = require('./routes/webrtc-bridge.cjs');
+app.use('/api/webrtc-bridge', webrtcBridgeRoutes);
+
 // Start server
 app.listen(PORT, () => {
   console.log(`✅ Backend running on port ${PORT}`);

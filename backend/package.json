@@ -4,9 +4,11 @@
   "main": "server.cjs",
   "scripts": {
     "dev": "nodemon server.cjs",
-    "start": "node server.cjs"
+    "start": "node server.cjs",
+    "bridge": "node webrtc-rtmp-bridge.cjs"
   },
   "dependencies": {
+  "wrtc": "^0.4.7",
     "axios": "^1.11.0",
     "dotenv": "^16.1.4",
     "express": "^4.18.2"
