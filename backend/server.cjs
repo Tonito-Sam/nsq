@@ -25,6 +25,10 @@ app.use('/api/livepeer', livepeerRoutes);
 const webrtcBridgeRoutes = require('./routes/webrtc-bridge.cjs');
 app.use('/api/webrtc-bridge', webrtcBridgeRoutes);
 
+// TURN credentials endpoint (ephemeral creds)
+const turnRoutes = require('./routes/turn.cjs');
+app.use('/api/turn', turnRoutes);
+
 // Start server
 app.listen(PORT, () => {
   console.log(`✅ Backend running on port ${PORT}`);
