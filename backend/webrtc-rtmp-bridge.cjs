@@ -122,21 +122,48 @@ async function createSession({ streamId, clientSdp, livepeerApiKey, timeout = 20
       await pcLivepeer.setLocalDescription(offer);
       await waitForIceGatheringComplete(pcLivepeer, 10000);
 
-      // Send offer to Livepeer
-      const url = `https://livepeer.studio/api/stream/${streamId}/webrtc`;
-      const lpResp = await axios.post(url, { sdp: pcLivepeer.localDescription.sdp }, {
-        headers: { Authorization: `Bearer ${livepeerApiKey}`, 'Content-Type': 'application/json' },
-        timeout: 20000,
-      });
+      // Send offer to Livepeer - try multiple endpoints to handle API variations / plan differences
+      const endpoints = [
+        `https://livepeer.studio/api/stream/${streamId}/webrtc`,
+        `https://livepeer.studio/api/stream/${streamId}/webRTCIngest`,
+        `https://livepeer.studio/api/stream/${streamId}/webrtcIngest`,
+        `https://livepeer.studio/api/stream/${streamId}/ingest`,
+        `https://livepeer.studio/api/stream/${streamId}/publish`
+      ];
 
-      const lpData = lpResp.data;
+      let lpResp = null;
+      let lpData = null;
+      let usedUrl = null;
+
+      for (const url of endpoints) {
+        try {
+          console.log(`[bridge:${sessionId}] trying Livepeer endpoint: ${url}`);
+          lpResp = await axios.post(url, { sdp: pcLivepeer.localDescription.sdp }, {
+            headers: { Authorization: `Bearer ${livepeerApiKey}`, 'Content-Type': 'application/json' },
+            timeout: 25000,
+          });
+          lpData = lpResp.data;
+          console.log(`[bridge:${sessionId}] Livepeer response from ${url}:`, lpResp.status, lpData ? (lpData.sdp ? 'has sdp' : Object.keys(lpData).length + ' keys') : 'no data');
+          if (lpData && lpData.sdp) {
+            usedUrl = url;
+            break;
+          }
+        } catch (err) {
+          // log and continue to next endpoint
+          console.warn(`[bridge:${sessionId}] endpoint ${url} failed:`, err.response ? `${err.response.status} ${JSON.stringify(err.response.data)}` : err.message);
+          lpResp = null;
+          lpData = null;
+          continue;
+        }
+      }
+
       if (!lpData || !lpData.sdp) {
-        throw new Error('Invalid Livepeer response: ' + JSON.stringify(lpData));
+        throw new Error('Invalid Livepeer response from all endpoints: ' + (lpResp ? JSON.stringify(lpResp.data) : 'no response'));
       }
 
       // Apply Livepeer answer
       await pcLivepeer.setRemoteDescription({ type: 'answer', sdp: lpData.sdp });
-      console.log(`[bridge:${sessionId}] Livepeer connection established`);
+      console.log(`[bridge:${sessionId}] Livepeer connection established via ${usedUrl}`);
 
       // If livepeer connection becomes connected, extend session lifetime briefly
       pcLivepeer.onconnectionstatechange = () => {
