@@ -11,6 +11,7 @@ import { AnimatedHearts } from "@/components/AnimatedHearts";
 import { GiftModal } from "@/components/GiftModal";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { supabase } from "@/integrations/supabase/client";
+import webrtcBridge from '@/services/webrtcBridge';
 import { useAuth } from '@/hooks/useAuth';
 
 type StreamInfo = {
@@ -65,6 +66,7 @@ const LiveStream = () => {
   const previewRef = useRef<HTMLVideoElement>(null);
   const playbackRef = useRef<HTMLVideoElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const heartId = useRef(0);
   const durationInterval = useRef<NodeJS.Timeout | null>(null);
 
@@ -182,35 +184,19 @@ const LiveStream = () => {
     }
 
     try {
-      // Create WebRTC peer connection
-      const peerConnection = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-        ]
-      });
+      setLoading(true);
+      const { pc, sessionId } = await webrtcBridge.startPublish(streamInfo.streamId, previewStream);
+      peerConnectionRef.current = pc;
+      sessionIdRef.current = sessionId;
 
-      // Add local stream tracks
-      previewStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, previewStream);
-      });
-
-      // Handle ICE candidates
-      peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log('New ICE candidate:', event.candidate);
-        }
-      };
-
-      // Handle connection state
-      peerConnection.onconnectionstatechange = () => {
-        console.log('WebRTC connection state:', peerConnection.connectionState);
-        switch (peerConnection.connectionState) {
+      pc.onconnectionstatechange = () => {
+        console.log('WebRTC connection state:', pc.connectionState);
+        switch (pc.connectionState) {
           case 'connected':
             console.log('🎉 WebRTC connected successfully! Stream is now live!');
             setIsBroadcasting(true);
             setStreamStartTime(new Date());
-            setError(""); // Clear any previous errors
+            setError("");
             break;
           case 'disconnected':
           case 'failed':
@@ -224,72 +210,37 @@ const LiveStream = () => {
         }
       };
 
-      // Create offer
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-
-      console.log('Sending WebRTC offer to backend for stream:', streamInfo.streamId);
-
-      // Try the correct endpoint
-      const response = await fetch('https://nsq-98et.onrender.com/api/livepeer/create-webrtc-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          streamId: streamInfo.streamId,
-          sdp: offer.sdp
-        }),
-      });
-
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.error || `Failed to create WebRTC session (status ${response.status})`);
-      }
-
-      if (!data.sdp) {
-        throw new Error('No SDP answer received from server');
-      }
-
-      console.log('✅ Received WebRTC answer from backend');
-
-      // Set remote description
-      await peerConnection.setRemoteDescription(new RTCSessionDescription({
-        type: 'answer',
-        sdp: data.sdp
-      }));
-
-      peerConnectionRef.current = peerConnection;
-      
-      // Set a timeout to check if connection succeeds
       setTimeout(() => {
-        if (peerConnection.connectionState !== 'connected') {
+        if (pc.connectionState !== 'connected') {
           console.warn('WebRTC connection taking longer than expected...');
         }
       }, 5000);
-      
     } catch (error: any) {
       console.error('❌ WebRTC streaming failed:', error);
-      
-      // More specific error messages
-      if (error.message.includes('404')) {
-        setError("WebRTC endpoint not found. Showing OBS setup instructions.");
-        setShowStreamInfo(true);
-      } else if (error.message.includes('Failed to create WebRTC session')) {
-        setError("WebRTC not supported. Showing OBS setup instructions.");
-        setShowStreamInfo(true);
-      } else {
-        setError(error.message || 'Failed to start WebRTC streaming. Showing OBS setup instructions.');
-        setShowStreamInfo(true);
-      }
-      
+      setError(error.message || 'Failed to start WebRTC streaming.');
       setIsBroadcasting(false);
-      
-      // Clean up on failure
+      // Clean up
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
         peerConnectionRef.current = null;
       }
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const stopWebRTCStreaming = async () => {
+    try {
+      await webrtcBridge.stopPublish(peerConnectionRef.current, sessionIdRef.current);
+    } catch (err) {
+      console.warn('Failed to stop publish', err);
+    }
+    try {
+      peerConnectionRef.current = null;
+      sessionIdRef.current = null;
+      setIsBroadcasting(false);
+      setStreamStartTime(null);
+    } catch (e) {}
   };
 
   const startCameraPreview = async () => {

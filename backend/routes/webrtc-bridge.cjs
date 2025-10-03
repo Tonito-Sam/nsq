@@ -5,6 +5,7 @@ const bridge = require(path.resolve(__dirname, '..', 'webrtc-rtmp-bridge.cjs'));
 
 // POST /api/webrtc-bridge/create-session
 // body: { streamId: string, sdp: string }
+// Create a new bridge session; returns { sessionId, sdp }
 router.post('/create-session', async (req, res) => {
   const { streamId, sdp } = req.body;
   const LIVEPEER_API_KEY = process.env.LIVEPEER_API_KEY;
@@ -12,12 +13,41 @@ router.post('/create-session', async (req, res) => {
     return res.status(500).json({ error: 'LIVEPEER_API_KEY not configured on server' });
   }
 
+  if (!streamId || !sdp) return res.status(400).json({ error: 'streamId and sdp required' });
+
   try {
-    const result = await bridge.handleSession({ streamId, clientSdp: sdp, livepeerApiKey: LIVEPEER_API_KEY });
+    const result = await bridge.createSession({ streamId, clientSdp: sdp, livepeerApiKey: LIVEPEER_API_KEY });
     res.json(result);
   } catch (err) {
-    console.error('webrtc-bridge error:', err?.message || err);
+    console.error('webrtc-bridge create-session error:', err?.message || err);
     res.status(500).json({ error: 'Bridge error: ' + (err?.message || String(err)) });
+  }
+});
+
+// Add ICE candidate for an existing session
+router.post('/:sessionId/candidate', async (req, res) => {
+  const { sessionId } = req.params;
+  const { candidate } = req.body;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  try {
+    await bridge.addCandidate(sessionId, candidate);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('webrtc-bridge add-candidate error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to add candidate' });
+  }
+});
+
+// Close a session
+router.post('/:sessionId/close', (req, res) => {
+  const { sessionId } = req.params;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  try {
+    bridge.closeSession(sessionId);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('webrtc-bridge close error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to close session' });
   }
 });
 
