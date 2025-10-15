@@ -31,9 +31,21 @@ export async function startPublish(streamId: string, localStream: MediaStream) {
   // Try to fetch TURN credentials from server; fall back to default STUN-only
   const turn = await fetchTurnCreds();
   const iceServers = [...DEFAULT_ICE_SERVERS];
+
   if (turn && turn.url) {
     // cast to any to satisfy TypeScript RTCIceServer shape in this project
     iceServers.push({ urls: turn.url, username: turn.username, credential: turn.password } as any);
+  } else {
+    // Fallback: allow Vite-provided TURN credentials for quick testing (VITE_ prefix required)
+    const viteTurnUrl = (import.meta as any).env?.VITE_TURN_URL;
+    const viteTurnUser = (import.meta as any).env?.VITE_TURN_USER;
+    const viteTurnPass = (import.meta as any).env?.VITE_TURN_PASS;
+    if (viteTurnUrl) {
+      console.debug('webrtcBridge: using VITE_TURN_* fallback');
+      iceServers.push({ urls: viteTurnUrl, username: viteTurnUser, credential: viteTurnPass } as any);
+    } else {
+      console.debug('webrtcBridge: no TURN creds available, using STUN-only');
+    }
   }
 
   const pc = new RTCPeerConnection({ iceServers });
@@ -79,6 +91,10 @@ export async function startPublish(streamId: string, localStream: MediaStream) {
   const data = await resp.json();
   sessionId = data.sessionId;
   const answerSdp = data.sdp;
+
+  // Debug: print ICE servers and answer SDP size to help diagnose ICE/SDP issues
+  try { console.debug('webrtcBridge: ICE servers used:', iceServers); } catch (e) {}
+  try { console.debug('webrtcBridge: answerSDP length:', answerSdp?.length); } catch (e) {}
 
   // flush buffered candidates
   for (const c of pendingCandidates) {
