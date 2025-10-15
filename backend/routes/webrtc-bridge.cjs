@@ -15,8 +15,14 @@ router.post('/create-session', async (req, res) => {
 
   if (!streamId || !sdp) return res.status(400).json({ error: 'streamId and sdp required' });
 
+  // Debug: log incoming request briefly (avoid logging full SDP for size)
+  try {
+    console.log(`webrtc-bridge.create-session: incoming streamId=${streamId} sdpLength=${(sdp || '').length}`);
+  } catch (e) {}
+
   try {
     const result = await bridge.createSession({ streamId, clientSdp: sdp, livepeerApiKey: LIVEPEER_API_KEY });
+    try { console.log('webrtc-bridge.create-session: bridge result ok, sessionId=', result?.sessionId); } catch (e) {}
     res.json(result);
   } catch (err) {
     console.error('webrtc-bridge create-session error:', err?.message || err);
