@@ -3,12 +3,12 @@
 // In environments where the backend is hosted separately, set VITE_API_BASE
 // to the full base path for the webrtc bridge (for example:
 // VITE_API_BASE=https://api.example.com/api/webrtc-bridge)
-const BASE = (import.meta as any).env?.VITE_API_BASE || '/api/webrtc-bridge'; // adjust if your backend is on a different origin
+export const BASE = (import.meta as any).env?.VITE_API_BASE || '/api/webrtc-bridge'; // adjust if your backend is on a different origin
 
 // Derive API root (used for other endpoints like TURN creds). If BASE is
 // something like https://api.example.com/api/webrtc-bridge then API_ROOT will
 // be https://api.example.com, otherwise it will be empty string (same origin).
-const API_ROOT = BASE.replace(/\/api\/webrtc-bridge\/?$/, '');
+export const API_ROOT = BASE.replace(/\/api\/webrtc-bridge\/?$/, '');
 const DEFAULT_ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   // Add more STUNs if desired

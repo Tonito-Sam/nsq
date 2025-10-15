@@ -11,7 +11,7 @@ import { AnimatedHearts } from "@/components/AnimatedHearts";
 import { GiftModal } from "@/components/GiftModal";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { supabase } from "@/integrations/supabase/client";
-import webrtcBridge from '@/services/webrtcBridge';
+import webrtcBridge, { BASE as WEBRTC_BASE, API_ROOT as WEBRTC_API_ROOT } from '@/services/webrtcBridge';
 import { useAuth } from '@/hooks/useAuth';
 
 type StreamInfo = {
@@ -61,6 +61,7 @@ const LiveStream = () => {
   const [streamStartTime, setStreamStartTime] = useState<Date | null>(null);
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [showStreamInfo, setShowStreamInfo] = useState(false);
+  const [debugMode] = useState(true);
 
   const previewRef = useRef<HTMLVideoElement>(null);
   const playbackRef = useRef<HTMLVideoElement>(null);
@@ -822,6 +823,16 @@ const LiveStream = () => {
       </div>
 
       <MobileBottomNav />
+      {debugMode && (
+        <div className="fixed top-20 left-4 z-50 bg-white/80 text-black text-xs p-2 rounded shadow-lg max-w-xs">
+          <div className="font-semibold">webrtc debug</div>
+          <div>BASE: <code className="break-words">{WEBRTC_BASE}</code></div>
+          <div>API_ROOT: <code className="break-words">{WEBRTC_API_ROOT || '(same origin)'}</code></div>
+          <div>sessionId: <code>{sessionIdRef.current || '-'}</code></div>
+          <div>pc state: <code>{peerConnectionRef.current?.connectionState || '-'}</code></div>
+          <div>error: <code className="break-words">{error || '-'}</code></div>
+        </div>
+      )}
     </>
   );
 };
