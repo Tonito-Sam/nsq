@@ -1,5 +1,14 @@
 // src/services/webrtcBridge.ts
-const BASE = '/api/webrtc-bridge'; // adjust if your backend is on a different origin
+// By default we call the backend on the same origin under /api/webrtc-bridge.
+// In environments where the backend is hosted separately, set VITE_API_BASE
+// to the full base path for the webrtc bridge (for example:
+// VITE_API_BASE=https://api.example.com/api/webrtc-bridge)
+const BASE = (import.meta as any).env?.VITE_API_BASE || '/api/webrtc-bridge'; // adjust if your backend is on a different origin
+
+// Derive API root (used for other endpoints like TURN creds). If BASE is
+// something like https://api.example.com/api/webrtc-bridge then API_ROOT will
+// be https://api.example.com, otherwise it will be empty string (same origin).
+const API_ROOT = BASE.replace(/\/api\/webrtc-bridge\/?$/, '');
 const DEFAULT_ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   // Add more STUNs if desired
@@ -7,7 +16,7 @@ const DEFAULT_ICE_SERVERS = [
 
 async function fetchTurnCreds() {
   try {
-    const resp = await fetch('/api/turn/creds');
+    const resp = await fetch(`${API_ROOT}/api/turn/creds`);
     if (!resp.ok) return null;
     const data = await resp.json();
     if (!data || !data.url) return null;
@@ -55,12 +64,18 @@ export async function startPublish(streamId: string, localStream: MediaStream) {
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
+  // Debug info to help diagnose 404s or wrong base URL on mobile devices
+  console.debug('webrtcBridge: creating session', { BASE, API_ROOT, streamId });
+
   const resp = await fetch(`${BASE}/create-session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ streamId, sdp: pc.localDescription?.sdp }),
   });
-  if (!resp.ok) throw new Error('create-session failed: ' + await resp.text());
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`create-session failed (status ${resp.status}): ${body}`);
+  }
   const data = await resp.json();
   sessionId = data.sessionId;
   const answerSdp = data.sdp;

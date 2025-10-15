@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { FaHeart, FaGift, FaCommentDots, FaEye, FaStop } from "react-icons/fa";
 import { Video } from "lucide-react";
 import { Header } from "@/components/Header";
@@ -31,7 +31,6 @@ type Comment = {
 
 const LiveStream = () => {
   const navigate = useNavigate();
-  const location = useLocation();
   const { user } = useAuth();
   
   // User and channel state
@@ -392,17 +391,18 @@ const LiveStream = () => {
     }
   };
 
-  const stopStream = () => {
-    // Close WebRTC connection
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
+  const stopStream = async () => {
+    // Ensure any publish session is stopped cleanly
+    try {
+      await stopWebRTCStreaming();
+    } catch (e) {
+      // ignore - stopWebRTCStreaming already logs warnings
     }
 
     setIsBroadcasting(false);
     setStreamStartTime(null);
     setStreamDuration(0);
-    
+
     if (durationInterval.current) {
       clearInterval(durationInterval.current);
       durationInterval.current = null;
