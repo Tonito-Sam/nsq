@@ -1,0 +1,16 @@
+[
+  {
+    "id": "bank001",
+    "title": "Gentle Piano (sample)",
+    "url": "https://samplelib.com/lib/preview/mp3/sample-3s.mp3",
+    "duration": 3,
+    "license": "samplelib-sample"
+  },
+  {
+    "id": "bank002",
+    "title": "Upbeat Beat (sample)",
+    "url": "https://samplelib.com/lib/preview/mp3/sample-5s.mp3",
+    "duration": 5,
+    "license": "samplelib-sample"
+  }
+]

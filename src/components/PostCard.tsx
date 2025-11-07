@@ -246,7 +246,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
           // Insert view if not already viewed
           await supabase.from('post_views').upsert(
             { post_id: post.id, user_id: currentUser.id },
-            { onConflict: ['user_id', 'post_id'] }
+            { onConflict: 'user_id,post_id' }
           );
         }, 30000);
       } else if (!inView && timer) {
@@ -355,10 +355,14 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
               postType={post.post_type}
               voiceNoteUrl={post.voice_note_url || ''}
               voiceDuration={post.voice_duration || 0}
+                backgroundAudioUrl={(post as any).background_audio_url || ''}
+                backgroundAudioMeta={(post as any).background_audio_meta || null}
+                audioMixMeta={(post as any).audio_mix_meta || null}
+                originalVoiceUsername={post.user?.username || post.user?.first_name || ''}
               eventDate={post.event_date || ''}
               eventLocation={post.event_location || ''}
-              location={post.location || ''} // Pass location
-              feeling={post.feeling || ''}   // Pass feeling
+              location={post.location || ''}
+              feeling={post.feeling || ''}
             />
           )}
           {/* PostEngagement with share modal handler */}

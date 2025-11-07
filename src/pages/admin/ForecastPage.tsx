@@ -3,9 +3,8 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
-import { Download, Edit3, Info, HelpCircle } from 'lucide-react';
+import { Download, Info, HelpCircle } from 'lucide-react';
 import RevenueChart from './RevenueChart';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 // Enhanced TypeScript types
@@ -104,7 +103,8 @@ const revenueDrivers: RevenueDriver[] = [
     name: 'Transaction Fees',
     type: 'commission',
     description: 'Commission from marketplace transactions at 1.5% of $50 average transaction value',
-    calc: (month: number, year: number, txPerDay: number): number => {
+    // month and year unused in this calc
+    calc: (_month: number, _year: number, txPerDay: number): number => {
       return txPerDay * 30 * 50 * 0.015;
     }
   },
@@ -112,7 +112,8 @@ const revenueDrivers: RevenueDriver[] = [
     name: 'Storefronts Subscription',
     type: 'subscription',
     description: 'Monthly subscription from 300 stores at $5/month, starting after 12 months',
-    calc: (month: number, year: number, txPerDay: number): number => {
+    // txPerDay unused here
+    calc: (_month: number, year: number, _txPerDay: number): number => {
       if (year === 0) return 0;
       return 300 * 5;
     }
@@ -121,7 +122,7 @@ const revenueDrivers: RevenueDriver[] = [
     name: 'Content Monetization',
     type: 'commission',
     description: 'Revenue from content transactions (10% of total transactions)',
-    calc: (month: number, year: number, txPerDay: number): number => {
+    calc: (_month: number, _year: number, txPerDay: number): number => {
       return txPerDay * 30 * 0.1 * 50 * 0.015;
     }
   },
@@ -129,7 +130,7 @@ const revenueDrivers: RevenueDriver[] = [
     name: 'Advertisements',
     type: 'ads',
     description: 'Ad revenue at $5 per ad, with 1 ad per 10 transactions',
-    calc: (month: number, year: number, txPerDay: number): number => {
+    calc: (_month: number, _year: number, txPerDay: number): number => {
       return txPerDay * 30 * 0.1 * 5;
     }
   },
@@ -137,7 +138,7 @@ const revenueDrivers: RevenueDriver[] = [
     name: 'Cross-border Payments',
     type: 'commission',
     description: 'Commission from international transactions (20% of total transactions)',
-    calc: (month: number, year: number, txPerDay: number): number => {
+    calc: (_month: number, _year: number, txPerDay: number): number => {
       return txPerDay * 30 * 0.2 * 50 * 0.015;
     }
   },
@@ -145,7 +146,8 @@ const revenueDrivers: RevenueDriver[] = [
     name: 'Partnerships & APIs',
     type: 'api',
     description: 'API revenue starting at $500/month, growing 50% annually',
-    calc: (month: number, year: number, txPerDay: number): number => {
+    // txPerDay unused here
+    calc: (_month: number, year: number, _txPerDay: number): number => {
       return 500 * Math.pow(1.5, year);
     }
   }
@@ -691,7 +693,8 @@ const ExpenseTable: React.FC<ExpenseTableProps> = ({ category, title, allocation
   };
 
   return (
-    <Card className="w-full">
+    <Card className="w-full relative overflow-hidden">
+      <div className={`absolute top-0 left-0 w-2 h-full ${color}`}></div>
       <CardHeader className="pb-4">
         <div className="flex justify-between items-start">
           <div>
@@ -809,38 +812,47 @@ const SummaryDashboard: React.FC = () => {
   const totalFunding = Object.values(fundAllocation).reduce((sum, item) => sum + item.allocation, 0);
   
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-      {Object.entries(fundAllocation).map(([key, data]) => (
-        <Card key={key} className="relative overflow-hidden">
-          <div className={`absolute top-0 left-0 w-2 h-full ${data.color}`}></div>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg font-semibold flex items-center gap-2">
-              {data.title}
-              <Tooltip>
-                <TooltipTrigger>
-                  <Info className="w-4 h-4 text-muted-foreground" />
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>{data.percentage}% of total $1.2M funding</p>
-                </TooltipContent>
-              </Tooltip>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <div className="text-2xl font-bold">
-                ${(data.allocation / 1000).toFixed(0)}K
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold">Funding Overview</h2>
+          <div className="text-sm text-muted-foreground">Total Funding: {formatCurrency(totalFunding)}</div>
+        </div>
+        <div className="text-sm text-muted-foreground">24-Month Runway starting Jan 2026</div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        {Object.entries(fundAllocation).map(([key, data]) => (
+          <Card key={key} className="relative overflow-hidden">
+            <div className={`absolute top-0 left-0 w-2 h-full ${data.color}`}></div>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg font-semibold flex items-center gap-2">
+                {data.title}
+                <Tooltip>
+                  <TooltipTrigger>
+                    <Info className="w-4 h-4 text-muted-foreground" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{data.percentage}% of total $1.2M funding</p>
+                  </TooltipContent>
+                </Tooltip>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <div className="text-2xl font-bold">
+                  ${(data.allocation / 1000).toFixed(0)}K
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {data.percentage}% of total funding
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  Monthly: ${(data.allocation / 24 / 1000).toFixed(1)}K
+                </div>
               </div>
-              <div className="text-sm text-muted-foreground">
-                {data.percentage}% of total funding
-              </div>
-              <div className="text-sm text-muted-foreground">
-                Monthly: ${(data.allocation / 24 / 1000).toFixed(1)}K
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 };

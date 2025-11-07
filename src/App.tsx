@@ -36,7 +36,7 @@ import ResetPassword from "./pages/ResetPassword";
 import About from "./pages/About";
 import AboutOnePager from "./pages/AboutOnePager";
 import Terms from "./pages/Terms";
-import Privacy from "./pages/Privacy";
+import PrivacyPolicy from "./pages/PrivacyPolicy";
 import Cookies from "./pages/Cookies";
 import Careers from "./pages/Careers";
 import Developers from "./pages/Developers";
@@ -73,7 +73,7 @@ import TransfersPage from './pages/admin/TransfersPage';
 import TicketsPage from './pages/admin/TicketsPage';
 import AnnouncementsPage from './pages/admin/AnnouncementsPage';
 import RevenuePage from './pages/admin/RevenuePage';
-import ForecastPage from './pages/admin/ForecastPage';
+import SoundBankManager from './pages/admin/SoundBankManager';
 import AdminLayout from './pages/admin/AdminLayout';
 import AdminRedirect from './pages/admin/AdminRedirect';
 import { StreamEndPreview } from "./pages/StreamEndPreview";
@@ -215,10 +215,11 @@ const App = () => {
                     <Route path="/about" element={<About />} />
                     <Route path="/about-onepager" element={<AboutOnePager />} />
                     <Route path="/terms" element={<Terms />} />
-                    <Route path="/privacy" element={<Privacy />} />
+                    <Route path="/privacy-policy" element={<PrivacyPolicy />} />
                     <Route path="/cookies" element={<Cookies />} />
                     <Route path="/careers" element={<Careers />} />
                     <Route path="/developers" element={<Developers />} />
+                    
                     <Route path="/cart" element={<Cart />} />
                     <Route path="/checkout" element={<Checkout />} />
                     <Route path="/store/:store_id" element={<StorePage />} />
@@ -242,7 +243,8 @@ const App = () => {
                       <Route path="tickets" element={<TicketsPage />} />
                       <Route path="announcements" element={<AnnouncementsPage />} />
                       <Route path="revenue" element={<RevenuePage />} />
-                      <Route path="forecast" element={<ForecastPage />} />
+                      {/* Sound Bank (admin) */}
+                      <Route path="soundbank" element={<SoundBankManager />} />
                     </Route>
                     <Route path="/order-summary" element={<OrderSummaryFailed />} />
                     <Route path="/order-summary/:orderId" element={<OrderSummary />} />

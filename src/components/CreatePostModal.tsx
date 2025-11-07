@@ -1,25 +1,31 @@
-import React, { useState, useRef, useEffect } from 'react';
+﻿import React, { useState, useRef, useEffect } from 'react';
 // --- AI Helpers and imports only ---
 import axios from 'axios';
+import { extractHashtagsFromText as extractHashtagsUtil, escapeRegExp } from '@/utils/hashtagUtils';
 import keywordExtractor from 'keyword-extractor';
 import Sentiment from 'sentiment';
 // --- AI Helpers ---
 
-// Spam detection (simple keyword-based + ml-classify-text)
-const spamKeywords = [
-  'free', 'win', 'winner', 'prize', 'money', 'cash', 'urgent', 'offer', 'click', 'buy now', 'subscribe', 'credit', 'loan', 'cheap', 'discount', 'deal', 'limited', 'act now', 'guaranteed', 'risk-free', 'investment', 'miracle', 'weight loss', 'work from home', 'earn', 'income', 'profit', 'bitcoin', 'crypto', 'forex', 'casino', 'gamble', 'bet', 'porn', 'sex', 'adult', 'viagra', 'pharmacy', 'escort', 'dating', 'nude', 'xxx', 'explicit'
+// Simple spam keywords list (used by isSpam)
+const spamKeywords: string[] = [
+  'free', 'win', 'winner', 'prize', 'money', 'cash', 'urgent', 'offer', 'click', 'buy now', 'subscribe', 'credit', 'loan', 'cheap', 'discount', 'deal'
 ];
+
 function isSpam(text: string) {
   const lower = text.toLowerCase();
-  if (spamKeywords.some(word => lower.includes(word))) return true;
+  if (spamKeywords.some((word: string) => lower.includes(word))) return true;
   return false;
 }
 
-// Hashtag generation
-function generateHashtags(text: string) {
+// Hashtag generation (return more suggestions by default)
+function generateHashtags(text: string, maxCount = 8) {
   const keywords = keywordExtractor.extract(text, { language: 'english', remove_digits: true, return_changed_case: true, remove_duplicates: true });
-  return keywords.slice(0, 5).map(k => `#${k.replace(/\s+/g, '')}`);
+  // return up to `maxCount` compacted hashtags
+  return keywords.slice(0, maxCount).map(k => `#${k.replace(/\s+/g, '')}`);
 }
+
+// re-exported helpers from utils/hashtagUtils for tests and reuse
+const extractHashtagsFromText = extractHashtagsUtil;
 
 // Sentiment analysis
 const sentiment = new Sentiment();
@@ -115,8 +121,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { 
-  Image, 
-  Video, 
+  Image as ImageIcon, 
+  Video as VideoIcon, 
+  Play,
+  Pause,
+  Music,
+  Volume2,
   Calendar, 
   Mic, 
   MicOff, 
@@ -156,7 +166,10 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   const [translated, setTranslated] = useState<string>('');
   const [caption, setCaption] = useState<string>('');
   const [aiLoading, setAiLoading] = useState(false);
-  const [showAiPanel, setShowAiPanel] = useState(false);
+  // Show the AI assistant panel by default so users immediately see hashtag suggestions
+  const [showAiPanel, setShowAiPanel] = useState(true);
+  const [hashtagCounts, setHashtagCounts] = useState<Record<string, number>>({});
+  const [hashtagCountsLoading, setHashtagCountsLoading] = useState(false);
 
   // Voice-to-text (AI, not voice recording)
   const [voiceText, setVoiceText] = useState('');
@@ -200,6 +213,36 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   const [eventDescription, setEventDescription] = useState('');
   const [detectingLocation, setDetectingLocation] = useState(false);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  // Image filters
+  const filtersList = [
+    { id: 'none', label: 'Original' },
+    { id: 'grayscale', label: 'Grayscale' },
+    { id: 'sepia', label: 'Sepia' },
+    { id: 'vintage', label: 'Vintage' },
+    { id: 'bright', label: 'Bright' },
+    { id: 'contrast', label: 'High Contrast' },
+    { id: 'vibrant', label: 'Vibrant' },
+    { id: 'cool', label: 'Cool' },
+    { id: 'warm', label: 'Warm' },
+    { id: 'lomo', label: 'Lomo' },
+    { id: 'blur', label: 'Soft Blur' },
+  ];
+  // Image filter states
+  const [selectedFilter, setSelectedFilter] = useState<string>('none');
+  const [filteredPreviewUrl, setFilteredPreviewUrl] = useState<string>('');
+  const [filtering, setFiltering] = useState(false);
+  // Sound-bank and background audio
+  const [soundBank, setSoundBank] = useState<any[]>([]);
+  const [selectedSound, setSelectedSound] = useState<any | null>(null);
+  const backgroundAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [backgroundVolume, setBackgroundVolume] = useState<number>(0.6);
+  const [voiceVolume, setVoiceVolume] = useState<number>(1);
+  const [playBackgroundDuringRecording, setPlayBackgroundDuringRecording] = useState<boolean>(true);
+  const [playingSoundId, setPlayingSoundId] = useState<string | null>(null);
+  // Slideshow state for multiple images
+  const [slideshowIndex, setSlideshowIndex] = useState(0);
+  const [slideshowPlaying, setSlideshowPlaying] = useState(false);
+  const slideshowIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Add emoji/icon to each feeling
   const feelingsList = [
@@ -267,6 +310,94 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const prevTypedHashtagsRef = useRef<string[]>([]);
+
+  // Load sound bank manifest
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/sounds.json');
+        if (!res.ok) return;
+        const data = await res.json();
+        setSoundBank(Array.isArray(data) ? data : []);
+      } catch (e) {
+        setSoundBank([]);
+      }
+    })();
+  }, []);
+
+  const mapFilterToCss = (f: string) => {
+    switch (f) {
+      case 'grayscale': return 'grayscale(100%)';
+      case 'sepia': return 'sepia(60%)';
+      case 'vintage': return 'sepia(30%) contrast(1.1) saturate(0.9)';
+      case 'bright': return 'brightness(1.15) saturate(1.05)';
+      case 'contrast': return 'contrast(1.3) saturate(1.05)';
+      case 'vibrant': return 'contrast(1.05) saturate(1.35)';
+      case 'cool': return 'sepia(5%) hue-rotate(200deg) saturate(0.95)';
+      case 'warm': return 'sepia(10%) hue-rotate(-15deg) saturate(1.05)';
+      case 'lomo': return 'contrast(1.3) saturate(1.4)';
+      case 'blur': return 'blur(2px) brightness(0.98)';
+      default: return 'none';
+    }
+  };
+
+  
+
+  const filterMap: Record<string, string> = {
+    none: 'none',
+    grayscale: 'grayscale(1)',
+    sepia: 'sepia(0.6)',
+    vintage: 'sepia(0.4) saturate(1.2) contrast(1.05) brightness(0.95)',
+    bright: 'brightness(1.08) contrast(1.05)'
+  };
+
+  const generateFilteredBlob = async (file: File, filterKey: string): Promise<Blob> => {
+    const filter = filterMap[filterKey] || 'none';
+    // Use createImageBitmap for better performance
+    const imgBitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = imgBitmap.width;
+    canvas.height = imgBitmap.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Could not get canvas context');
+    ctx.filter = filter === 'none' ? 'none' : filter;
+    // Fill background white to avoid black backgrounds when exporting JPEGs
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(imgBitmap, 0, 0);
+    return await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b as Blob), 'image/jpeg', 0.92));
+  };
+
+  // Update filtered preview when filter or selectedFiles changes
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (selectedFilter === 'none' || selectedFiles.length === 0 || !selectedFiles[0].type.startsWith('image/')) {
+        // clear filtered preview
+        setFiltering(false);
+        setFilteredPreviewUrl('');
+        return;
+      }
+      setFiltering(true);
+      try {
+        const blob = await generateFilteredBlob(selectedFiles[0], selectedFilter);
+        if (!mounted) return;
+        const url = URL.createObjectURL(blob);
+        // revoke previous
+        setFilteredPreviewUrl((prev) => {
+          try { if (prev) URL.revokeObjectURL(prev); } catch (e) {}
+          return url;
+        });
+      } catch (e) {
+        console.warn('filter failed', e);
+        setFilteredPreviewUrl('');
+      } finally {
+        if (mounted) setFiltering(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [selectedFilter, selectedFiles]);
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
@@ -298,6 +429,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     if (voiceText) text += ' ' + voiceText;
     if (!text.trim()) {
       setSpamWarning(null);
+      prevTypedHashtagsRef.current = [];
       setHashtags([]);
       setSentimentResult(null);
       setToxicityResult(null);
@@ -306,7 +438,24 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     }
     
     setSpamWarning(isSpam(text) ? '⚠️ This post looks like spam.' : null);
-    setHashtags(generateHashtags(text));
+    // Include any explicit hashtags the user typed (e.g. #hello) so they show up immediately
+  const typed = extractHashtagsFromText(text);
+    const auto = generateHashtags(text);
+    // Merge with typed first so explicit tags show up prominently
+    const merged = Array.from(new Set([...typed, ...auto]));
+    setHashtags(merged);
+    // Toast when the user types a new explicit hashtag
+    try {
+      const prev = prevTypedHashtagsRef.current || [];
+      const newlyTyped = typed.filter(t => !prev.includes(t));
+      if (newlyTyped.length > 0) {
+        // show one toast summarizing new tags
+        toast({ description: `Added hashtag${newlyTyped.length > 1 ? 's' : ''} ${newlyTyped.join(', ')}` });
+      }
+      prevTypedHashtagsRef.current = typed;
+    } catch (e) {
+      // swallow toast errors
+    }
     setSentimentResult(getSentiment(text));
     
     setAiLoading(true);
@@ -318,6 +467,35 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     translateText(text, 'en').then(res => setTranslated(res || ''));
   }, [content, voiceText]);
 
+  // Fetch recent hashtag usage counts (used to surface popularity next to suggested hashtags)
+  useEffect(() => {
+    if (!showAiPanel) return;
+    let mounted = true;
+    (async () => {
+      setHashtagCountsLoading(true);
+      try {
+        // Look back 30 days for trending counts
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const { data, error } = await supabase.from('posts').select('content').gte('created_at', since).limit(500);
+        if (error) throw error;
+        const freq: Record<string, number> = {};
+        (data || []).forEach((p: any) => {
+          const tags = (p.content || '').match(/#\w+/g) || [];
+          tags.forEach((t: string) => {
+            const k = t.substring(1).toLowerCase();
+            freq[k] = (freq[k] || 0) + 1;
+          });
+        });
+        if (mounted) setHashtagCounts(freq);
+      } catch (e) {
+        console.warn('Could not fetch hashtag counts', e);
+      } finally {
+        if (mounted) setHashtagCountsLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [showAiPanel]);
+
   useEffect(() => {
     if (voiceText) {
       setContent(prev => prev + (prev ? ' ' : '') + voiceText);
@@ -326,10 +504,52 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   }, [voiceText]);
 
   useEffect(() => {
+    // reset slideshow when selected files change
+    setSlideshowIndex(0);
+    setSlideshowPlaying(false);
     if (selectedFiles.length === 0 || !selectedFiles[0].type.startsWith('image/')) {
       setCaption('');
     }
   }, [selectedFiles]);
+
+  // slideshow auto-advance
+  useEffect(() => {
+    if (slideshowPlaying && selectedFiles.length > 1) {
+      slideshowIntervalRef.current = setInterval(() => {
+        setSlideshowIndex(i => (i + 1) % selectedFiles.length);
+      }, 3000);
+      // start background audio if selected
+      if (selectedSound && !backgroundAudioRef.current) {
+        try {
+          const a = new Audio(selectedSound.url);
+          a.crossOrigin = 'anonymous';
+          a.volume = backgroundVolume;
+          a.loop = true;
+          a.play().catch(() => {});
+          backgroundAudioRef.current = a;
+        } catch (e) {}
+      }
+    } else {
+      if (slideshowIntervalRef.current) {
+        clearInterval(slideshowIntervalRef.current);
+        slideshowIntervalRef.current = null;
+      }
+      // pause background audio if playing for slideshow
+      try {
+        // only pause if not used elsewhere
+        if (backgroundAudioRef.current && !isRecording) {
+          backgroundAudioRef.current.pause();
+          backgroundAudioRef.current = null;
+        }
+      } catch (e) {}
+    }
+    return () => {
+      if (slideshowIntervalRef.current) {
+        clearInterval(slideshowIntervalRef.current);
+        slideshowIntervalRef.current = null;
+      }
+    };
+  }, [slideshowPlaying, selectedFiles.length, selectedSound, backgroundVolume, isRecording]);
 
   const startRecording = async () => {
     try {
@@ -352,8 +572,33 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       setIsRecording(true);
       setRecordingDuration(0); // Reset duration
       
+      // Play backing track locally while recording so the user can sing-along (MediaRecorder records mic-only)
+      if (selectedSound && playBackgroundDuringRecording) {
+        try {
+          const bg = new Audio(selectedSound.url);
+          bg.volume = backgroundVolume;
+          bg.crossOrigin = 'anonymous';
+          backgroundAudioRef.current = bg;
+          // start playback slightly delayed to ensure DOM handles
+          setTimeout(() => {
+            bg.play().catch(() => {});
+          }, 150);
+        } catch (e) {
+          console.warn('Could not play background audio during recording', e);
+        }
+      }
+
       recordingIntervalRef.current = setInterval(() => {
-        setRecordingDuration(prev => prev + 1);
+        setRecordingDuration(prev => {
+          const next = prev + 1;
+          // enforce max duration (60s)
+          if (next >= 60) {
+            // auto-stop when reaching limit
+            try { stopRecording(); } catch {}
+            return 60;
+          }
+          return next;
+        });
       }, 1000);
       
     } catch (error) {
@@ -372,6 +617,11 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current);
       }
+      // stop background preview if playing
+      try {
+        backgroundAudioRef.current?.pause();
+        backgroundAudioRef.current = null;
+      } catch (e) {}
     }
   };
 
@@ -381,6 +631,10 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     if (recordingIntervalRef.current) {
       clearInterval(recordingIntervalRef.current);
     }
+    try {
+      backgroundAudioRef.current?.pause();
+      backgroundAudioRef.current = null;
+    } catch (e) {}
   };
 
   const handleAddPollOption = () => {
@@ -419,10 +673,31 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
         const img = new window.Image();
         img.onload = async () => {
           const predictions = await nsfwModel.classify(img);
-          const nsfw = predictions.some(p =>
-            (['Porn', 'Hentai', 'Sexy'].includes(p.className) && p.probability > 0.7)
-          );
-          resolve(nsfw);
+          // Evaluate predictions with stricter rules to avoid false positives.
+          // Only block when porn/hentai probabilities are high. "Sexy" alone
+          // often flags non-nude images (swimwear, cleavage, short sleeves),
+          // so we ignore it as a sole reason to block.
+          const probs: Record<string, number> = {};
+          (predictions || []).forEach((p: any) => { probs[p.className] = p.probability; });
+          const porn = probs['Porn'] || 0;
+          const hentai = probs['Hentai'] || 0;
+          const sexy = probs['Sexy'] || 0;
+
+          // Blocking logic:
+          // - Block if Porn or Hentai probability is clearly high (>= 0.7)
+          // - Block if combined Porn+Hentai is very high (>= 0.8)
+          // - Do NOT block for "Sexy" alone to reduce false positives on swimwear/short sleeves
+          const nsfw = (porn >= 0.7) || (hentai >= 0.7) || ((porn + hentai) >= 0.8);
+          // Keep a debug log for future tuning. Only log in non-production to
+          // avoid noisy output in production while ensuring `sexy` is referenced
+          // so the TypeScript `noUnusedLocals` rule does not complain.
+          try {
+            if (process.env.NODE_ENV !== 'production') {
+              // eslint-disable-next-line no-console
+              console.debug('NSFW scores', { porn, hentai, sexy, nsfw, file: file.name });
+            }
+          } catch (e) {}
+          resolve(Boolean(nsfw));
         };
         img.onerror = () => resolve(false);
         img.src = e.target?.result as string;
@@ -459,9 +734,12 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
           img.src = canvas.toDataURL();
           await new Promise(r => { img.onload = r; });
           const predictions = await nsfwModel.classify(img);
-          nsfwFound = predictions.some(p =>
-            (['Porn', 'Hentai', 'Sexy'].includes(p.className) && p.probability > 0.7)
-          );
+          const probs: Record<string, number> = {};
+          (predictions || []).forEach((p: any) => { probs[p.className] = p.probability; });
+          const porn = probs['Porn'] || 0;
+          const hentai = probs['Hentai'] || 0;
+          // Use the same stricter rules as image scanning to reduce false positives
+          nsfwFound = (porn >= 0.7) || (hentai >= 0.7) || ((porn + hentai) >= 0.8);
         }
         resolve(nsfwFound);
       };
@@ -529,17 +807,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
         }
       }
 
-      // --- VIDEO: REGULAR POST (not Studio Series) ---
-      if (postType === 'video' && selectedFiles.length > 0) {
-        const file = selectedFiles[0];
-        mediaUrl = await uploadFile(file, 'posts', 'media/', user.id);
-      }
-
-      // Upload media files
-      if (selectedFiles.length > 0) {
-        const file = selectedFiles[0];
-        mediaUrl = await uploadFile(file, 'posts', 'media/', user.id);
-      }
+      // Note: media files are uploaded after the post is created (MEDIA GRID LOGIC section)
 
       // Upload voice note
       if (audioBlob) {
@@ -565,6 +833,30 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
         feeling: feeling || null,
       };
 
+      // Persist explicit typed hashtags (if any) into post metadata
+      try {
+        const explicitTags = extractHashtagsFromText(cleanContent || '');
+        postData.hashtags = explicitTags.length > 0 ? explicitTags : null;
+      } catch (e) {
+        postData.hashtags = null;
+      }
+
+      // Attach selected background audio metadata if present (sound-bank only)
+      if (selectedSound) {
+        postData.background_audio_url = selectedSound.url || null;
+        postData.background_audio_meta = {
+          id: selectedSound.id,
+          title: selectedSound.title,
+          duration: selectedSound.duration,
+          license: selectedSound.license,
+        };
+        postData.audio_mix_meta = {
+          backgroundVolume: backgroundVolume,
+          voiceVolume: voiceVolume,
+          offsetMs: 0,
+        };
+      }
+
       if (groupId) {
         postData.group_id = groupId;
       }
@@ -577,14 +869,32 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
         postData.event_description = eventDescription || null;
       }
 
-      const { data: post, error: postError } = await supabase
-        .from('posts')
-        .insert(postData)
-        .select()
-        .single();
-
-      if (postError) {
-        throw postError;
+      // Try inserting post. If the `hashtags` column does not exist in the remote
+      // DB (moved files / schema mismatch), retry without hashtags to avoid hard
+      // crash and provide a helpful message to the admin/deployer.
+      let post: any = null;
+      try {
+        const resp = await supabase.from('posts').insert(postData).select().single();
+        if (resp.error) throw resp.error;
+        post = resp.data;
+      } catch (err: any) {
+        const msg = (err?.message || '').toString();
+        const hashtagsMissing = /could not find the '?hashtags'? column|column .*?hashtags.*?does not exist/i.test(msg);
+        if (hashtagsMissing && postData.hashtags) {
+          // Retry without hashtags property
+          const cleaned = { ...postData };
+          delete cleaned.hashtags;
+          try {
+            const resp2 = await supabase.from('posts').insert(cleaned).select().single();
+            if (resp2.error) throw resp2.error;
+            post = resp2.data;
+            toast({ description: 'Post created, but the database does not have a `hashtags` column. Please run the latest migration to persist typed hashtags.' });
+          } catch (err2: any) {
+            throw err2 || err;
+          }
+        } else {
+          throw err;
+        }
       }
 
       // --- POLL LOGIC ---
@@ -640,7 +950,20 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       // --- MEDIA GRID LOGIC ---
       let mediaUrls: string[] = [];
       if (selectedFiles.length > 0) {
-        mediaUrls = await Promise.all(selectedFiles.map(file => uploadFile(file, 'posts', 'media/', user.id)));
+  mediaUrls = await Promise.all(selectedFiles.map(async (file) => {
+          // If file is an image and user selected a filter, upload the filtered image for each image
+          if (file.type.startsWith('image/') && selectedFilter && selectedFilter !== 'none') {
+            try {
+              const filteredBlob = await generateFilteredBlob(file, selectedFilter);
+              const filteredFile = new File([filteredBlob], `filtered-${file.name}`, { type: 'image/jpeg' });
+              return await uploadFile(filteredFile, 'posts', 'media/', user.id);
+            } catch (e) {
+              console.warn('Failed to generate/upload filtered image, falling back to original', e);
+              return await uploadFile(file, 'posts', 'media/', user.id);
+            }
+          }
+          return await uploadFile(file, 'posts', 'media/', user.id);
+        }));
       }
       if (mediaUrls.length > 0) {
         await supabase.from('posts').update({ media_urls: mediaUrls }).eq('id', post.id);
@@ -655,7 +978,10 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       setSelectedFiles([]);
       setAudioBlob(null);
       setRecordingDuration(0);
+  setSelectedSound(null);
       setPostType('text');
+    setSlideshowIndex(0);
+    setSlideshowPlaying(false);
       setEventDate('');
       setEventLocation('');
       setFeeling('');
@@ -776,8 +1102,8 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
           <div className="grid grid-cols-6 gap-2 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-xl">
             {[
               { type: 'text', icon: <span className="font-bold text-lg">Aa</span>, label: 'Text' },
-              { type: 'image', icon: <Image className="h-5 w-5" />, label: 'Photo' },
-              { type: 'video', icon: <Video className="h-5 w-5" />, label: 'Video' },
+              { type: 'image', icon: <ImageIcon className="h-5 w-5" />, label: 'Photo' },
+              { type: 'video', icon: <VideoIcon className="h-5 w-5" />, label: 'Video' },
               { type: 'event', icon: <Calendar className="h-5 w-5" />, label: 'Event' },
               { type: 'voice', icon: <Mic className="h-5 w-5" />, label: 'Voice' },
               { type: 'poll', icon: <BarChart2 className="h-5 w-5" />, label: 'Poll' },
@@ -872,9 +1198,24 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                   <span className="font-semibold text-purple-800 dark:text-purple-200">AI Assistant</span>
                 </div>
                 {aiLoading && (
-                  <div className="flex items-center space-x-2">
-                    <div className="w-4 h-4 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
-                    <span className="text-sm text-purple-600">Analyzing...</span>
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2">
+                      <div className="w-4 h-4 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-sm text-purple-600">Analyzing...</span>
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <Button size="sm" variant="outline" onClick={async () => {
+                        try {
+                          const res = await fetch('/sounds.json');
+                          if (!res.ok) throw new Error('Failed to load');
+                          const data = await res.json();
+                          setSoundBank(Array.isArray(data) ? data : []);
+                        } catch (e) {
+                          console.warn('Could not refresh sound bank', e);
+                        }
+                      }}>Refresh</Button>
+                      <Button size="sm" variant="ghost" onClick={() => window.open('/admin/soundbank', '_blank')}>More tracks</Button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -886,22 +1227,28 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                     <div className="space-y-2">
                       <span className="text-sm font-medium text-blue-700 dark:text-blue-300">Suggested hashtags:</span>
                       <div className="flex flex-wrap gap-2">
-                        {hashtags.map(h => (
-                          <button
-                            key={h}
-                            type="button"
-                            className="px-3 py-1 rounded-full bg-blue-100 hover:bg-blue-200 dark:bg-blue-900 dark:hover:bg-blue-800 text-blue-700 dark:text-blue-200 transition-all duration-200 hover:scale-105 text-sm font-medium"
-                            onClick={() => {
-                              setContent(prev => {
-                                const regex = new RegExp(`(^|\\s)${h}(\\s|$)`, 'i');
-                                if (regex.test(prev)) return prev;
-                                return prev.trim() + (prev.trim() ? ' ' : '') + h;
-                              });
-                            }}
-                          >
-                            {h}
-                          </button>
-                        ))}
+                        {hashtags.map((h) => {
+                          const key = h.replace('#', '').toLowerCase();
+                          const count = hashtagCounts[key] || 0;
+                            const presentInContent = new RegExp(`(^|\\s)${escapeRegExp(h)}(\\s|$)`, 'i').test(content);
+                            return (
+                              <button
+                                key={h}
+                                type="button"
+                                className={`px-3 py-1 rounded-full transition-all duration-200 hover:scale-105 text-sm font-medium flex items-center gap-2 ${presentInContent ? 'bg-green-600 text-white' : 'bg-blue-100 hover:bg-blue-200 dark:bg-blue-900 dark:hover:bg-blue-800 text-blue-700 dark:text-blue-200'}`}
+                                onClick={() => {
+                                  setContent((prev) => {
+                                    const regex = new RegExp(`(^|\\s)${h}(\\s|$)`, 'i');
+                                    if (regex.test(prev)) return prev;
+                                    return prev.trim() + (prev.trim() ? ' ' : '') + h;
+                                  });
+                                }}
+                              >
+                                <span>{h}</span>
+                                <span className="text-xs text-gray-500 dark:text-gray-400 bg-white/0 px-1">{hashtagCountsLoading ? '...' : `#${count}`}</span>
+                              </button>
+                            );
+                        })}
                       </div>
                     </div>
                   )}
@@ -968,7 +1315,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                   <div className="relative overflow-hidden rounded-xl bg-gray-100 dark:bg-gray-800 aspect-square">
                     {file.type.startsWith('image/') ? (
                       <img
-                        src={URL.createObjectURL(file)}
+                        src={filteredPreviewUrl || URL.createObjectURL(file)}
                         alt="Preview"
                         className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
                       />
@@ -997,6 +1344,192 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
             </div>
           )}
 
+          {/* Image editing: split into 3 cards - Filters | Background Sound | Audio Recording */}
+          {selectedFiles.length > 0 && selectedFiles[0].type.startsWith('image/') && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Filters Card */}
+              <div className="space-y-3 p-4 bg-gray-900/60 dark:bg-gray-800/60 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold text-white">Edit Photo</div>
+                  <div className="text-sm text-gray-300">{filtering ? 'Applying filter...' : (selectedFilter === 'none' ? 'Original' : (filtersList.find(f => f.id === selectedFilter)?.label || selectedFilter))}</div>
+                </div>
+
+                <div className="flex flex-col gap-4">
+                  <div className="flex-1 bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden flex items-center justify-center relative">
+                    {selectedFiles.length > 1 ? (
+                      <div className="w-full h-full flex items-center justify-center relative">
+                        <img
+                          src={URL.createObjectURL(selectedFiles[slideshowIndex])}
+                          alt={`Slide ${slideshowIndex + 1}`}
+                          className="w-full h-full object-contain"
+                          style={{ filter: mapFilterToCss(selectedFilter), backgroundColor: 'transparent' }}
+                        />
+                        <div className="absolute top-2 left-2 flex items-center gap-2">
+                          <button
+                            onClick={() => setSlideshowPlaying(p => !p)}
+                            className="p-2 rounded-full bg-black/30 text-white hover:scale-105 transition-transform"
+                            aria-label={slideshowPlaying ? 'Pause slideshow' : 'Play slideshow'}
+                          >
+                            {slideshowPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                          </button>
+                          <div className="text-xs text-white bg-black/40 px-2 py-1 rounded">{slideshowIndex + 1}/{selectedFiles.length}</div>
+                        </div>
+                      </div>
+                    ) : (
+                      <img
+                        src={filteredPreviewUrl || (selectedFiles[0] && URL.createObjectURL(selectedFiles[0]))}
+                        alt="Preview"
+                        className="w-full h-full object-contain"
+                        style={{ filter: mapFilterToCss(selectedFilter), backgroundColor: 'transparent' }}
+                      />
+                    )}
+                  </div>
+
+                  <div className="w-full">
+                    <div className="grid grid-cols-4 gap-3">
+                      {filtersList.map(f => (
+                        <button
+                          key={f.id}
+                          onClick={() => setSelectedFilter(f.id)}
+                          className={`flex flex-col items-center text-xs transition-all ${selectedFilter === f.id ? 'ring-2 ring-blue-500 rounded-lg' : ''}`}
+                        >
+                          <div className="w-20 h-20 overflow-hidden rounded-md bg-gray-800">
+                            <img
+                              src={URL.createObjectURL(selectedFiles[0])}
+                              alt={f.label}
+                              className="w-full h-full object-cover"
+                              style={{ filter: mapFilterToCss(f.id) }}
+                            />
+                          </div>
+                          <div className="mt-1 text-center text-gray-200">{f.label}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Background Sound Card */}
+              <div className="space-y-3 p-4 bg-gray-900/60 dark:bg-gray-800/60 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Music className="h-4 w-4 text-gray-300" />
+                    <span className="font-semibold text-white">Background Sound</span>
+                  </div>
+                  <div className="text-xs text-gray-400">sound-bank only</div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="grid grid-cols-1 gap-2">
+                    <label className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${!selectedSound ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white' : 'bg-gray-800 text-gray-200'}`}>
+                      <div className="flex items-center gap-2">
+                        <input type="radio" name="background-sound" checked={!selectedSound} onChange={() => setSelectedSound(null)} className="mr-2" />
+                        <div className="w-8 h-8 rounded bg-gray-700 flex items-center justify-center text-white">Ø</div>
+                        <div className="text-sm">No background</div>
+                      </div>
+                      <div className="text-xs text-gray-300">—</div>
+                    </label>
+
+                    {soundBank.length === 0 && (
+                      <div className="text-sm text-gray-400 p-2">No tracks available. Click "More tracks" to manage the sound-bank.</div>
+                    )}
+
+                    {soundBank.map((s: any) => (
+                      <label key={s.id} className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${selectedSound?.id === s.id ? 'bg-gray-700 text-white' : 'bg-gray-800 text-gray-200'}`}>
+                        <div className="flex items-center gap-3">
+                          <input type="radio" name="background-sound" value={s.id} checked={selectedSound?.id === s.id} onChange={() => setSelectedSound(s)} className="mr-2" />
+                          <button
+                            onClick={(ev) => {
+                              ev.preventDefault();
+                              ev.stopPropagation();
+                              // toggle preview
+                              if (playingSoundId === s.id) {
+                                try {
+                                  backgroundAudioRef.current?.pause();
+                                  backgroundAudioRef.current = null;
+                                } catch (e) {}
+                                setPlayingSoundId(null);
+                                return;
+                              }
+                              try {
+                                if (backgroundAudioRef.current) {
+                                  try { backgroundAudioRef.current.pause(); } catch (e) {}
+                                  backgroundAudioRef.current = null;
+                                }
+                                const a = new Audio(s.url);
+                                a.crossOrigin = 'anonymous';
+                                a.volume = backgroundVolume;
+                                a.onended = () => setPlayingSoundId(null);
+                                a.play().then(() => {
+                                  backgroundAudioRef.current = a;
+                                  setPlayingSoundId(s.id);
+                                }).catch(err => {
+                                  console.warn('Preview playback blocked', err);
+                                  setPlayingSoundId(null);
+                                });
+                              } catch (e) { console.warn(e); setPlayingSoundId(null); }
+                            }}
+                            className="p-2 rounded-md bg-gray-900/30">
+                            {playingSoundId === s.id ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                          </button>
+                          <div className="flex flex-col">
+                            <div className="font-medium text-sm">{s.title}</div>
+                            <div className="text-xs text-gray-400">{s.duration}s</div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Volume2 className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                          <input className="flex-1 min-w-0 w-full" type="range" min={0} max={1} step={0.01} value={backgroundVolume} onChange={(e) => {
+                            const v = Number(e.target.value);
+                            setBackgroundVolume(v);
+                            if (backgroundAudioRef.current) backgroundAudioRef.current.volume = v;
+                          }} />
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Audio Recording Card (inline for image posts) */}
+              <div className="space-y-3 p-4 bg-gray-900/60 dark:bg-gray-800/60 rounded-xl">
+                <div className="text-sm text-gray-300 mb-2">Voice overlay</div>
+                <div className="flex items-center gap-3">
+                  {!audioBlob && !isRecording ? (
+                    // modern circular record icon button
+                    <button
+                      onClick={startRecording}
+                      aria-label="Start recording"
+                      className="w-12 h-12 rounded-full bg-gradient-to-r from-red-500 to-pink-500 flex items-center justify-center shadow-lg hover:scale-105 transition-transform"
+                    >
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="12" cy="12" r="9" fill="white" opacity="0.06" />
+                        <circle cx="12" cy="12" r="5" fill="white" />
+                      </svg>
+                    </button>
+                  ) : isRecording ? (
+                    <div className="flex items-center gap-2">
+                      <button onClick={stopRecording} className="w-10 h-10 rounded-full bg-red-600 flex items-center justify-center text-white">■</button>
+                      <div className="text-sm text-red-400">Recording — {formatDuration(recordingDuration)}</div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <audio controls src={URL.createObjectURL(audioBlob as Blob)} className="w-40" />
+                      <div className="flex flex-col">
+                        <div className="text-sm text-gray-200">Recorded — {formatDuration(recordingDuration)}</div>
+                        <div className="flex gap-2 mt-2">
+                          <Button size="sm" variant="outline" onClick={startRecording}>Re-record</Button>
+                          <Button size="sm" variant="ghost" onClick={clearRecording}>Remove</Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Voice Recording UI - Enhanced with proper controls */}
           {postType === 'voice' && (
             <div className="p-6 bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 rounded-xl border-2 border-purple-200 dark:border-purple-700">
@@ -1004,20 +1537,23 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                 <div className="relative">
                   {!isRecording && !audioBlob && (
                     <div className="text-center">
-                      <Button
+                      <button
                         type="button"
-                        size="lg"
                         onClick={startRecording}
                         disabled={isPosting}
-                        className="w-16 h-16 rounded-full bg-purple-600 hover:bg-purple-700 shadow-lg shadow-purple-500/50 transition-all duration-200 mb-4"
+                        aria-label="Start recording"
+                        className="w-20 h-20 rounded-full bg-gradient-to-r from-red-500 to-pink-500 flex items-center justify-center shadow-lg hover:scale-105 transition-transform mb-4"
                       >
-                        <Mic className="h-6 w-6" />
-                      </Button>
+                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <circle cx="12" cy="12" r="10" fill="white" opacity="0.06" />
+                          <circle cx="12" cy="12" r="6" fill="white" />
+                        </svg>
+                      </button>
                       <div className="text-lg font-medium text-gray-700 dark:text-gray-300 mb-2">
                         Ready to Record
                       </div>
                       <div className="text-sm text-gray-500 dark:text-gray-400">
-                        Tap the microphone to start recording your voice note
+                        Tap the record icon to start your voice note
                       </div>
                     </div>
                   )}
@@ -1216,6 +1752,62 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                   <option value="private">🔒 Private</option>
                 </select>
               </div>
+
+              {/* Background Sound (sound-bank only) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Sparkles className="h-4 w-4 text-gray-500" />
+                    <span className="font-medium">Background Sound</span>
+                  </div>
+                  <div className="text-xs text-gray-400">sound-bank only</div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex flex-col">
+                    <label className="flex items-center gap-2">
+                      <input type="radio" name="adv-bg-sound" checked={!selectedSound} onChange={() => setSelectedSound(null)} />
+                      <span className="text-sm">No background</span>
+                    </label>
+                    {soundBank.map((s: any) => (
+                      <label key={s.id} className="flex items-center justify-between p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-800/40">
+                        <div className="flex items-center gap-3">
+                          <input type="radio" name="adv-bg-sound" value={s.id} checked={selectedSound?.id === s.id} onChange={() => setSelectedSound(s)} />
+                          <div className="flex flex-col">
+                            <div className="font-medium text-sm">{s.title}</div>
+                            <div className="text-xs text-gray-400">{s.duration}s</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" variant="outline" onClick={() => {
+                            try {
+                              const a = new Audio(s.url);
+                              a.volume = backgroundVolume;
+                              a.play().catch(() => {});
+                            } catch (e) {}
+                          }}>Preview</Button>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex items-center space-x-2">
+                    <label className="text-sm text-gray-600">Background Volume</label>
+                    <input className="flex-1 min-w-0 w-full" type="range" min={0} max={1} step={0.05} value={backgroundVolume} onChange={(e) => setBackgroundVolume(Number(e.target.value))} />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <label className="text-sm text-gray-600">Voice Volume</label>
+                    <input className="flex-1 min-w-0 w-full" type="range" min={0} max={1} step={0.05} value={voiceVolume} onChange={(e) => setVoiceVolume(Number(e.target.value))} />
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  <input id="play-during-recording" type="checkbox" checked={playBackgroundDuringRecording} onChange={e => setPlayBackgroundDuringRecording(e.target.checked)} />
+                  <label htmlFor="play-during-recording" className="text-sm text-gray-600">Play background while recording (recorded voice remains mic-only)</label>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1319,3 +1911,4 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     </Dialog>
   );
 };
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -12,7 +12,7 @@ const ResetPassword = () => {
   const [searchParams] = useSearchParams();
   const emailParam = searchParams.get('email') || '';
   
-  const [email, setEmail] = useState(emailParam);
+  const [email] = useState(emailParam);
   const [otp, setOtp] = useState('');
   const [otpError, setOtpError] = useState('');
   const [password, setPassword] = useState('');
@@ -21,7 +21,7 @@ const ResetPassword = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [showForm, setShowForm] = useState(true);
-  const [showEmailVerified, setShowEmailVerified] = useState(false);
+  const [showEmailVerified] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
@@ -375,7 +375,7 @@ const ResetPassword = () => {
               <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Legal</h3>
               <ul className="space-y-2">
                 <li><a href="/terms" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Terms</a></li>
-                <li><a href="/privacy" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Privacy</a></li>
+                <li><a href="/privacy-policy" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Privacy</a></li>
                 <li><a href="/cookies" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Cookies</a></li>
               </ul>
             </div>

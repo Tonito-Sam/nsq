@@ -587,7 +587,7 @@ const Auth = () => {
               <div className="mt-4 text-center text-sm text-gray-500 px-4">
                 <p>By signing up, you agree to the{' '}
                   <a href="/terms" className="text-blue-600 hover:underline">Terms of Service</a>,{' '}
-                  <a href="/privacy" className="text-blue-600 hover:underline">Privacy Policy</a>,{' '}
+                  <a href="/privacy-policy" className="text-blue-600 hover:underline">Privacy Policy</a>,{' '}
                   including <a href="/cookies" className="text-blue-600 hover:underline">Cookie Use</a>.
                 </p>
               </div>
@@ -670,7 +670,7 @@ const Auth = () => {
               <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Legal</h3>
               <ul className="space-y-2">
                 <li><a href="/terms" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Terms</a></li>
-                <li><a href="/privacy" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Privacy</a></li>
+                <li><a href="/privacy-policy" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Privacy</a></li>
                 <li><a href="/cookies" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Cookies</a></li>
               </ul>
             </div>
