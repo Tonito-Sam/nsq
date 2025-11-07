@@ -21,6 +21,15 @@ app.use(express.json());
 const livepeerRoutes = require('./routes/livepeer.cjs');
 app.use('/api/livepeer', livepeerRoutes);
 
+// Admin routes (sync sounds)
+try {
+  const adminSyncRoutes = require('./routes/sync-sounds');
+  app.use('/api/admin', adminSyncRoutes);
+  console.log('✅ Mounted /api/admin (sync-sounds) route');
+} catch (e) {
+  console.warn('⚠️ sync-sounds route not available:', e?.message || e);
+}
+
 // WebRTC -> RTMP bridge route
 const webrtcBridgeRoutes = require('./routes/webrtc-bridge.cjs');
 app.use('/api/webrtc-bridge', webrtcBridgeRoutes);
