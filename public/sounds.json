@@ -1,8 +1,8 @@
 [
   {
     "id": "bank001",
-    "title": "Gentle Piano (sample)",
-    "url": "https://samplelib.com/lib/preview/mp3/sample-3s.mp3",
+    "title": "Ride-Cover",
+    "url": "https://pfemdshixllwqqajsxxp.supabase.co/storage/v1/object/public/sound-bank/soundbank/1762496126636-planifax.ca_-_Chike___Ride_For_You__Cover__Prod._By_Dee_Yasso__320_KBps_.mp3",
     "duration": 3,
     "license": "samplelib-sample"
   },
