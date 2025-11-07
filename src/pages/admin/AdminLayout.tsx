@@ -4,7 +4,7 @@ import { Button } from '../../components/ui/button';
 import { useTheme } from '../../components/ThemeProvider';
 import { HeaderLogo } from '../../components/header/HeaderLogo';
 
-const adminLinks = [
+const adminLinks: { to: string; label: string; icon: JSX.Element; external?: string }[] = [
 	{ to: '/admin/overview', label: 'Overview', icon: <BarChart3 size={20} /> },
 	{ to: '/admin/users', label: 'Users', icon: <Users size={20} /> },
 	{ to: '/admin/studios', label: '1Studio', icon: <Headphones size={20} /> },
@@ -15,7 +15,7 @@ const adminLinks = [
 	{ to: '/admin/tickets', label: 'Support', icon: <Ticket size={20} /> },
 	{ to: '/admin/announcements', label: 'Announcements', icon: <Megaphone size={20} /> },
 	{ to: '/admin/revenue', label: 'Revenue', icon: <DollarSign size={20} /> },
-	{ to: '/admin/forecast', label: 'Forecast', icon: <BarChart3 size={20} /> },
+	{ to: '/admin/soundbank', label: 'Sound Bank', icon: <Headphones size={20} /> },
 ];
 
 const AdminLayout = () => {
@@ -39,33 +39,57 @@ const AdminLayout = () => {
 				</div>
 				<nav className="max-w-7xl mx-auto px-2 flex justify-between items-center gap-1 bg-gray-100/80 dark:bg-gray-900/80 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-x-auto scrollbar-hide">
 					{adminLinks.map(link => (
-						<NavLink
-							key={link.to}
-							to={link.to}
-							className={({ isActive }) =>
-								`group flex flex-col items-center justify-center flex-1 min-w-[80px] h-16 px-2 py-1 relative transition-all duration-200 font-medium text-[12px] ${
-									isActive
-										? 'text-purple-700 dark:text-purple-200'
-										: 'text-gray-600 dark:text-gray-300 hover:text-purple-700 dark:hover:text-purple-200'
-								}`
-							}
-							style={{ textDecoration: 'none' }}
-						>
-							{({ isActive }) => (
-								<>
-									<span className="mb-1 z-10 flex items-center justify-center w-7 h-7 rounded-full bg-white dark:bg-gray-800 shadow-sm border border-gray-200 dark:border-gray-700 group-hover:scale-105 transition-transform">{link.icon}</span>
-									<span className="leading-tight z-10 font-semibold tracking-wide">{link.label}</span>
-									<span
-										className={`absolute left-1/2 -translate-x-1/2 bottom-1 w-20 h-8 rounded-full transition-all duration-300 z-0 ${
-											isActive
-												? 'bg-purple-100 dark:bg-purple-900/60 shadow-lg scale-100'
-												: 'scale-0'
-										}`}
-										aria-hidden="true"
-									/>
-								</>
-							)}
-						</NavLink>
+						link.external ? (
+							<a
+								key={link.to}
+								href={link.external as string}
+								target="_blank"
+								rel="noopener noreferrer"
+								className={`group flex flex-col items-center justify-center flex-1 min-w-[80px] h-16 px-2 py-1 relative transition-all duration-200 font-medium text-[12px] text-gray-600 dark:text-gray-300 hover:text-purple-700 dark:hover:text-purple-200`}
+								style={{ textDecoration: 'none' }}
+								onClick={(e) => {
+									// Force a top-level navigation to avoid the SPA router catching the path
+									e.preventDefault();
+									try {
+										window.open(link.external as string, '_blank', 'noopener');
+									} catch (err) {
+										// Fallback to normal navigation if window.open is blocked
+										window.location.href = link.external as string;
+									}
+								}}
+							>
+								<span className="mb-1 z-10 flex items-center justify-center w-7 h-7 rounded-full bg-white dark:bg-gray-800 shadow-sm border border-gray-200 dark:border-gray-700 group-hover:scale-105 transition-transform">{link.icon}</span>
+								<span className="leading-tight z-10 font-semibold tracking-wide">{link.label}</span>
+							</a>
+						) : (
+							<NavLink
+								key={link.to}
+								to={link.to}
+								className={({ isActive }) =>
+									`group flex flex-col items-center justify-center flex-1 min-w-[80px] h-16 px-2 py-1 relative transition-all duration-200 font-medium text-[12px] ${
+										isActive
+											? 'text-purple-700 dark:text-purple-200'
+											: 'text-gray-600 dark:text-gray-300 hover:text-purple-700 dark:hover:text-purple-200'
+									}`
+								}
+								style={{ textDecoration: 'none' }}
+							>
+								{({ isActive }) => (
+									<>
+										<span className="mb-1 z-10 flex items-center justify-center w-7 h-7 rounded-full bg-white dark:bg-gray-800 shadow-sm border border-gray-200 dark:border-gray-700 group-hover:scale-105 transition-transform">{link.icon}</span>
+										<span className="leading-tight z-10 font-semibold tracking-wide">{link.label}</span>
+										<span
+											className={`absolute left-1/2 -translate-x-1/2 bottom-1 w-20 h-8 rounded-full transition-all duration-300 z-0 ${
+												isActive
+													? 'bg-purple-100 dark:bg-purple-900/60 shadow-lg scale-100'
+													: 'scale-0'
+											}`}
+											aria-hidden="true"
+										/>
+									</>
+								)}
+							</NavLink>
+						)
 					))}
 				</nav>
 			</header>

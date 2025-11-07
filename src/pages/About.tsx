@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ArrowLeft, Users, Globe, Heart, Zap, BarChart2, Award, TrendingUp, BookOpen, Layers, Globe2, UserCheck2, Wallet, Home } from 'lucide-react';
@@ -526,7 +526,7 @@ const About = () => {
               <h3 className="font-semibold text-gray-900 dark:text-white mb-4">Legal</h3>
               <ul className="space-y-2">
                 <li><a href="/terms" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Terms</a></li>
-                <li><a href="/privacy" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Privacy</a></li>
+                <li><a href="/privacy-policy" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Privacy</a></li>
                 <li><a href="/cookies" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white">Cookies</a></li>
               </ul>
             </div>

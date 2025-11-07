@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { VoicePlayer } from './VoicePlayer';
-import { Calendar, MapPin, ArrowLeft, ArrowRight } from 'lucide-react';
+import { Calendar, MapPin, ArrowLeft, ArrowRight, Volume2, VolumeX } from 'lucide-react';
 
 interface PostContentProps {
   content: string;
@@ -10,6 +10,10 @@ interface PostContentProps {
   postType: string;
   voiceNoteUrl?: string;
   voiceDuration?: number;
+  backgroundAudioUrl?: string;
+  audioMixMeta?: any | null;
+  backgroundAudioMeta?: any | null;
+  originalVoiceUsername?: string;
   eventDate?: string;
   eventLocation?: string;
   location?: string;
@@ -29,14 +33,15 @@ export const PostContent: React.FC<PostContentProps> = ({
   postType,
   voiceNoteUrl,
   voiceDuration = 0,
+  backgroundAudioUrl,
+  audioMixMeta,
+  backgroundAudioMeta,
+  originalVoiceUsername,
   eventDate,
   eventLocation,
   location,
   feeling,
 }) => {
-  // Detect iOS for specific video handling
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-
   // Autoplay and unmute videos when in viewport
   useEffect(() => {
     const videos = document.querySelectorAll("video");
@@ -59,10 +64,89 @@ export const PostContent: React.FC<PostContentProps> = ({
     return () => videos.forEach(video => observer.unobserve(video));
   }, []);
 
+  // Autoplay background + voice audio for posts (max 30s). No visible controls in feed.
+  const bgRef = React.useRef<HTMLAudioElement | null>(null);
+  const vRef = React.useRef<HTMLAudioElement | null>(null);
+  const [muted, setMuted] = useState(false);
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let stopTimer: number | null = null;
+    let observer: IntersectionObserver | null = null;
+
+    const setupAudio = () => {
+      if (backgroundAudioUrl) {
+        bgRef.current = new Audio(backgroundAudioUrl);
+        bgRef.current.crossOrigin = 'anonymous';
+        bgRef.current.volume = audioMixMeta?.backgroundVolume ?? 0.6;
+        bgRef.current.muted = muted;
+        bgRef.current.loop = false;
+      }
+      if (voiceNoteUrl) {
+        vRef.current = new Audio(voiceNoteUrl);
+        vRef.current.crossOrigin = 'anonymous';
+        vRef.current.volume = audioMixMeta?.voiceVolume ?? 1;
+        vRef.current.muted = muted;
+      }
+    };
+
+    const tryPlay = async () => {
+      try {
+        const plays: Promise<any>[] = [];
+        if (bgRef.current) plays.push(bgRef.current.play());
+        if (vRef.current) plays.push(vRef.current.play());
+        const results = await Promise.all(plays.map(p => p.catch((err) => err)));
+        const blocked = results.some(r => r instanceof Error);
+        if (blocked) setAutoplayBlocked(true);
+        // stop after 30s
+        stopTimer = window.setTimeout(() => {
+          try { bgRef.current?.pause(); vRef.current?.pause(); } catch (e) {}
+        }, 30000);
+      } catch (e) {
+        console.warn('Autoplay blocked', e);
+        setAutoplayBlocked(true);
+      }
+    };
+
+    const pauseAll = () => {
+      try { bgRef.current?.pause(); vRef.current?.pause(); } catch (e) {}
+      if (stopTimer) {
+        window.clearTimeout(stopTimer);
+        stopTimer = null;
+      }
+    };
+
+    // Only observe if there is audio available
+    if ((backgroundAudioUrl || voiceNoteUrl) && containerRef.current) {
+      setupAudio();
+      observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          const ratio = entry.intersectionRatio || 0;
+          if (ratio >= 0.6) {
+            // play when >=60% visible
+            tryPlay();
+          } else {
+            // pause otherwise
+            pauseAll();
+          }
+        });
+      }, { threshold: [0, 0.25, 0.5, 0.6, 0.75, 1] });
+      observer.observe(containerRef.current);
+    }
+
+    return () => {
+      pauseAll();
+      if (observer && containerRef.current) observer.unobserve(containerRef.current);
+      bgRef.current = null;
+      vRef.current = null;
+    };
+    // react to audio urls, muted changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backgroundAudioUrl, voiceNoteUrl, audioMixMeta?.backgroundVolume, audioMixMeta?.voiceVolume, muted]);
+
   // Modal logic extended for carousel!
   const [modalImageIndex, setModalImageIndex] = useState<number | null>(null);
-  // Track aspect ratio for each image (shared for all images in this post)
-  const [imgDims, setImgDims] = useState<{[k:number]: {w:number, h:number}}>({});
   // State for single media aspect ratio
   const [singleMediaDims, setSingleMediaDims] = useState<{w:number, h:number} | null>(null);
 
@@ -114,17 +198,6 @@ export const PostContent: React.FC<PostContentProps> = ({
     return w > h;
   }
 
-  // Helper to get iOS-specific video props
-  const getIOSVideoProps = () => ({
-    playsInline: true,
-    'webkit-playsinline': true,
-    'x-webkit-airplay': 'allow',
-    style: {
-      WebkitPlaysinline: true,
-      position: 'relative' as const,
-      zIndex: 1,
-    } as React.CSSProperties,
-  });
 
   // Instagram/LinkedIn-style grid logic (unchanged)
   const getGridLayout = (count: number) => {
@@ -150,13 +223,7 @@ export const PostContent: React.FC<PostContentProps> = ({
     return "col-span-1 row-span-1 h-32";
   };
 
-  // Helper to determine object-fit for single media
-  function getSingleMediaFitClass() {
-    if (!singleMediaDims) return 'object-cover';
-    const { w, h } = singleMediaDims;
-    if (h >= w) return 'object-cover';
-    return 'object-cover';
-  }
+  // Helper to determine object-fit for single media (currently using object-cover by default)
 
   // Grid display: update click to open modal at given image
   const renderImageGrid = (urls: string[]) => {
@@ -248,10 +315,10 @@ export const PostContent: React.FC<PostContentProps> = ({
                 x5-playsinline="true"
                 disablePictureInPicture
                 onError={e => {
-                  console.error('Video failed to load:', url, e);
-                  const fallback = e.currentTarget.nextElementSibling;
-                  if (fallback) fallback.style.display = 'flex';
-                }}
+                    console.error('Video failed to load:', url, e);
+                    const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                    if (fallback) fallback.style.display = 'flex';
+                  }}
                 style={{ background: '#222' }}
               >
                 <source src={url} type="video/mp4" />
@@ -502,19 +569,51 @@ export const PostContent: React.FC<PostContentProps> = ({
   };
 
   const renderVoiceNote = () => {
-    if (postType !== 'voice' || !voiceNoteUrl) return null;
-    return (
-      <div className="mt-3">
-        <VoicePlayer 
-          audioUrl={voiceNoteUrl}
-          duration={voiceDuration || 0}
-        />
-      </div>
-    );
+    // If there's a background audio or voice, render compact inline audio info with mute toggle
+    if (backgroundAudioUrl || voiceNoteUrl) {
+      const bgTitle = backgroundAudioMeta?.title || (backgroundAudioUrl ? backgroundAudioUrl.split('/').pop() : 'Unknown');
+      return (
+        <div className="mt-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              aria-label={muted ? 'Unmute' : 'Mute'}
+              onClick={() => {
+                setMuted(prev => !prev);
+                try {
+                  if (bgRef.current) bgRef.current.muted = !muted;
+                  if (vRef.current) vRef.current.muted = !muted;
+                } catch (e) {}
+              }}
+              className="p-2 rounded-md bg-gray-800 text-white"
+            >
+              {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            </button>
+            <div className="text-sm text-gray-400">
+              <div>Background: {backgroundAudioUrl ? bgTitle : 'None'}</div>
+              <div>Original Voice: {originalVoiceUsername ? `@${originalVoiceUsername}` : 'Unknown'}</div>
+            </div>
+          </div>
+          {autoplayBlocked && (
+            <div className="text-xs text-gray-500">Tap the post to enable audio</div>
+          )}
+        </div>
+      );
+    }
+    if (postType === 'voice' && voiceNoteUrl) {
+      return (
+        <div className="mt-3">
+          <VoicePlayer 
+            audioUrl={voiceNoteUrl}
+            duration={voiceDuration || 0}
+          />
+        </div>
+      );
+    }
+    return null;
   };
 
   return (
-    <div>
+  <div ref={containerRef}>
       {content && (
         <p className="text-gray-900 dark:text-gray-100 leading-relaxed whitespace-pre-wrap">
           {content}
