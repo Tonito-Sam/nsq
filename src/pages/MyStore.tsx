@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Header } from '@/components/Header';
 import { EnhancedAddProductForm } from '@/components/EnhancedAddProductForm';
@@ -17,7 +17,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { EnhancedStoreSetupModal } from '@/components/EnhancedStoreSetupModal';
-import { Button } from '@/components/ui/button';
+// Button is not used in this file; import removed to silence TS lint warning
 
 
 

@@ -64,7 +64,7 @@ export const ConversationItem: React.FC<ConversationItemProps> = ({
   const [showReply, setShowReply] = useState(false);
   const [replyMessage, setReplyMessage] = useState('');
   const [sending, setSending] = useState(false);
-  const { messages, loading, fetchMessages } = useProductEnquiryMessages(conversation.id);
+  const { messages, fetchMessages } = useProductEnquiryMessages(conversation.id);
 
   const handleSend = async () => {
     if (!replyMessage.trim()) return;
