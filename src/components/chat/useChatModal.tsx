@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
+import { openWhatsApp } from '@/lib/whatsapp';
 
 interface Product {
   id: string;
@@ -165,13 +166,14 @@ export const useChatModal = (product: Product, user: any) => {
     if (!newMessage.trim() || !conversation || !user || sending) return;
 
     setSending(true);
+    const messageText = newMessage.trim();
     try {
       const { error } = await supabase
         .from('messages')
         .insert({
           conversation_id: conversation.id,
           sender_id: user.id,
-          content: newMessage.trim()
+          content: messageText
         });
 
       if (error) throw error;
@@ -183,6 +185,56 @@ export const useChatModal = (product: Product, user: any) => {
         .eq('id', conversation.id);
 
       setNewMessage('');
+
+      // Fire-and-forget: forward this customer message to the seller's WhatsApp using client helper
+      // Only forward if the store manager has opted-in (users_stores.notify_whatsapp === true)
+      (async () => {
+        try {
+          // Try to get seller store info from users_stores table
+          const { data: store } = await supabase
+            .from('users_stores')
+            .select('business_contact_number, store_name, notify_whatsapp')
+            .eq('user_id', product.user_id)
+            .maybeSingle();
+
+          const managerOptIn = !!(store && (store as any).notify_whatsapp);
+          if (!managerOptIn) return; // manager hasn't opted in, do not forward
+
+          let sellerPhone: string | undefined = undefined;
+          let storeName = product.store?.store_name || 'Store';
+          if (store) {
+            sellerPhone = (store as any).business_contact_number as any;
+            storeName = (store as any).store_name || storeName;
+          }
+
+          // Fallback to env var NEXT_PUBLIC_WHATSAPP_TARGET if no phone on store record
+          if (!sellerPhone) {
+            sellerPhone = (process.env.NEXT_PUBLIC_WHATSAPP_TARGET || '').trim();
+          }
+
+          if (!sellerPhone) {
+            console.debug('No seller phone configured for forwarding to WhatsApp');
+            return;
+          }
+
+          // Normalize phone to digits only and remove leading +
+          sellerPhone = sellerPhone.replace(/\D/g, '');
+
+          const plain = `Hi ${storeName}, a customer is waiting on your response about product (${product.id}).\nPlease open NexSq to reply.`;
+
+          const res = await openWhatsApp(sellerPhone, plain);
+          if (res.opened) {
+            toast({ title: 'WhatsApp opened', description: 'WhatsApp was opened for the seller.' });
+          } else if (res.copied) {
+            toast({ title: 'Message copied', description: 'Message copied to clipboard. Paste it in WhatsApp to send.' });
+          } else {
+            toast({ title: 'WhatsApp unavailable', description: 'Could not open WhatsApp or copy message.' });
+          }
+        } catch (err) {
+          console.error('Error forwarding message to WhatsApp:', err);
+        }
+      })();
+
     } catch (error) {
       console.error('Error sending message:', error);
       toast({

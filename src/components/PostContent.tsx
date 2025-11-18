@@ -67,6 +67,7 @@ export const PostContent: React.FC<PostContentProps> = ({
   // Autoplay background + voice audio for posts (max 30s). No visible controls in feed.
   const bgRef = React.useRef<HTMLAudioElement | null>(null);
   const vRef = React.useRef<HTMLAudioElement | null>(null);
+  const [resolvedBgUrl, setResolvedBgUrl] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -76,12 +77,38 @@ export const PostContent: React.FC<PostContentProps> = ({
     let observer: IntersectionObserver | null = null;
 
     const setupAudio = () => {
-      if (backgroundAudioUrl) {
-        bgRef.current = new Audio(backgroundAudioUrl);
+      const src = backgroundAudioUrl || resolvedBgUrl || null;
+      if (src) {
+        bgRef.current = new Audio(src);
         bgRef.current.crossOrigin = 'anonymous';
         bgRef.current.volume = audioMixMeta?.backgroundVolume ?? 0.6;
         bgRef.current.muted = muted;
-        bgRef.current.loop = false;
+        // background soundtrack should loop
+        bgRef.current.loop = true;
+        // If a mix offset was provided, try to seek to it before playback.
+        try {
+          const offsetMs = Number(audioMixMeta?.offsetMs || 0);
+          if (offsetMs > 0) {
+            // If metadata already loaded this will set immediately, otherwise set after loadedmetadata
+            try { bgRef.current.currentTime = offsetMs / 1000; } catch (e) {
+              bgRef.current.addEventListener('loadedmetadata', function handleMeta() {
+                try { bgRef.current && (bgRef.current.currentTime = offsetMs / 1000); } catch (err) {}
+                try { bgRef.current && bgRef.current.removeEventListener('loadedmetadata', handleMeta); } catch (e) {}
+              });
+            }
+          }
+        } catch (e) {
+          // ignore seek errors
+        }
+        // attach simple event handlers for debugging
+        bgRef.current.addEventListener('error', (e) => {
+          // eslint-disable-next-line no-console
+          console.warn('Background audio error', e, src);
+        });
+        bgRef.current.addEventListener('playing', () => {
+          // eslint-disable-next-line no-console
+          console.debug('Background audio started playing', src);
+        });
       }
       if (voiceNoteUrl) {
         vRef.current = new Audio(voiceNoteUrl);
@@ -93,18 +120,43 @@ export const PostContent: React.FC<PostContentProps> = ({
 
     const tryPlay = async () => {
       try {
-        const plays: Promise<any>[] = [];
-        if (bgRef.current) plays.push(bgRef.current.play());
-        if (vRef.current) plays.push(vRef.current.play());
-        const results = await Promise.all(plays.map(p => p.catch((err) => err)));
-        const blocked = results.some(r => r instanceof Error);
+        // Play background first (looped). Some browsers allow playback if a short
+        // user action previously occurred; sequencing increases chance both play.
+        let bgErr: any = null;
+        if (bgRef.current) {
+          try {
+            await bgRef.current.play();
+          } catch (err) {
+            bgErr = err;
+            // eslint-disable-next-line no-console
+            console.warn('Background play failed', err, bgRef.current.src);
+          }
+        }
+
+        // Give the background a small moment to start, then play the voice overlay
+        let vErr: any = null;
+        if (vRef.current) {
+          try {
+            // small delay to avoid racing the browser's autoplay heuristics
+            await new Promise(r => setTimeout(r, 120));
+            await vRef.current.play();
+          } catch (err) {
+            vErr = err;
+            // eslint-disable-next-line no-console
+            console.warn('Voice overlay play failed', err, vRef.current.src);
+          }
+        }
+
+        const blocked = Boolean(bgErr) || Boolean(vErr);
         if (blocked) setAutoplayBlocked(true);
+
         // stop after 30s
         stopTimer = window.setTimeout(() => {
           try { bgRef.current?.pause(); vRef.current?.pause(); } catch (e) {}
         }, 30000);
       } catch (e) {
-        console.warn('Autoplay blocked', e);
+        // eslint-disable-next-line no-console
+        console.warn('Autoplay sequence error', e);
         setAutoplayBlocked(true);
       }
     };
@@ -118,7 +170,7 @@ export const PostContent: React.FC<PostContentProps> = ({
     };
 
     // Only observe if there is audio available
-    if ((backgroundAudioUrl || voiceNoteUrl) && containerRef.current) {
+    if ((backgroundAudioUrl || resolvedBgUrl || voiceNoteUrl) && containerRef.current) {
       setupAudio();
       observer = new IntersectionObserver(entries => {
         entries.forEach(entry => {
@@ -143,7 +195,28 @@ export const PostContent: React.FC<PostContentProps> = ({
     };
     // react to audio urls, muted changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backgroundAudioUrl, voiceNoteUrl, audioMixMeta?.backgroundVolume, audioMixMeta?.voiceVolume, muted]);
+  }, [backgroundAudioUrl, resolvedBgUrl, voiceNoteUrl, audioMixMeta?.backgroundVolume, audioMixMeta?.voiceVolume, muted]);
+
+  // If the post provides a backgroundAudioMeta but not a direct URL, try to
+  // resolve the URL by looking up the synced sound bank at /sounds.json.
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        if (!backgroundAudioUrl && backgroundAudioMeta?.id) {
+          const res = await fetch('/sounds.json');
+          if (!res.ok) return;
+          const list = await res.json();
+          if (!mounted) return;
+          const match = Array.isArray(list) ? list.find((s: any) => String(s.id) === String(backgroundAudioMeta.id)) : null;
+          if (match && match.url) setResolvedBgUrl(match.url);
+        }
+      } catch (e) {
+        // ignore
+      }
+    })();
+    return () => { mounted = false; };
+  }, [backgroundAudioUrl, backgroundAudioMeta?.id]);
 
   // Modal logic extended for carousel!
   const [modalImageIndex, setModalImageIndex] = useState<number | null>(null);

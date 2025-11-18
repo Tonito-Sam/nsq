@@ -81,8 +81,8 @@ export const ConversationItem: React.FC<ConversationItemProps> = ({
   };
 
   return (
-    <div className="p-2 sm:p-3 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition-colors w-full" onClick={() => setShowReply((v) => !v)}>
-      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 w-full" >
+    <div className="p-2 sm:p-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors w-full">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 w-full cursor-pointer" onClick={() => setShowReply((v) => !v)}>
         <div className="flex justify-center sm:block w-full sm:w-auto">
           <Avatar className="h-12 w-12 mx-auto sm:mx-0">
             <AvatarImage src={conversation.customer?.avatar_url} />

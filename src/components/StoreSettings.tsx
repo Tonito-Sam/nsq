@@ -29,12 +29,32 @@ interface StoreSettingsProps {
 }
 
 export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpdate }) => {
-  const [formData, setFormData] = useState({
+  interface FormData {
+    store_name: string;
+    store_category: string;
+    description: string;
+    base_currency: string;
+    shipping_partner: string;
+    business_whatsapp_number: string;
+    notify_whatsapp: boolean;
+    business_country: string;
+    business_state_province: string;
+    business_bank_name: string;
+    business_account_number: string;
+    business_account_holder: string;
+    business_branch_name: string;
+    store_paypal_enabled: boolean;
+    store_paypal_email: string;
+  }
+
+  const [formData, setFormData] = useState<FormData>({
     store_name: store?.store_name || '',
     store_category: store?.store_category || '',
     description: store?.description || '',
     base_currency: store?.base_currency || 'ZAR',
     shipping_partner: store?.shipping_partner || '',
+    business_whatsapp_number: (store as any)?.business_whatsapp_number || '',
+    notify_whatsapp: !!(store as any)?.notify_whatsapp,
     business_country: '',
     business_state_province: '',
     business_bank_name: '',
@@ -46,8 +66,8 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
   });
   const [saving, setSaving] = useState(false);
 
-  const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+  const handleInputChange = (field: string, value: string | boolean) => {
+    setFormData(prev => ({ ...prev, [field]: value } as any));
   };
 
   const handleSave = async () => {
@@ -55,6 +75,43 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
 
     setSaving(true);
     try {
+      // If enabling WhatsApp notify, call server endpoint first to validate & persist that field
+      let serverUpdatedRow: any = null;
+      if (formData.notify_whatsapp) {
+        const maybeNumber = (formData.business_whatsapp_number || '').trim();
+        if (!maybeNumber) {
+          throw new Error('Please provide a WhatsApp number to enable notifications.');
+        }
+
+        // Pick API base from env (NEXT_PUBLIC_API_URL) or fallback to localhost:5000 for dev
+        const apiBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000').replace(/\/+$/g, '');
+        const endpoint = `${apiBase}/api/stores/update-whatsapp-notify`;
+
+        const resp = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ store_id: store.id, business_whatsapp_number: maybeNumber, notify_whatsapp: true })
+        });
+
+        const text = await resp.text().catch(() => '');
+        let json: any = null;
+        try {
+          json = text ? JSON.parse(text) : null;
+        } catch (err) {
+          // invalid JSON from server
+          console.warn('Non-JSON response from update-whatsapp-notify', text);
+          json = null;
+        }
+
+        if (!resp.ok) {
+          const errMsg = json?.error || json?.body || `Server returned ${resp.status}`;
+          throw new Error(errMsg || 'Failed to validate WhatsApp number');
+        }
+
+        serverUpdatedRow = json?.updated || null;
+      }
+
+      // Update other store settings via Supabase (excluding WhatsApp fields which server already handled)
       const { data, error } = await supabase
         .from('user_stores')
         .update({
@@ -71,16 +128,15 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
 
       if (error) throw error;
 
-      onStoreUpdate(data);
-      toast({
-        title: "Success",
-        description: "Store settings updated successfully"
-      });
+      // Merge serverUpdatedRow (if any) with the updated supabase data so UI sees the latest values
+      const merged = { ...(data || {}), ...(serverUpdatedRow || {}) };
+      onStoreUpdate(merged);
+      toast({ title: 'Success', description: 'Store settings updated successfully' });
     } catch (error) {
       console.error('Error updating store:', error);
       toast({
         title: "Error",
-        description: "Failed to update store settings",
+        description: (error as any)?.message || 'Failed to update store settings',
         variant: "destructive"
       });
     } finally {
@@ -167,6 +223,30 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
               value={formData.shipping_partner}
               onChange={(e) => handleInputChange('shipping_partner', e.target.value)}
               placeholder="e.g., CourierGuy, PostNet"
+            />
+          </div>
+
+          <div>
+            <Label htmlFor="business_whatsapp_number">Business WhatsApp Number</Label>
+            <Input
+              id="business_whatsapp_number"
+              value={formData.business_whatsapp_number}
+              onChange={(e) => handleInputChange('business_whatsapp_number', e.target.value)}
+              placeholder="+15551234567"
+            />
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Enter number in international E.164 format (e.g., +15551234567). Enable notifications below to send prompts to this number.</p>
+          </div>
+
+          <div className="md:col-span-2 flex items-center justify-between">
+            <div>
+              <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">Notify via WhatsApp</h4>
+              <p className="text-sm text-gray-500 dark:text-gray-400">When enabled, customers' messages will trigger a short, read-only notification to this WhatsApp number prompting you to reply inside the app.</p>
+            </div>
+            <input
+              type="checkbox"
+              checked={!!formData.notify_whatsapp}
+              onChange={e => handleInputChange('notify_whatsapp', e.target.checked)}
+              className="form-checkbox h-5 w-5 text-purple-600"
             />
           </div>
         </div>

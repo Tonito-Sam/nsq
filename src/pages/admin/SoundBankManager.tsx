@@ -128,18 +128,53 @@ const SoundBankManager: React.FC = () => {
   const syncFromTable = async () => {
     try {
       const syncSecret = (import.meta.env as any)?.VITE_SYNC_SECRET || '';
-      const res = await fetch('/api/admin/sync-sounds', {
+      // Prefer an explicit API URL from env (useful in dev where frontend and backend use different ports)
+  const apiBase = (import.meta.env as any)?.VITE_API_URL || '';
+  const defaultPort = (import.meta.env as any)?.VITE_BACKEND_PORT || 5000;
+  // If running on localhost, prefer http to avoid https://localhost:PORT issues
+  const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+  const proto = isLocal ? 'http:' : window.location.protocol;
+  const fallbackBase = `${proto}//${window.location.hostname}:${defaultPort}`;
+  const url = apiBase ? `${apiBase.replace(/\/$/, '')}/api/admin/sync-sounds` : `${fallbackBase.replace(/\/$/, '')}/api/admin/sync-sounds`;
+    // Helpful debug log when running locally
+    // eslint-disable-next-line no-console
+    console.debug('Sync endpoint URL', url);
+    // Don't log the secret value, but log whether one is configured in the frontend env.
+    const hasFrontendSecret = !!syncSecret;
+    // eslint-disable-next-line no-console
+    console.debug('VITE_SYNC_SECRET configured in frontend?', hasFrontendSecret);
+
+      const headers: Record<string, string> = {};
+      if (syncSecret) headers['x-sync-secret'] = syncSecret;
+      const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          'x-sync-secret': syncSecret,
-        },
+        headers,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        toast({ description: `Sync failed: ${data?.error || res.status}`, variant: 'destructive' });
+
+      const text = await res.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch (e) {
+        console.warn('Could not parse sync response as JSON', e, text);
+      }
+
+      if (res.status === 401) {
+        const msg = data?.error || text || 'Unauthorized';
+        const hint = hasFrontendSecret
+          ? 'Frontend sent a secret but the server rejected it. Ensure VITE_SYNC_SECRET matches backend SYNC_SECRET.'
+          : 'Frontend did not send a sync secret. Set VITE_SYNC_SECRET in `.env.local` to match backend SYNC_SECRET and restart the dev server.';
+        toast({ description: `Sync failed: ${msg}. ${hint}`, variant: 'destructive' });
         return;
       }
-      toast({ description: `Synced ${data.count} tracks to public/sounds.json` });
+
+      if (!res.ok) {
+        const msg = data?.error || text || res.status;
+        toast({ description: `Sync failed: ${msg}`, variant: 'destructive' });
+        return;
+      }
+
+      toast({ description: `Synced ${data?.count ?? 'unknown'} tracks to public/sounds.json` });
       // Refresh local table view
       fetchSounds();
     } catch (e: any) {

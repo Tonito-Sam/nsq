@@ -13,6 +13,10 @@ export type MobileReelScrollerProps = {
   isFetchingNextPage: boolean;
   hasNextPage: boolean;
   fetchNextPage?: () => void;
+  // When true, hide live controls in each ReelCard
+  hideLive?: boolean;
+  // Logged-in user data to forward to ReelCard (so comments/posting can identify user)
+  userData?: any;
 };
 
 export function MobileReelScroller({
@@ -25,7 +29,9 @@ export function MobileReelScroller({
   handleFollow,
   isFetchingNextPage,
   hasNextPage,
-  fetchNextPage
+  fetchNextPage,
+  hideLive,
+  userData
 }: MobileReelScrollerProps) {
   // Infinite scroll: load more when near end
   useEffect(() => {
@@ -33,7 +39,8 @@ export function MobileReelScroller({
     const onScroll = () => {
       const container = containerRef.current;
       if (!container) return;
-      if (container.scrollHeight - container.scrollTop - container.clientHeight < 200) {
+      // When user nears the bottom (400px), trigger fetchNextPage to pre-load content
+      if (container.scrollHeight - container.scrollTop - container.clientHeight < 400) {
         fetchNextPage();
       }
     };
@@ -75,7 +82,11 @@ export function MobileReelScroller({
   }, [videos]);
 
   return (
-    <div ref={containerRef} className="w-full h-full flex flex-col snap-y snap-mandatory overflow-y-auto">
+    <div
+      ref={containerRef}
+      className="w-full h-full flex flex-col snap-y snap-mandatory overflow-y-auto"
+      style={{ WebkitOverflowScrolling: 'touch' as any, touchAction: 'pan-y' as any, overscrollBehavior: 'contain' as any }}
+    >
       {videos.map((video: VideoType, idx: number) => (
         <div
           key={video.id}
@@ -92,6 +103,8 @@ export function MobileReelScroller({
             isLiked={userLikes.has(video.id)}
             isFollowing={userSubscriptions.has(video.channel_id)}
             isActive={idx === activeIdx}
+            hideLive={!!hideLive}
+            userData={userData}
           />
         </div>
       ))}

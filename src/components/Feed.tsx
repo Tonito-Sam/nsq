@@ -8,21 +8,11 @@ import { RepostModal } from './RepostModal';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/hooks/use-toast';
-import { ArrowDown, Loader2, ArrowUp, Heart, Send, HeartCrack, Frown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
+import { ArrowDown, Loader2, ArrowUp } from 'lucide-react';
+import { LiveChat } from './LiveChat';
+// removed unused UI imports
 
-interface ChatMessage {
-  id: string;
-  username: string;
-  message: string;
-  timestamp: Date;
-  avatar?: string;
-  isModerator?: boolean;
-  isVip?: boolean;
-}
+// chat handled by LiveChat component (server-backed)
 
 interface Post {
   id: string;
@@ -77,14 +67,12 @@ export const Feed = () => {
   const [showRepostModal, setShowRepostModal] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [showCommentsOverlay, setShowCommentsOverlay] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [newMessage, setNewMessage] = useState('');
-  const [likeCount, setLikeCount] = useState(88);
+  // Chat is provided by server-backed LiveChat component; remove local-only state
   const [currentShowIndex, setCurrentShowIndex] = useState(0);
   const [openComments, setOpenComments] = useState<{ [postId: string]: boolean }>({});
   
   const feedRef = useRef<HTMLDivElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  
   const loadMoreRef = useRef<HTMLDivElement>(null);
   
   const [pullToRefresh, setPullToRefresh] = useState({
@@ -481,27 +469,9 @@ export const Feed = () => {
   };
 
   // Chat functions
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
+  // time formatting handled where needed in LiveChat
 
-  const handleSendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim()) return;
-    
-    const message: ChatMessage = {
-      id: Date.now().toString(),
-      username: user?.user_metadata?.first_name || user?.email || 'Anonymous',
-      message: newMessage,
-      timestamp: new Date(),
-      avatar: user?.user_metadata?.avatar_url,
-      isModerator: false,
-      isVip: false
-    };
-    
-    setMessages(prev => [...prev, message]);
-    setNewMessage('');
-  };
+  // message sending is handled by <LiveChat /> (server-backed)
 
   const handleCommentClick = () => {
     setShowCommentsOverlay(prev => !prev);
@@ -520,7 +490,7 @@ export const Feed = () => {
     );
   }
 
-  const currentShow = studioShows && studioShows.length > 0 ? studioShows[currentShowIndex] : null;
+  // currentShow is derived inside VideoContainer
 
   return (
     <div 
@@ -567,7 +537,7 @@ export const Feed = () => {
         />
       )}
 
-      {/* Live comments overlay */}
+      {/* Live comments overlay - render server-backed LiveChat for parity with sidebar */}
       <div
         className={`
           fixed bottom-0 left-0 right-0 z-50 transition-transform duration-300 ease-in-out
@@ -576,81 +546,7 @@ export const Feed = () => {
         `}
         style={{ height: '70vh' }}
       >
-        <div className="p-4 text-white font-semibold border-b border-white/20 flex items-center justify-between">
-          <span>Live Chat</span>
-          {currentShow && (
-            <span className="text-xs text-gray-300 font-normal">
-              NOW SHOWING: <span className="font-semibold text-white">{currentShow.title}</span>
-            </span>
-          )}
-        </div>
-
-        <div
-          ref={chatContainerRef}
-          className="flex-1 overflow-y-auto space-y-3 mb-4 pr-1 scroll-smooth p-4"
-        >
-          {messages.map((msg) => (
-            <div key={msg.id} className="flex items-start space-x-2 group">
-              <Avatar className="h-7 w-7 flex-shrink-0">
-                <AvatarImage src={msg.avatar} />
-                <AvatarFallback className="text-xs bg-gradient-to-r from-blue-500 to-purple-500 text-white">
-                  {msg.username.charAt(0).toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center space-x-2 mb-1">
-                  <span
-                    className={`text-xs font-medium ${
-                      msg.isModerator
-                        ? 'text-green-600 dark:text-green-400'
-                        : msg.isVip
-                        ? 'text-purple-600 dark:text-purple-400'
-                        : 'text-gray-200'
-                    }`}
-                  >
-                    {msg.username}
-                  </span>
-                  {msg.isModerator && (
-                    <Badge className="bg-green-500 text-white text-xs h-4 px-1">MOD</Badge>
-                  )}
-                  {msg.isVip && (
-                    <Badge className="bg-purple-500 text-white text-xs h-4 px-1">VIP</Badge>
-                  )}
-                  <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {formatTime(msg.timestamp)}
-                  </span>
-                </div>
-                <p className="text-sm text-white bg-white/10 rounded-lg px-3 py-1 inline-block max-w-[90%] break-words">
-                  {msg.message}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <form onSubmit={handleSendMessage} className="flex items-center space-x-2 mt-auto border-t border-white/20 p-4">
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            className="h-9 w-9 p-0 text-gray-400 hover:text-pink-500 transition"
-            onClick={() => setLikeCount(likeCount + 1)}
-          >
-            <Heart className="w-5 h-5 fill-current" />
-          </Button>
-
-          <Input
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            placeholder="Say something..."
-            className="flex-1 h-9 text-sm rounded-md shadow-sm"
-            maxLength={200}
-          />
-
-          <Button type="submit" size="sm" className="h-9 px-3" disabled={!newMessage.trim()}>
-            <Send className="h-4 w-4" />
-          </Button>
-        </form>
+        <LiveChat />
       </div>
 
       <div className="mb-4" />
@@ -689,11 +585,7 @@ export const Feed = () => {
               onDeletePost={handleDeletePost}
               onHidePost={handleHidePost}
               showComments={!!openComments[post.id]}
-              reactionIcons={[
-                { type: 'like', icon: <Heart className="w-5 h-5" /> },
-                { type: 'heart-break', icon: <HeartCrack className="w-5 h-5 text-red-500" /> },
-                { type: 'crying', icon: <Frown className="w-5 h-5 text-blue-400" /> }
-              ]}
+              
             />
           ))
         )}

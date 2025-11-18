@@ -156,7 +156,8 @@ const StudiosPage = () => {
       .from('studio_episodes')
       .select('*')
       .eq('show_id', showId)
-      .order('scheduled_time', { ascending: true });
+      // Return newest episodes first so newly-added episodes are queued/played first
+      .order('created_at', { ascending: false });
     if (error) {
       console.error('Error fetching episodes:', error);
       toast({ title: 'Error', description: 'Failed to fetch episodes', variant: 'destructive' });
@@ -180,7 +181,8 @@ const StudiosPage = () => {
         .from('studio_episodes')
         .select('*')
         .eq('show_id', show.id)
-        .order('scheduled_time', { ascending: true })
+        // When editing a show, list its episodes newest-first so recent uploads appear at the top
+        .order('created_at', { ascending: false })
         .then(({ data }) => setStagedEpisodes(data || []));
     } else {
       setEditingShow(null);
@@ -472,7 +474,7 @@ const StudiosPage = () => {
         </Card>
       )}
 
-      {showStep === 13 && (
+          {showStep === 13 && (
         <Card className="mb-6">
           <CardHeader>
             <CardTitle>Schedule Guide</CardTitle>
@@ -491,13 +493,16 @@ const StudiosPage = () => {
                   {shows.length === 0 ? (
                     <tr><td colSpan={3} className="text-center py-4 text-gray-400">No scheduled shows</td></tr>
                   ) : (
-                    shows.map((show, idx) => (
-                      <tr key={idx} className="border-b">
-                        <td className="px-2 py-1 font-semibold">{show.title}</td>
-                        <td className="px-2 py-1">{show.scheduled_time}</td>
-                        <td className="px-2 py-1">{show.end_time}</td>
-                      </tr>
-                    ))
+                    // For the schedule guide, show entries ordered by scheduled_time ascending
+                    [...shows]
+                      .sort((a, b) => new Date(a.scheduled_time).getTime() - new Date(b.scheduled_time).getTime())
+                      .map((show, idx) => (
+                        <tr key={idx} className="border-b">
+                          <td className="px-2 py-1 font-semibold">{show.title}</td>
+                          <td className="px-2 py-1">{show.scheduled_time}</td>
+                          <td className="px-2 py-1">{show.end_time}</td>
+                        </tr>
+                      ))
                   )}
                 </tbody>
               </table>

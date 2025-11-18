@@ -12,7 +12,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Custom CORS middleware (for dev, allows all origins)
-app.use(require('./cors.cjs'));
+app.use(require('./cors.cjs')); // ✅ moved here (AFTER app is created)
 
 // Parse JSON
 app.use(express.json());
@@ -42,4 +42,3 @@ app.use('/api/turn', turnRoutes);
 app.listen(PORT, () => {
   console.log(`✅ Backend running on port ${PORT}`);
 });
-

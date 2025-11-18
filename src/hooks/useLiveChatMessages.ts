@@ -69,9 +69,12 @@ export function useLiveChatMessages(showId: string | undefined) {
 
     return () => {
       try {
-        supabase.removeAllChannels();
+        if (channel) {
+          // Remove only this subscription channel to avoid cancelling other listeners
+          supabase.removeChannel(channel);
+        }
       } catch (err) {
-        console.error('useLiveChatMessages: Error removing channels:', err);
+        console.error('useLiveChatMessages: Error removing channel:', err);
       }
     };
   }, [showId]);

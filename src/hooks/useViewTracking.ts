@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { supabase } from '@/integrations/supabase/client';
 
 interface ViewTrackingOptions {
   showId?: string;
@@ -67,23 +68,62 @@ export const useViewTracking = ({ showId, isPlaying = false, onViewCountUpdate }
             console.log('Counting view for show:', showId);
             setHasViewed(true);
             
-            // Only count if this viewer hasn't been counted before
-            if (!viewersRef.current.has(viewerIdRef.current)) {
-              viewersRef.current.add(viewerIdRef.current);
-              const newCount = viewCount + 1;
-              setViewCount(newCount);
-              
-              // Save to localStorage
-              const viewData = {
-                count: newCount,
-                viewers: Array.from(viewersRef.current),
-                lastUpdated: Date.now()
-              };
-              localStorage.setItem(`views_${showId}`, JSON.stringify(viewData));
-              
-              // Notify parent component
-              onViewCountUpdate?.(newCount);
-            }
+              // Only count if this viewer hasn't been counted before
+              if (!viewersRef.current.has(viewerIdRef.current)) {
+                viewersRef.current.add(viewerIdRef.current);
+                const newCount = viewCount + 1;
+                setViewCount(newCount);
+                
+                // Save to localStorage
+                const viewData = {
+                  count: newCount,
+                  viewers: Array.from(viewersRef.current),
+                  lastUpdated: Date.now()
+                };
+                localStorage.setItem(`views_${showId}`, JSON.stringify(viewData));
+                
+                // Notify parent component
+                onViewCountUpdate?.(newCount);
+
+                // Persist to server (fire-and-forget). Prefer RPC for atomic increments,
+                // fallback to read+update if RPC is not available.
+                (async () => {
+                  try {
+                    // Try RPC first
+                    if (supabase) {
+                      const rpcName = 'increment_show_views';
+                      // Best-effort: call RPC and ignore if it doesn't exist
+                      try {
+                        const { data: _rpcData, error: rpcError } = await supabase.rpc(rpcName, { show_id: showId });
+                        if (rpcError) {
+                          // If RPC doesn't exist or fails, fallback to safe update
+                          throw rpcError;
+                        }
+                      } catch (rpcErr) {
+                        // Fallback: read current value and update incrementally
+                        try {
+                          const { data: row, error: selErr } = await supabase
+                            .from('studio_shows')
+                            .select('views')
+                            .eq('id', showId)
+                            .single();
+                          if (selErr) throw selErr;
+                          const serverCount = (row && (row as any).views) || 0;
+                          const { error: updErr } = await supabase
+                            .from('studio_shows')
+                            .update({ views: serverCount + 1 })
+                            .eq('id', showId);
+                          if (updErr) throw updErr;
+                        } catch (fallbackErr) {
+                          console.error('[useViewTracking] Failed to persist view (fallback):', fallbackErr);
+                        }
+                      }
+                    }
+                  } catch (err) {
+                    console.error('[useViewTracking] Failed to persist view:', err);
+                  }
+                })();
+              }
           }
         }
       }, 1000);

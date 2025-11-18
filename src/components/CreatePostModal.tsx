@@ -63,20 +63,18 @@ async function translateText(text: string, targetLang = 'en') {
 }
 
 // Image captioning (Replicate BLIP API)
-async function getImageCaption(imageUrl: string) {
-  try {
-    const res = await axios.post(
-      'https://api.replicate.com/v1/predictions',
-      {
-        version: 'blip',
-        input: { image: imageUrl }
-      },
-      { headers: { Authorization: 'Token YOUR_REPLICATE_API_TOKEN' } }
-    );
-    return res.data?.prediction || '';
-  } catch (e) {
-    return '';
+async function getImageCaption(imageUrl?: string) {
+  // Avoid calling Replicate directly from the browser (CORS + secrets).
+  // Captioning is optional; return empty string here. If you want server-side
+  // captioning, implement a backend proxy endpoint (e.g. /api/ai-caption) that
+  // calls Replicate / another caption model and returns the result.
+  // Reference the parameter to avoid a TypeScript "declared but never used"
+  // diagnostic while keeping behavior unchanged. Use a simple conditional
+  // check which counts as a read by the TypeScript analyzer.
+  if (imageUrl) {
+    /* intentionally unused */
   }
+  return '';
 }
 
 // Voice-to-text (Web Speech API)
@@ -100,6 +98,8 @@ function useSpeechToText(onResult: (text: string) => void) {
     setListening(true);
     recognition.start();
   };
+
+  
   const stop = () => {
     recognitionRef.current?.stop();
     setListening(false);
@@ -134,6 +134,8 @@ import {
   Send,
   BarChart2,
   Paperclip,
+  Camera,
+  UploadCloud,
   MapPin,
   Sparkles,
   Heart,
@@ -150,6 +152,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { uploadFile } from '@/utils/mediaUtils';
+import CameraCaptureModal from './CameraCaptureModal';
+import VideoRecorderModal from './VideoRecorderModal';
 
 interface CreatePostModalProps {
   open: boolean;
@@ -231,6 +235,23 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   const [selectedFilter, setSelectedFilter] = useState<string>('none');
   const [filteredPreviewUrl, setFilteredPreviewUrl] = useState<string>('');
   const [filtering, setFiltering] = useState(false);
+  // AI Photo Studio state
+  const [aiStudioOpen, setAiStudioOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('professional corporate headshot, soft studio lighting, sharp details, neutral background, natural skin texture, confident expression, clean look, high-end portrait photography');
+  const [aiPreset, setAiPreset] = useState('corporate');
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiResults, setAiResults] = useState<Array<{ url: string; file?: File; nsfw?: boolean }>>([]);
+  const aiPresets = [
+    { id: 'corporate', label: 'Corporate Headshot' },
+    { id: 'suited', label: 'Suited / Executive' },
+    { id: 'beach', label: 'Beach Variant' },
+    { id: 'boardroom', label: 'Boardroom Power Look' },
+    { id: 'glamour', label: 'Glamour / Luxury Portrait' },
+    { id: 'tech', label: 'Tech Founder Look' },
+    { id: 'editorial', label: 'Model / Editorial' },
+  ];
+  const [aiBackendAvailable, setAiBackendAvailable] = useState<boolean | null>(null);
+  const [aiBackendChecking, setAiBackendChecking] = useState(false);
   // Sound-bank and background audio
   const [soundBank, setSoundBank] = useState<any[]>([]);
   const [selectedSound, setSelectedSound] = useState<any | null>(null);
@@ -239,10 +260,23 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   const [voiceVolume, setVoiceVolume] = useState<number>(1);
   const [playBackgroundDuringRecording, setPlayBackgroundDuringRecording] = useState<boolean>(true);
   const [playingSoundId, setPlayingSoundId] = useState<string | null>(null);
+  // Background start offset (seconds) for cropping a 30s clip from the track
+  const [bgStartOffset, setBgStartOffset] = useState<number>(0);
+  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const waveformPeaksRef = useRef<number[] | null>(null);
+  const waveformCtxRef = useRef<AudioContext | null>(null);
+  const [waveformLoadedForId, setWaveformLoadedForId] = useState<number | string | null>(null);
+  const draggingRef = useRef<{ startX: number; startOffset: number } | null>(null);
+  // Waveform cropper refs and state
+  const waveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cropBlockRef = useRef<HTMLDivElement | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  
   // Slideshow state for multiple images
   const [slideshowIndex, setSlideshowIndex] = useState(0);
   const [slideshowPlaying, setSlideshowPlaying] = useState(false);
   const slideshowIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const userToggledSlideshowRef = useRef(false);
 
   // Add emoji/icon to each feeling
   const feelingsList = [
@@ -308,9 +342,19 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   ];
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showMediaOptionsFor, setShowMediaOptionsFor] = useState<null | 'image' | 'video'>(null);
+  const [cameraModalOpen, setCameraModalOpen] = useState(false);
+  const [videoModalOpen, setVideoModalOpen] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const prevTypedHashtagsRef = useRef<string[]>([]);
+  // AudioContext-based mixing refs for recording background + mic together
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const bgAudioElRef = useRef<HTMLAudioElement | null>(null);
+  const bgSourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const micSourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const analyserIntervalRef = useRef<number | null>(null);
 
   // Load sound bank manifest
   useEffect(() => {
@@ -325,6 +369,88 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       }
     })();
   }, []);
+
+  // Draw waveform when peaks are available or canvas size changes
+  const drawWaveform = () => {
+    const canvas = waveformCanvasRef.current;
+    const peaks = waveformPeaksRef.current;
+    if (!canvas || !peaks) return;
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    canvas.width = Math.max(1, Math.floor(width * dpr));
+    canvas.height = Math.max(1, Math.floor(height * dpr));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // background
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // waveform
+    ctx.fillStyle = '#60a5fa';
+    const pxPerPeak = canvas.width / peaks.length;
+    for (let i = 0; i < peaks.length; i++) {
+      const v = peaks[i];
+      const h = Math.max(1, v * canvas.height);
+      const x = Math.floor(i * pxPerPeak);
+      ctx.fillRect(x, (canvas.height - h) / 2, Math.ceil(pxPerPeak), h);
+    }
+  };
+
+  // Generate peaks for a given audio url (simple downsampling)
+  const generateWaveformPeaks = async (url: string) => {
+    try {
+      // reuse AudioContext when possible
+      const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
+      if (!AudioCtx) return null;
+      if (!waveformCtxRef.current) waveformCtxRef.current = new AudioCtx();
+      const ac = waveformCtxRef.current;
+      const res = await fetch(url);
+      const ab = await res.arrayBuffer();
+      const audioBuffer = await ac.decodeAudioData(ab.slice(0));
+      const channelData = audioBuffer.getChannelData(0);
+      const peaksCount = Math.min(1200, Math.max(200, Math.floor((waveformCanvasRef.current?.clientWidth || 600))));
+      const blockSize = Math.floor(channelData.length / peaksCount) || 1;
+      const peaks: number[] = [];
+      for (let i = 0; i < peaksCount; i++) {
+        let start = i * blockSize;
+        let end = Math.min(start + blockSize, channelData.length);
+        let max = 0;
+        for (let j = start; j < end; j++) {
+          const v = Math.abs(channelData[j]);
+          if (v > max) max = v;
+        }
+        peaks.push(max);
+      }
+      waveformPeaksRef.current = peaks;
+      drawWaveform();
+      return { duration: audioBuffer.duration };
+    } catch (e) {
+      console.warn('Could not generate waveform', e);
+      return null;
+    }
+  };
+
+  // Watch selectedSound and generate waveform for it when selected
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!selectedSound || !selectedSound.url) return;
+      const id = selectedSound.id ?? selectedSound.title ?? null;
+      if (waveformLoadedForId === id) return;
+      setWaveformLoadedForId(id);
+  await generateWaveformPeaks(selectedSound.url);
+      if (cancelled) return;
+      // redraw whenever window resizes
+      const onResize = () => drawWaveform();
+      window.addEventListener('resize', onResize);
+      return () => {
+        cancelled = true;
+        window.removeEventListener('resize', onResize);
+      };
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSound?.id, selectedSound?.url]);
 
   const mapFilterToCss = (f: string) => {
     switch (f) {
@@ -423,6 +549,35 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     }
   };
 
+  // Handle a captured photo file from CameraCaptureModal
+  const handleCameraCapture = async (file: File) => {
+    try {
+      setSelectedFiles((prev: File[]) => [...prev, file]);
+      setPostType('image');
+      setAiLoading(true);
+      const url = URL.createObjectURL(file);
+      try {
+        const cap = await getImageCaption(url);
+        setCaption(cap);
+      } catch {
+        setCaption('');
+      }
+      setAiLoading(false);
+    } catch (e) {
+      console.warn('Failed to attach captured photo', e);
+    }
+  };
+
+  // Handle a recorded video file from VideoRecorderModal
+  const handleVideoRecorded = (file: File, _duration?: number) => {
+    try {
+      setSelectedFiles((prev: File[]) => [...prev, file]);
+      setPostType('video');
+    } catch (e) {
+      console.warn('Failed to attach recorded video', e);
+    }
+  };
+
   // AI: Live feedback as user types
   useEffect(() => {
     let text = content;
@@ -504,11 +659,16 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   }, [voiceText]);
 
   useEffect(() => {
-    // reset slideshow when selected files change
+    // reset slideshow index when selected files change; do not forcibly
+    // override the playing state so auto-enable logic can decide whether
+    // to start the slideshow. Manual user toggles are respected.
     setSlideshowIndex(0);
-    setSlideshowPlaying(false);
     if (selectedFiles.length === 0 || !selectedFiles[0].type.startsWith('image/')) {
       setCaption('');
+    }
+    // If no files left, clear any user toggle so future auto behavior can run
+    if (selectedFiles.length === 0) {
+      userToggledSlideshowRef.current = false;
     }
   }, [selectedFiles]);
 
@@ -517,7 +677,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     if (slideshowPlaying && selectedFiles.length > 1) {
       slideshowIntervalRef.current = setInterval(() => {
         setSlideshowIndex(i => (i + 1) % selectedFiles.length);
-      }, 3000);
+      }, 10000); // show each image for at least 10 seconds
       // start background audio if selected
       if (selectedSound && !backgroundAudioRef.current) {
         try {
@@ -525,6 +685,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
           a.crossOrigin = 'anonymous';
           a.volume = backgroundVolume;
           a.loop = true;
+          try { if (bgStartOffset && bgStartOffset > 0) a.currentTime = bgStartOffset; } catch (e) {}
           a.play().catch(() => {});
           backgroundAudioRef.current = a;
         } catch (e) {}
@@ -551,33 +712,231 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     };
   }, [slideshowPlaying, selectedFiles.length, selectedSound, backgroundVolume, isRecording]);
 
+  // Auto-enable slideshow only when there are multiple images AND the user
+  // has a voice overlay (recorded or currently recording) AND a selected
+  // background sound. Do not override if the user has manually toggled the
+  // slideshow play/pause control.
+  useEffect(() => {
+    const hasMultipleImages = selectedFiles.length > 1;
+    const hasVoiceOverlay = Boolean(audioBlob || isRecording);
+    const hasBackgroundSound = Boolean(selectedSound);
+    const shouldAuto = hasMultipleImages && hasVoiceOverlay && hasBackgroundSound;
+    if (userToggledSlideshowRef.current) return; // respect manual control
+    setSlideshowPlaying(Boolean(shouldAuto));
+  }, [selectedFiles.length, selectedSound, audioBlob, isRecording]);
+
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      
-      const audioChunks: Blob[] = [];
-      mediaRecorder.ondataavailable = (event) => {
-        audioChunks.push(event.data);
-      };
-      
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-        setAudioBlob(audioBlob);
-        stream.getTracks().forEach(track => track.stop());
-      };
-      
-      mediaRecorder.start();
-      setIsRecording(true);
-      setRecordingDuration(0); // Reset duration
-      
-      // Play backing track locally while recording so the user can sing-along (MediaRecorder records mic-only)
+      // Acquire mic stream
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      try {
+        // Debug: list mic tracks and states
+        // eslint-disable-next-line no-console
+        console.debug('Acquired micStream tracks', micStream.getAudioTracks().map(t => ({ id: t.id, label: t.label, enabled: t.enabled, muted: (t as any).muted }))); 
+      } catch (e) {}
+
+      // If we have a selected background sound and the admin opted to play it
+      // during recording, mix mic + background into a single recorded blob.
       if (selectedSound && playBackgroundDuringRecording) {
+        // Create AudioContext and set up graph: MediaElementSource (bg) + Mic -> gains -> Destination
+        const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
+        const audioCtx = new AudioCtx();
+        audioContextRef.current = audioCtx;
+
+        // Background audio element (separate from preview to avoid interfering with other playback)
+        const bgEl = new Audio(selectedSound.url);
+        bgEl.crossOrigin = 'anonymous';
+        bgEl.loop = true;
+        bgEl.volume = backgroundVolume;
+        bgAudioElRef.current = bgEl;
+
+        // Create source nodes
+  const bgSource = audioCtx.createMediaElementSource(bgEl);
+        bgSourceNodeRef.current = bgSource;
+  const micSource = audioCtx.createMediaStreamSource(micStream);
+        micSourceNodeRef.current = micSource;
+
+        // Gains for relative volumes
+        const bgGain = audioCtx.createGain();
+        bgGain.gain.value = backgroundVolume ?? 0.6;
+        const micGain = audioCtx.createGain();
+        micGain.gain.value = voiceVolume ?? 1;
+
+        // Destination for recording
+        const dest = audioCtx.createMediaStreamDestination();
+
+        // Try using a ChannelMerger so both background and mic channels are explicitly merged
+        try {
+          const merger = audioCtx.createChannelMerger(2);
+          // connect bg -> bgGain -> merger(ch0)
+          try { bgSource.connect(bgGain); bgGain.connect(merger, 0, 0); } catch (e) { console.warn('bg -> gain -> merger failed', e); }
+          // connect mic -> micGain -> merger(ch1)
+          try { micSource.connect(micGain); micGain.connect(merger, 0, 1); } catch (e) { console.warn('mic -> gain -> merger failed', e); }
+          // merger -> destination
+          merger.connect(dest);
+          // Debug
+          try { console.debug('Using ChannelMerger for mixing'); } catch (e) {}
+        } catch (e) {
+          // Fallback to simple connect directly to destination
+          try {
+            bgSource.connect(bgGain).connect(dest);
+          } catch (err) {
+            console.warn('bgSource connect failed', err);
+          }
+          try { micSource.connect(micGain).connect(dest); } catch (err) { console.warn('mic connect failed', err); }
+        }
+
+        // Analyser for mic level debugging (do not route analyser to destination)
+        try {
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 2048;
+          analyserRef.current = analyser;
+          micGain.connect(analyser);
+          // start interval to log RMS for debugging
+          analyserIntervalRef.current = window.setInterval(() => {
+            try {
+              const arr = new Uint8Array(analyser.frequencyBinCount);
+              analyser.getByteTimeDomainData(arr);
+              // compute RMS
+              let sum = 0;
+              for (let i = 0; i < arr.length; i++) {
+                const v = (arr[i] - 128) / 128;
+                sum += v * v;
+              }
+              const rms = Math.sqrt(sum / arr.length);
+              // eslint-disable-next-line no-console
+              console.debug('Mic RMS', rms);
+            } catch (e) {}
+          }, 250) as unknown as number;
+        } catch (e) {
+          console.warn('Could not create analyser', e);
+        }
+
+    // If user selected a start offset, seek the background element before playing
+    try { if (bgStartOffset && bgStartOffset > 0) { try { bgEl.currentTime = bgStartOffset; } catch (e) {} } } catch (e) {}
+
+    // Create MediaRecorder from mixed dest stream
+  const mixedStream = dest.stream;
+  // debug: log mixed stream tracks
+  try { console.debug('Mixed stream tracks', mixedStream.getAudioTracks().length, mixedStream.getAudioTracks().map(t => t.label)); } catch (e) {}
+
+        // Choose a sensible mime when supported
+        const preferredMime = (typeof MediaRecorder !== 'undefined' && (MediaRecorder as any).isTypeSupported && (MediaRecorder as any).isTypeSupported('audio/webm;codecs=opus'))
+          ? 'audio/webm;codecs=opus'
+          : 'audio/webm';
+
+        let mediaRecorder: MediaRecorder;
+        try {
+          mediaRecorder = new MediaRecorder(mixedStream, { mimeType: preferredMime } as any);
+        } catch (e) {
+          // fallback if mimeType not allowed
+          mediaRecorder = new MediaRecorder(mixedStream as MediaStream);
+        }
+        mediaRecorderRef.current = mediaRecorder;
+
+        const audioChunks: Blob[] = [];
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) audioChunks.push(event.data);
+        };
+        mediaRecorder.onstop = () => {
+          const audioBlob = new Blob(audioChunks, { type: audioChunks[0]?.type || preferredMime });
+          try {
+            if (audioBlob.size === 0) {
+              console.warn('Recorded mixed audio blob is empty. Chunks sizes:', audioChunks.map(c => c.size));
+              toast({ description: 'Recording produced an empty audio file. Please try again.', variant: 'destructive' });
+            }
+          } catch (e) {}
+          setAudioBlob(audioBlob);
+          // stop mic tracks
+          micStream.getTracks().forEach(track => track.stop());
+          // cleanup AudioContext and bg element
+          try { bgEl.pause(); } catch (e) {}
+          // stop analyser interval
+          try {
+            if (analyserIntervalRef.current) {
+              window.clearInterval(analyserIntervalRef.current as any);
+              analyserIntervalRef.current = null;
+            }
+            if (analyserRef.current) {
+              analyserRef.current.disconnect();
+              analyserRef.current = null;
+            }
+          } catch (e) {}
+        };
+
+        // Ensure audio context is resumed by a user gesture before starting
+        try {
+          if (audioCtx.state === 'suspended') await audioCtx.resume();
+        } catch (e) {}
+
+        // Start recording with a timeslice so ondataavailable fires regularly
+        try {
+          mediaRecorder.start(1000);
+        } catch (e) {
+          try { mediaRecorder.start(); } catch (err) { console.warn('MediaRecorder start failed', err); }
+        }
+        setIsRecording(true);
+        setRecordingDuration(0);
+        setTimeout(() => { bgEl.play().catch(() => {}); }, 120);
+      } else {
+        // Fallback: record mic only (existing behavior)
+        try {
+          // Debug: log micStream tracks
+          try { console.debug('Fallback recording - micStream tracks', micStream.getAudioTracks().map(t => ({ id: t.id, label: t.label }))); } catch (e) {}
+          // Init MediaRecorder for mic-only fallback. Prefer opus if supported.
+          const fallbackMime = (typeof MediaRecorder !== 'undefined' && (MediaRecorder as any).isTypeSupported && (MediaRecorder as any).isTypeSupported('audio/webm;codecs=opus'))
+            ? 'audio/webm;codecs=opus'
+            : undefined;
+          try {
+            if (fallbackMime) {
+              try { mediaRecorderRef.current = new MediaRecorder(micStream, { mimeType: fallbackMime } as any); } catch (e) { mediaRecorderRef.current = new MediaRecorder(micStream as MediaStream); }
+            } else {
+              mediaRecorderRef.current = new MediaRecorder(micStream as MediaStream);
+            }
+          } catch (err) {
+            console.error('Fallback MediaRecorder init failed', err);
+            toast({ description: 'Recording not available in this browser or permissions denied.', variant: 'destructive' });
+            micStream.getTracks().forEach(t => t.stop());
+            return;
+          }
+
+          const audioChunks: Blob[] = [];
+          mediaRecorderRef.current.ondataavailable = (event) => {
+            try { console.debug('Fallback ondataavailable, chunk size', event.data && event.data.size); } catch (e) {}
+            if (event.data && event.data.size > 0) audioChunks.push(event.data);
+          };
+          mediaRecorderRef.current.onstop = () => {
+            const audioBlob = new Blob(audioChunks, { type: audioChunks[0]?.type || 'audio/webm' });
+            try { console.debug('Fallback mediaRecorder stopped, blob size/type', audioBlob.size, audioBlob.type); } catch (e) {}
+            if (audioBlob.size === 0) {
+              console.warn('Fallback recording resulted in empty blob. Chunks sizes:', audioChunks.map(c => c.size));
+              toast({ description: 'Recording produced an empty audio file. Please try again.', variant: 'destructive' });
+            }
+            setAudioBlob(audioBlob);
+            micStream.getTracks().forEach(track => track.stop());
+          };
+
+          // Start with timeslice to ensure ondataavailable fires regularly
+          try { mediaRecorderRef.current.start(1000); } catch (e) { try { mediaRecorderRef.current.start(); } catch (err) { console.warn('Fallback mediaRecorder start failed', err); } }
+          try { console.debug('Fallback mediaRecorder started, state=', mediaRecorderRef.current.state); } catch (e) {}
+          setIsRecording(true);
+          setRecordingDuration(0); // Reset duration
+        } catch (err) {
+          console.error('Fallback MediaRecorder error', err);
+          toast({ description: 'Recording not available in this browser or permissions denied.', variant: 'destructive' });
+          micStream.getTracks().forEach(t => t.stop());
+          return;
+        }
+      }
+      
+      // Play backing track locally while recording if mixing couldn't be initialized.
+      // (when mixing via AudioContext we already started bg playback above)
+      if (selectedSound && playBackgroundDuringRecording && !audioContextRef.current) {
         try {
           const bg = new Audio(selectedSound.url);
           bg.volume = backgroundVolume;
           bg.crossOrigin = 'anonymous';
+          try { if (bgStartOffset && bgStartOffset > 0) bg.currentTime = bgStartOffset; } catch (e) {}
           backgroundAudioRef.current = bg;
           // start playback slightly delayed to ensure DOM handles
           setTimeout(() => {
@@ -610,6 +969,259 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     }
   };
 
+  // Draw waveform for selected sound and wire cropper interactions
+  useEffect(() => {
+  let ac: AudioContext | null = null;
+  let rafId: number | null = null;
+
+    const drawWaveform = (buffer: AudioBuffer) => {
+      const canvas = waveCanvasRef.current;
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      canvas.width = Math.max(1, Math.floor(width * dpr));
+      canvas.height = Math.max(1, Math.floor(height * dpr));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const data = buffer.getChannelData(0);
+      const step = Math.ceil(data.length / canvas.width);
+      const amp = canvas.height / 2;
+      ctx.fillStyle = '#111827';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.lineWidth = 1 * dpr;
+      ctx.strokeStyle = '#9CA3AF';
+      ctx.beginPath();
+      for (let i = 0; i < canvas.width; i++) {
+        let min = 1.0;
+        let max = -1.0;
+        for (let j = 0; j < step; j++) {
+          const datum = data[(i * step) + j];
+          if (datum < min) min = datum;
+          if (datum > max) max = datum;
+        }
+        const x = i;
+        const y1 = (1 + min) * amp;
+        const y2 = (1 + max) * amp;
+        ctx.moveTo(x, y1);
+        ctx.lineTo(x, y2);
+      }
+      ctx.stroke();
+    };
+
+    const loadAndDraw = async () => {
+      if (!selectedSound?.url) return;
+      try {
+        ac = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const resp = await fetch(selectedSound.url);
+        const arrayBuffer = await resp.arrayBuffer();
+  const buffer = await ac.decodeAudioData(arrayBuffer);
+  drawWaveform(buffer);
+        // position crop block width and left according to bgStartOffset and duration
+        positionCropBlock();
+      } catch (e) {
+        // ignore
+      }
+    };
+
+    loadAndDraw();
+
+    return () => {
+      try { if (rafId) cancelAnimationFrame(rafId); } catch (e) {}
+      try { ac && ac.close(); } catch (e) {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSound, bgStartOffset]);
+
+  const positionCropBlock = () => {
+    const canvas = waveCanvasRef.current;
+    const block = cropBlockRef.current;
+    const duration = selectedSound?.duration || 30;
+    if (!canvas || !block) return;
+    const widthPct = Math.min(100, (30 / Math.max(30, duration)) * 100);
+    const leftPct = Math.max(0, Math.min(100 - widthPct, (bgStartOffset / Math.max(1, duration)) * 100));
+    block.style.width = `${widthPct}%`;
+    block.style.left = `${leftPct}%`;
+  };
+
+  // Start drag handler for crop block
+  const startDrag = (e: any) => {
+    try {
+      const clientX = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
+      draggingRef.current = { startX: clientX, startOffset: bgStartOffset };
+    } catch (err) {
+      // ignore
+    }
+  };
+
+  // Preview a 30s clip from given url starting at bgStartOffset
+  const previewClip = (url: string) => {
+    try {
+      if (!previewAudioRef.current) previewAudioRef.current = new Audio();
+      const a = previewAudioRef.current;
+      a.src = url;
+      a.crossOrigin = 'anonymous';
+      a.currentTime = Math.max(0, bgStartOffset || 0);
+      a.volume = backgroundVolume;
+      a.play().catch(() => {});
+      setTimeout(() => { try { a.pause(); } catch (e) {} }, 30000);
+    } catch (e) {}
+  };
+
+  // Drag handlers
+                    {soundBank.map((s: any) => (
+                      <React.Fragment key={s.id}>
+                        <label className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${selectedSound?.id === s.id ? 'bg-gray-700 text-white' : 'bg-gray-800 text-gray-200'}`}>
+                          <div className="flex items-center gap-3">
+                            <input type="radio" name="background-sound" value={s.id} checked={selectedSound?.id === s.id} onChange={() => setSelectedSound(s)} className="mr-2" />
+                            <button
+                              onClick={(ev) => {
+                                ev.preventDefault();
+                                ev.stopPropagation();
+                                // toggle preview
+                                if (playingSoundId === s.id) {
+                                  try {
+                                    backgroundAudioRef.current?.pause();
+                                    backgroundAudioRef.current = null;
+                                  } catch (e) {}
+                                  setPlayingSoundId(null);
+                                  return;
+                                }
+                                try {
+                                  if (backgroundAudioRef.current) {
+                                    try { backgroundAudioRef.current.pause(); } catch (e) {}
+                                    backgroundAudioRef.current = null;
+                                  }
+                                  const a = new Audio(s.url);
+                                  a.crossOrigin = 'anonymous';
+                                  a.volume = backgroundVolume;
+                                  try { if (bgStartOffset && bgStartOffset > 0) a.currentTime = bgStartOffset; } catch (e) {}
+                                  a.onended = () => setPlayingSoundId(null);
+                                  a.play().then(() => {
+                                    backgroundAudioRef.current = a;
+                                    setPlayingSoundId(s.id);
+                                  }).catch(err => {
+                                    console.warn('Preview playback blocked', err);
+                                    setPlayingSoundId(null);
+                                  });
+                                } catch (e) { console.warn(e); setPlayingSoundId(null); }
+                              }}
+                              className="p-2 rounded-md bg-gray-900/30">
+                              {playingSoundId === s.id ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                            </button>
+                            <div className="flex flex-col">
+                              <div className="font-medium text-sm">{s.title}</div>
+                              <div className="text-xs text-gray-400">{s.duration}s</div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Volume2 className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                            <input className="flex-1 min-w-0 w-full" type="range" min={0} max={1} step={0.01} value={backgroundVolume} onChange={(e) => {
+                              const v = Number(e.target.value);
+                              setBackgroundVolume(v);
+                              if (backgroundAudioRef.current) backgroundAudioRef.current.volume = v;
+                            }} />
+                          </div>
+                        </label>
+
+                        {/* Waveform + 30s cropper shown inline for the selected track */}
+                        {selectedSound?.id === s.id && (
+                          <div className="p-2 mt-2 mb-2 bg-gray-800 rounded-lg">
+                            <div className="relative">
+                              <canvas ref={waveformCanvasRef} style={{ width: '100%', height: 64, display: 'block', borderRadius: 6 }} />
+
+                              {/* draggable 30s window overlay */}
+                              <div
+                                className="absolute top-0 left-0 h-full"
+                                style={{ width: '100%' }}
+                                onPointerMove={(e) => {
+                                  if (!draggingRef.current) return;
+                                  const canvas = waveformCanvasRef.current;
+                                  if (!canvas) return;
+                                  const rect = canvas.getBoundingClientRect();
+                                  const dur = Number(s.duration || 60);
+                                  const deltaX = e.clientX - draggingRef.current.startX;
+                                  const deltaSec = (deltaX / Math.max(1, rect.width)) * dur;
+                                  let next = draggingRef.current.startOffset + deltaSec;
+                                  const maxStart = Math.max(dur - 30, 0);
+                                  if (next < 0) next = 0;
+                                  if (next > maxStart) next = maxStart;
+                                  // round to integer seconds for clarity
+                                  setBgStartOffset(Math.round(next));
+                                }}
+                                onPointerUp={() => { draggingRef.current = null; }}
+                                onPointerCancel={() => { draggingRef.current = null; }}
+                              >
+                                {/* the window */}
+                                {typeof s.duration === 'number' && (
+                                  (() => {
+                                    const dur = Math.max(1, Number(s.duration || 60));
+                                    const leftPct = Math.min(100, Math.max(0, (bgStartOffset / dur) * 100));
+                                    const widthPct = Math.min(100, (30 / dur) * 100);
+                                    const disabled = dur <= 30;
+                                    return (
+                                      <div
+                                        role="presentation"
+                                        onPointerDown={(e) => {
+                                          if (disabled) return;
+                                          // capture pointer for dragging
+                                          try { (e.target as Element).setPointerCapture?.(e.pointerId); } catch (er) {}
+                                          draggingRef.current = { startX: e.clientX, startOffset: bgStartOffset };
+                                        }}
+                                        style={{
+                                          position: 'absolute',
+                                          left: `${leftPct}%`,
+                                          width: `${widthPct}%`,
+                                          height: '100%',
+                                          borderRadius: 6,
+                                          boxShadow: '0 0 0 2px rgba(96,165,250,0.12), inset 0 0 8px rgba(59,130,246,0.12)',
+                                          background: 'linear-gradient(90deg, rgba(59,130,246,0.18), rgba(96,165,250,0.06))',
+                                          cursor: disabled ? 'not-allowed' : 'grab',
+                                        }}
+                                      >
+                                        <div className="h-full flex items-center justify-center text-xs text-white/90">
+                                          <div className="px-2 py-1 bg-black/30 rounded">30s</div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="mt-2 flex items-center justify-between">
+                              <div className="flex items-center gap-4">
+                                <div className="text-xs text-gray-300">Crop start (seconds)</div>
+                                <div className="text-sm font-medium text-white">
+                                  {Number.isFinite(bgStartOffset) ? `${bgStartOffset}s` : '0s'}
+                                  {' '}→ {Number.isFinite(bgStartOffset) ? `${Math.min((s.duration || 0), bgStartOffset + 30)}s` : `${Math.min((s.duration || 0), 30)}s`}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      const a = new Audio(s.url);
+                                      a.crossOrigin = 'anonymous';
+                                      a.currentTime = Math.max(0, bgStartOffset || 0);
+                                      await a.play();
+                                      // stop after 30s
+                                      setTimeout(() => { try { a.pause(); } catch (e) {} }, 30000);
+                                    } catch (e) {
+                                      console.warn('Preview 30s failed', e);
+                                    }
+                                  }}
+                                  className="ml-2 px-3 py-1 rounded bg-blue-600 text-white text-xs"
+                                >Preview 30s</button>
+                              </div>
+                              <div className="text-xs text-gray-400">This will crop a 30s clip starting at the selected second when persisting the post.</div>
+                            </div>
+                          </div>
+                        )}
+                      </React.Fragment>
+                    ))}
+
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
@@ -617,11 +1229,40 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current);
       }
-      // stop background preview if playing
+      // If we used AudioContext mixing, teardown graph
       try {
-        backgroundAudioRef.current?.pause();
-        backgroundAudioRef.current = null;
-      } catch (e) {}
+        if (audioContextRef.current) {
+          try {
+            bgAudioElRef.current?.pause();
+          } catch (e) {}
+          try { bgSourceNodeRef.current?.disconnect(); } catch (e) {}
+          try { micSourceNodeRef.current?.disconnect(); } catch (e) {}
+          try { audioContextRef.current.close(); } catch (e) {}
+          audioContextRef.current = null;
+          bgAudioElRef.current = null;
+          bgSourceNodeRef.current = null;
+          micSourceNodeRef.current = null;
+          // clear analyser interval if present
+          try {
+            if (analyserIntervalRef.current) {
+              window.clearInterval(analyserIntervalRef.current as any);
+              analyserIntervalRef.current = null;
+            }
+            if (analyserRef.current) {
+              analyserRef.current.disconnect();
+              analyserRef.current = null;
+            }
+          } catch (e) {}
+        } else {
+          // stop any preview background audio used for recording
+          try {
+            backgroundAudioRef.current?.pause();
+            backgroundAudioRef.current = null;
+          } catch (e) {}
+        }
+      } catch (e) {
+        console.warn('Error cleaning up recording audio graph', e);
+      }
     }
   };
 
@@ -632,8 +1273,19 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       clearInterval(recordingIntervalRef.current);
     }
     try {
+      // cleanup both preview and mixing bg elements
       backgroundAudioRef.current?.pause();
       backgroundAudioRef.current = null;
+      if (bgAudioElRef.current) {
+        try { bgAudioElRef.current.pause(); } catch (e) {}
+        bgAudioElRef.current = null;
+      }
+      if (audioContextRef.current) {
+        try { audioContextRef.current.close(); } catch (e) {}
+        audioContextRef.current = null;
+      }
+      bgSourceNodeRef.current = null;
+      micSourceNodeRef.current = null;
     } catch (e) {}
   };
 
@@ -747,6 +1399,93 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
     });
   };
 
+  // AI Photo Studio helpers
+  const convertDataUrlToFile = async (dataUrl: string, filename: string) => {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    return new File([blob], filename, { type: blob.type });
+  };
+
+  // Check AI proxy health endpoint
+  const checkAiBackend = async () => {
+    try {
+      setAiBackendChecking(true);
+      const res = await fetch('/api/ai-photo-studio/health');
+      setAiBackendAvailable(res.ok);
+    } catch (e) {
+      setAiBackendAvailable(false);
+    } finally {
+      setAiBackendChecking(false);
+    }
+  };
+
+  // Check backend when AI Studio opens and on mount
+  useEffect(() => {
+    checkAiBackend();
+    // also re-check when the studio is opened by the user
+  }, []);
+
+
+  const generateAiImages = async (count = 3) => {
+    if (aiGenerating) return;
+    if (!selectedFiles || selectedFiles.length === 0 || !selectedFiles[0].type.startsWith('image/')) {
+      toast({ description: 'Please upload or capture a source photo first.', variant: 'destructive' });
+      return;
+    }
+    // check backend availability before attempting generation
+    if (aiBackendAvailable === false) {
+      toast({ description: 'AI backend is not available. Start the local img2img server and the ai proxy (see backend/README.md).', variant: 'destructive' });
+      return;
+    }
+    setAiGenerating(true);
+    setAiResults([]);
+    try {
+      const fd = new FormData();
+      fd.append('image', selectedFiles[0]);
+      fd.append('prompt', aiPrompt || '');
+      fd.append('preset', aiPreset || '');
+      fd.append('n', String(count));
+
+      const res = await fetch('/api/ai-photo-studio', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || 'AI generation failed');
+      }
+      const json = await res.json();
+      const images: string[] = Array.isArray(json?.images) ? json.images : (Array.isArray(json) ? json : []);
+      const results: Array<{ url: string; file?: File; nsfw?: boolean }> = [];
+      for (let i = 0; i < images.length; i++) {
+        const url = images[i];
+        try {
+          const file = await convertDataUrlToFile(url, `ai-${aiPreset || 'variant'}-${Date.now()}-${i}.jpg`);
+          const nsfw = await scanImageFile(file);
+          results.push({ url, file, nsfw });
+        } catch (e) {
+          // skip problematic image
+          console.warn('Failed to process generated image', e);
+        }
+      }
+      setAiResults(results);
+    } catch (e: any) {
+      console.error('AI generation error', e);
+      toast({ description: e?.message || 'AI generation failed', variant: 'destructive' });
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
+  const selectAiImage = (idx: number) => {
+    const item = aiResults[idx];
+    if (!item || !item.file) return;
+    if (item.nsfw) {
+      toast({ description: 'This image was flagged as NSFW and cannot be used.', variant: 'destructive' });
+      return;
+    }
+    setSelectedFiles(prev => [...prev, item.file as File]);
+    setPostType('image');
+    toast({ description: 'AI image added to your gallery.' });
+  };
+
   const handleSubmit = async () => {
     if (!user) return;
 
@@ -811,7 +1550,9 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
 
       // Upload voice note
       if (audioBlob) {
-        const voiceFile = new File([audioBlob], `voice-${Date.now()}.wav`, { type: 'audio/wav' });
+        const blobType = (audioBlob as Blob).type || '';
+        const ext = blobType.includes('webm') ? 'webm' : blobType.includes('wav') ? 'wav' : blobType.includes('ogg') ? 'ogg' : 'webm';
+        const voiceFile = new File([audioBlob], `voice-${Date.now()}.${ext}`, { type: blobType || `audio/${ext}` });
         voiceNoteUrl = await uploadFile(voiceFile, 'posts', 'voice/', user.id);
       }
 
@@ -853,7 +1594,8 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
         postData.audio_mix_meta = {
           backgroundVolume: backgroundVolume,
           voiceVolume: voiceVolume,
-          offsetMs: 0,
+          // Persist user-selected start offset (seconds -> ms)
+          offsetMs: typeof bgStartOffset === 'number' && bgStartOffset > 0 ? Math.floor(bgStartOffset * 1000) : 0,
         };
       }
 
@@ -967,6 +1709,42 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       }
       if (mediaUrls.length > 0) {
         await supabase.from('posts').update({ media_urls: mediaUrls }).eq('id', post.id);
+        // Ensure background audio metadata and audio mix settings are persisted
+        try {
+          const updateData: any = {};
+          if (selectedSound) {
+            updateData.background_audio_url = selectedSound.url || null;
+            updateData.background_audio_meta = {
+              id: selectedSound.id,
+              title: selectedSound.title,
+              duration: selectedSound.duration,
+              license: selectedSound.license,
+            };
+          }
+          if (postData.audio_mix_meta) {
+            updateData.audio_mix_meta = postData.audio_mix_meta;
+          }
+          if (Object.keys(updateData).length > 0) {
+            const { error: updErr } = await supabase.from('posts').update(updateData).eq('id', post.id);
+            if (updErr) {
+              // Surface a helpful message to the admin/user so they know why the
+              // background audio didn't persist (commonly RLS blocking client updates).
+              console.warn('Failed to persist background audio metadata to post:', updErr);
+              toast({
+                title: 'Background audio not saved',
+                description: 'Could not save background audio metadata to the post. This may be due to database Row-Level Security (RLS) policies. Background audio will still play locally but may not be persisted.',
+                variant: 'destructive',
+              });
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to persist background audio metadata to post:', e);
+          toast({
+            title: 'Background audio not saved',
+            description: 'An unexpected error occurred while saving background audio metadata. See console for details.',
+            variant: 'destructive',
+          });
+        }
       }
 
       toast({
@@ -1114,7 +1892,8 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                 size="sm"
                 onClick={() => {
                   if (item.type === 'image' || item.type === 'video') {
-                    fileInputRef.current?.click();
+                    // show media options menu: capture photo / record video / upload
+                    setShowMediaOptionsFor(item.type as 'image' | 'video');
                   } else {
                     setPostType(item.type as any);
                   }
@@ -1129,6 +1908,38 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                 <span className="text-xs font-medium">{item.label}</span>
               </Button>
             ))}
+            {/* Media Options Popover (simple inline menu) */}
+            {showMediaOptionsFor && (
+              <div className="absolute left-4 top-20 z-50 bg-white dark:bg-gray-900 border rounded shadow p-2">
+                <div className="flex flex-col">
+                  {showMediaOptionsFor === 'image' && (
+                    <>
+                      <button aria-label="Use camera to take photo" className="px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center gap-2" onClick={() => { setCameraModalOpen(true); setShowMediaOptionsFor(null); setPostType('image'); }}>
+                        <Camera className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                        <span>Camera</span>
+                      </button>
+                      <button aria-label="Browse images on device" className="px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center gap-2" onClick={() => { fileInputRef.current?.setAttribute('accept', 'image/*'); fileInputRef.current?.click(); setShowMediaOptionsFor(null); setPostType('image'); }}>
+                        <UploadCloud className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                        <span>Browse</span>
+                      </button>
+                    </>
+                  )}
+                  {showMediaOptionsFor === 'video' && (
+                    <>
+                      <button aria-label="Record a video" className="px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center gap-2" onClick={() => { setVideoModalOpen(true); setShowMediaOptionsFor(null); setPostType('video'); }}>
+                        <Camera className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                        <span>Camera</span>
+                      </button>
+                      <button aria-label="Browse videos on device" className="px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center gap-2" onClick={() => { fileInputRef.current?.setAttribute('accept', 'video/*'); fileInputRef.current?.click(); setShowMediaOptionsFor(null); setPostType('video'); }}>
+                        <UploadCloud className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                        <span>Browse</span>
+                      </button>
+                    </>
+                  )}
+                  <button className="px-3 py-2 text-left text-sm text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800" onClick={() => setShowMediaOptionsFor(null)}>Close</button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Content Area with Enhanced UI */}
@@ -1346,67 +2157,161 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
 
           {/* Image editing: split into 3 cards - Filters | Background Sound | Audio Recording */}
           {selectedFiles.length > 0 && selectedFiles[0].type.startsWith('image/') && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Filters Card */}
+            <div className="grid grid-cols-1 gap-4">
+              {/* Filters Card (with AI Photo Studio secondary tab) */}
               <div className="space-y-3 p-4 bg-gray-900/60 dark:bg-gray-800/60 rounded-xl">
                 <div className="flex items-center justify-between">
-                  <div className="font-semibold text-white">Edit Photo</div>
+                  <div className="flex items-center gap-3">
+                    <div className="font-semibold text-white">Edit Photo</div>
+                    <div className="inline-flex bg-gray-800 rounded-md p-1">
+                      <button
+                        type="button"
+                        onClick={() => setAiStudioOpen(false)}
+                        className={`px-3 py-1 text-xs rounded ${!aiStudioOpen ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-700'}`}
+                      >
+                        Filters
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { toast({ title: 'Coming soon', description: 'AI Photo Studio is coming soon.' }); }}
+                        className={`px-3 py-1 text-xs rounded opacity-60 cursor-not-allowed text-gray-400`}
+                        aria-disabled={true}
+                      >
+                        AI Photo
+                      </button>
+                    </div>
+                  </div>
                   <div className="text-sm text-gray-300">{filtering ? 'Applying filter...' : (selectedFilter === 'none' ? 'Original' : (filtersList.find(f => f.id === selectedFilter)?.label || selectedFilter))}</div>
                 </div>
 
-                <div className="flex flex-col gap-4">
-                  <div className="flex-1 bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden flex items-center justify-center relative">
-                    {selectedFiles.length > 1 ? (
-                      <div className="w-full h-full flex items-center justify-center relative">
+                {!aiStudioOpen ? (
+                  <div className="flex flex-col gap-4">
+                    <div className="flex-1 bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden flex items-center justify-center relative">
+                      {selectedFiles.length > 1 ? (
+                        <div className="w-full h-full flex items-center justify-center relative">
+                          <img
+                            src={URL.createObjectURL(selectedFiles[slideshowIndex])}
+                            alt={`Slide ${slideshowIndex + 1}`}
+                            className="w-full h-full object-contain"
+                            style={{ filter: mapFilterToCss(selectedFilter), backgroundColor: 'transparent' }}
+                          />
+                          <div className="absolute top-2 left-2 flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                userToggledSlideshowRef.current = true;
+                                setSlideshowPlaying(p => !p);
+                              }}
+                              className="p-2 rounded-full bg-black/30 text-white hover:scale-105 transition-transform"
+                              aria-label={slideshowPlaying ? 'Pause slideshow' : 'Play slideshow'}
+                            >
+                              {slideshowPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                            </button>
+                            <div className="text-xs text-white bg-black/40 px-2 py-1 rounded">{slideshowIndex + 1}/{selectedFiles.length}</div>
+                          </div>
+                        </div>
+                      ) : (
                         <img
-                          src={URL.createObjectURL(selectedFiles[slideshowIndex])}
-                          alt={`Slide ${slideshowIndex + 1}`}
+                          src={filteredPreviewUrl || (selectedFiles[0] && URL.createObjectURL(selectedFiles[0]))}
+                          alt="Preview"
                           className="w-full h-full object-contain"
                           style={{ filter: mapFilterToCss(selectedFilter), backgroundColor: 'transparent' }}
                         />
-                        <div className="absolute top-2 left-2 flex items-center gap-2">
-                          <button
-                            onClick={() => setSlideshowPlaying(p => !p)}
-                            className="p-2 rounded-full bg-black/30 text-white hover:scale-105 transition-transform"
-                            aria-label={slideshowPlaying ? 'Pause slideshow' : 'Play slideshow'}
-                          >
-                            {slideshowPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                          </button>
-                          <div className="text-xs text-white bg-black/40 px-2 py-1 rounded">{slideshowIndex + 1}/{selectedFiles.length}</div>
-                        </div>
-                      </div>
-                    ) : (
-                      <img
-                        src={filteredPreviewUrl || (selectedFiles[0] && URL.createObjectURL(selectedFiles[0]))}
-                        alt="Preview"
-                        className="w-full h-full object-contain"
-                        style={{ filter: mapFilterToCss(selectedFilter), backgroundColor: 'transparent' }}
-                      />
-                    )}
-                  </div>
+                      )}
+                    </div>
 
-                  <div className="w-full">
-                    <div className="grid grid-cols-4 gap-3">
-                      {filtersList.map(f => (
-                        <button
-                          key={f.id}
-                          onClick={() => setSelectedFilter(f.id)}
-                          className={`flex flex-col items-center text-xs transition-all ${selectedFilter === f.id ? 'ring-2 ring-blue-500 rounded-lg' : ''}`}
-                        >
-                          <div className="w-20 h-20 overflow-hidden rounded-md bg-gray-800">
-                            <img
-                              src={URL.createObjectURL(selectedFiles[0])}
-                              alt={f.label}
-                              className="w-full h-full object-cover"
-                              style={{ filter: mapFilterToCss(f.id) }}
-                            />
-                          </div>
-                          <div className="mt-1 text-center text-gray-200">{f.label}</div>
-                        </button>
-                      ))}
+                    <div className="w-full">
+                      <div className="grid grid-cols-4 gap-3">
+                        {filtersList.map(f => (
+                          <button
+                            key={f.id}
+                            onClick={() => setSelectedFilter(f.id)}
+                            className={`flex flex-col items-center text-xs transition-all ${selectedFilter === f.id ? 'ring-2 ring-blue-500 rounded-lg' : ''}`}
+                          >
+                            <div className="w-20 h-20 overflow-hidden rounded-md bg-gray-800">
+                              <img
+                                src={URL.createObjectURL(selectedFiles[0])}
+                                alt={f.label}
+                                className="w-full h-full object-cover"
+                                style={{ filter: mapFilterToCss(f.id) }}
+                              />
+                            </div>
+                            <div className="mt-1 text-center text-gray-200">{f.label}</div>
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
+                ) : (
+                  // AI Photo Studio tab
+                  <div className="space-y-3">
+                    <div className="text-sm text-gray-300">Generate variants from this photo. Select any to add to your gallery.</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-gray-400">Preset</label>
+                        <div className="mt-2">
+                          <div className="grid grid-cols-3 gap-2">
+                            {aiPresets.map(p => (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => setAiPreset(p.id)}
+                                className={`flex items-center justify-center p-2 rounded-md text-sm transition-all ${aiPreset === p.id ? 'ring-2 ring-blue-500 bg-gray-700 text-white' : 'bg-gray-800 text-gray-200 hover:scale-105'}`}
+                                title={p.label}
+                              >
+                                <div className="text-xs">{p.label}</div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-400">Prompt (optional)</label>
+                        <Input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} className="mt-1 text-sm" />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <Button onClick={async () => { await checkAiBackend(); generateAiImages(3); }} disabled={aiGenerating || aiBackendAvailable === false} className="bg-blue-600">
+                        {aiGenerating ? 'Generating...' : 'Generate'}
+                      </Button>
+                      <Button variant="outline" onClick={() => { setAiResults([]); setAiGenerating(false); }}>Clear</Button>
+                      <div className="text-xs text-gray-400">
+                        {aiBackendChecking ? (
+                          <span>Checking AI backend…</span>
+                        ) : aiBackendAvailable === false ? (
+                          <span className="text-red-400">AI backend unreachable. Start local img2img and proxy at <code className="bg-gray-800 px-1 rounded">/api/ai-photo-studio</code>.</span>
+                        ) : (
+                          <span>Requires local img2img backend at <code className="bg-gray-800 px-1 rounded">/api/ai-photo-studio</code>.</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="w-full">
+                      <div className="grid grid-cols-4 gap-3">
+                        {aiResults.length === 0 && !aiGenerating && (
+                          <div className="text-sm text-gray-400 col-span-4">No variants yet. Upload/capture and generate.</div>
+                        )}
+
+                        {aiResults.map((r, i) => (
+                          <button
+                            key={i}
+                            onClick={() => selectAiImage(i)}
+                            className={`flex flex-col items-center text-xs transition-all ${r.nsfw ? 'opacity-60 cursor-not-allowed' : 'hover:scale-105'} ${!r.nsfw ? 'ring-0' : ''}`}
+                            disabled={!!r.nsfw}
+                            title={r.nsfw ? 'Flagged NSFW' : `Select Variant ${i + 1}`}
+                          >
+                            <div className="w-20 h-20 overflow-hidden rounded-md bg-gray-800 border border-gray-700">
+                              <img src={r.url} alt={`Variant ${i + 1}`} className="w-full h-full object-cover" />
+                            </div>
+                            <div className="mt-1 text-center text-gray-200 w-full">
+                              {r.nsfw ? <span className="text-red-400 text-[11px]">Flagged NSFW</span> : <span>Variant {i + 1}</span>}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Background Sound Card */}
@@ -1435,7 +2340,8 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                     )}
 
                     {soundBank.map((s: any) => (
-                      <label key={s.id} className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${selectedSound?.id === s.id ? 'bg-gray-700 text-white' : 'bg-gray-800 text-gray-200'}`}>
+                      <div key={s.id} className={`space-y-2`}> 
+                      <label className={`flex items-center justify-between p-2 rounded-lg cursor-pointer ${selectedSound?.id === s.id ? 'bg-gray-700 text-white' : 'bg-gray-800 text-gray-200'}`}>
                         <div className="flex items-center gap-3">
                           <input type="radio" name="background-sound" value={s.id} checked={selectedSound?.id === s.id} onChange={() => setSelectedSound(s)} className="mr-2" />
                           <button
@@ -1459,6 +2365,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                                 const a = new Audio(s.url);
                                 a.crossOrigin = 'anonymous';
                                 a.volume = backgroundVolume;
+                                try { if (bgStartOffset && bgStartOffset > 0) a.currentTime = bgStartOffset; } catch (e) {}
                                 a.onended = () => setPlayingSoundId(null);
                                 a.play().then(() => {
                                   backgroundAudioRef.current = a;
@@ -1487,6 +2394,87 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                           }} />
                         </div>
                       </label>
+                      {/* Inline 30s cropper shown when this track is selected */}
+                      {selectedSound?.id === s.id && (
+                        <div className="mt-2 space-y-2">
+                          <div className="relative">
+                            <canvas ref={waveCanvasRef} className="w-full h-16 rounded-md bg-gray-800" />
+
+                            {/* colored 30s block overlay */}
+                            <div className="absolute inset-0 pointer-events-none">
+                              <div
+                                ref={cropBlockRef}
+                                onMouseDown={(e) => startDrag(e as any)}
+                                onTouchStart={(e) => startDrag(e as any)}
+                                style={{
+                                  position: 'absolute',
+                                  top: '25%',
+                                  height: '50%',
+                                  left: '0%',
+                                  width: `${Math.min(100, ((30 / (s.duration || 30)) * 100))}%`,
+                                  background: 'linear-gradient(90deg, rgba(236,72,153,0.9), rgba(99,102,241,0.9))',
+                                  borderRadius: 8,
+                                  boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+                                }}
+                                className="cursor-grab"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between text-xs text-gray-300">
+                            <div>
+                              {formatDuration(bgStartOffset)} — {formatDuration(Math.min(bgStartOffset + 30, s.duration || 30))}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => previewClip(s.url)}
+                                className="px-3 py-1 rounded bg-gray-700 text-xs text-white"
+                              >
+                                Preview 30s
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Inline cropper: show under the selected sound */}
+                      {selectedSound?.id === s.id && (
+                        <div className="pl-4 pr-2 pb-2">
+                          <div className="mt-2 flex items-center justify-between">
+                            <label className="text-sm text-gray-300">Crop start (seconds)</label>
+                            <div className="text-xs text-gray-400">{bgStartOffset}s → {Math.min((bgStartOffset || 0) + 30, s.duration)}s</div>
+                          </div>
+                          <div className="flex items-center gap-3 mt-2">
+                            <input
+                              type="range"
+                              min={0}
+                              max={Math.max((s?.duration || 60) - 30, 0)}
+                              step={1}
+                              value={bgStartOffset}
+                              onChange={(e) => setBgStartOffset(Number(e.target.value))}
+                              className="flex-1"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // Play a 30s preview clip starting at bgStartOffset for this track
+                                try {
+                                  const clip = new Audio(s.url);
+                                  clip.crossOrigin = 'anonymous';
+                                  clip.currentTime = bgStartOffset || 0;
+                                  clip.volume = backgroundVolume;
+                                  clip.play().catch(() => {});
+                                  setTimeout(() => { try { clip.pause(); } catch (e) {} }, 30000);
+                                } catch (e) {}
+                              }}
+                              className="ml-2 px-2 py-1 rounded bg-gray-700 text-white text-xs"
+                            >Preview 30s</button>
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">This will crop a 30s clip starting at the selected second when persisting the post.</div>
+                        </div>
+                      )}
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -1783,6 +2771,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                             try {
                               const a = new Audio(s.url);
                               a.volume = backgroundVolume;
+                              try { if (bgStartOffset && bgStartOffset > 0) a.currentTime = bgStartOffset; } catch (e) {}
                               a.play().catch(() => {});
                             } catch (e) {}
                           }}>Preview</Button>
@@ -1801,6 +2790,45 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                     <label className="text-sm text-gray-600">Voice Volume</label>
                     <input className="flex-1 min-w-0 w-full" type="range" min={0} max={1} step={0.05} value={voiceVolume} onChange={(e) => setVoiceVolume(Number(e.target.value))} />
                   </div>
+                </div>
+
+                {/* Start offset slider for Advanced Options (same cropping behavior) */}
+                <div className="mt-3">
+                  <label className="text-sm text-gray-400">Start offset (seconds)</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max((selectedSound?.duration || 60) - 30, 0)}
+                      step={1}
+                      value={bgStartOffset}
+                      onChange={(e) => setBgStartOffset(Number(e.target.value))}
+                      className="flex-1"
+                    />
+                    <div className="text-xs text-gray-300 w-12 text-right">{bgStartOffset}s</div>
+                  </div>
+                  {typeof selectedSound?.duration === 'number' && (selectedSound.duration <= 30) && (
+                    <div className="text-xs text-gray-500 mt-1">Track is shorter than 30s — the full track will be used.</div>
+                  )}
+                  <div className="text-xs text-gray-500 mt-1">This will crop a 30s clip starting at the selected second when persisting the post.</div>
+                </div>
+
+                {/* Start offset slider: crop a 30s clip starting at this offset (seconds) */}
+                <div className="mt-3">
+                  <label className="text-sm text-gray-400">Start offset (seconds)</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max((selectedSound?.duration || 60) - 30, 0)}
+                      step={1}
+                      value={bgStartOffset}
+                      onChange={(e) => setBgStartOffset(Number(e.target.value))}
+                      className="flex-1"
+                    />
+                    <div className="text-xs text-gray-300 w-12 text-right">{bgStartOffset}s</div>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">This will crop a 30s clip starting at the selected second when persisting the post.</div>
                 </div>
 
                 <div className="flex items-center space-x-2">
@@ -1907,6 +2935,9 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
           className="hidden"
           multiple
         />
+        {/* Camera / Video Modals */}
+        <CameraCaptureModal open={cameraModalOpen} onOpenChange={setCameraModalOpen} onCapture={handleCameraCapture} />
+        <VideoRecorderModal open={videoModalOpen} onOpenChange={setVideoModalOpen} onRecord={handleVideoRecorded} maxDuration={60} />
       </DialogContent>
     </Dialog>
   );

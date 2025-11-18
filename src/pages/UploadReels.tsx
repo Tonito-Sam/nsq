@@ -65,23 +65,31 @@ const UploadReels = () => {
   ];
 
   // Clone File objects to avoid permission issues (especially on Android WebView)
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Use an async arrayBuffer-based clone which is more robust in WebViews
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) {
       setVideoFiles([]);
       setVideoPreviews([]);
       return;
     }
-    // Clone files using File constructor
     const clonedFiles: File[] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
-        // Some browsers support File constructor for cloning
-        clonedFiles.push(new File([file], file.name, { type: file.type, lastModified: file.lastModified }));
-      } catch {
-        // Fallback: use original reference
-        clonedFiles.push(file);
+        // Read a copy of the file into an ArrayBuffer and create a fresh File instance.
+        // This avoids platform-specific handles (like content:// URIs) from being tied to
+        // the original File reference which can become unreadable in some WebViews.
+        const buf = await file.arrayBuffer();
+        clonedFiles.push(new File([buf], file.name, { type: file.type, lastModified: file.lastModified }));
+      } catch (err) {
+        try {
+          // Fallback: try cloning by passing the original file as a Blob part
+          clonedFiles.push(new File([file], file.name, { type: file.type, lastModified: file.lastModified }));
+        } catch {
+          // Last resort: keep the original reference
+          clonedFiles.push(file);
+        }
       }
     }
     setVideoFiles(clonedFiles);
