@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Play, Clock, Eye, Volume2, VolumeX, Heart, MessageCircle, Users } from 'lucide-react';
+import { Play, Pause, Clock, Eye, Volume2, VolumeX, Heart, MessageCircle, Users } from 'lucide-react';
 import { useShowContext } from '@/contexts/ShowContext';
 import { useViewTracking } from '@/hooks/useViewTracking';
 import { useLiveChatMessages } from '@/hooks/useLiveChatMessages';
@@ -27,6 +26,8 @@ interface VideoContainerProps {
   selectedShowId?: string;
   onLike?: () => void;
   onCommentClick?: () => void;
+  currentShowIndex?: number;
+  onCurrentShowChange?: (index: number) => void;
 }
 
 declare global {
@@ -40,7 +41,9 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   shows = [],
   selectedShowId,
   onLike = () => {},
-  onCommentClick = () => {}
+  onCommentClick = () => {},
+  currentShowIndex: externalCurrentShowIndex,
+  onCurrentShowChange
 }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [muted, setMuted] = useState(true);
@@ -161,30 +164,31 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
   // Show overlay on touch in fullscreen, hide after 3s
   useEffect(() => {
-    if (!isFullscreen) return;
-    
-    const handleUserInteraction = () => {
+    // Auto-hide overlay after 10s of inactivity. Re-show on mousemove/touchstart.
+    const HIDE_DELAY = 10000; // 10 seconds
+
+    const showAndReset = () => {
       setShowOverlay(true);
       if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
-      overlayTimeoutRef.current = setTimeout(() => setShowOverlay(false), 3000);
+      overlayTimeoutRef.current = setTimeout(() => setShowOverlay(false), HIDE_DELAY);
     };
 
-    const container = videoContainerRef.current;
-    if (container) {
-      container.addEventListener('touchstart', handleUserInteraction);
-      container.addEventListener('mousedown', handleUserInteraction);
-    }
+    const container = videoContainerRef.current || document.body;
+    // start with overlay visible and schedule hide
+    showAndReset();
 
-    overlayTimeoutRef.current = setTimeout(() => setShowOverlay(false), 3000);
+    // show overlay on interactions
+    container.addEventListener('mousemove', showAndReset as any);
+    container.addEventListener('mousedown', showAndReset as any);
+    container.addEventListener('touchstart', showAndReset as any);
 
     return () => {
-      if (container) {
-        container.removeEventListener('touchstart', handleUserInteraction);
-        container.removeEventListener('mousedown', handleUserInteraction);
-      }
+      container.removeEventListener('mousemove', showAndReset as any);
+      container.removeEventListener('mousedown', showAndReset as any);
+      container.removeEventListener('touchstart', showAndReset as any);
       if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
     };
-  }, [isFullscreen]);
+  }, []);
 
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 
@@ -200,8 +204,17 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       [arr[i], arr[j]] = [arr[j], arr[i]];
     }
     setShuffledShows(arr);
+    // initialize index and notify parent if present
     setCurrentShowIndex(0);
+    if (typeof onCurrentShowChange === 'function') onCurrentShowChange(0);
   }, [shows]);
+
+  // Accept external currentShowIndex if provided by parent (Feed)
+  useEffect(() => {
+    if (typeof externalCurrentShowIndex === 'number') {
+      setCurrentShowIndex(externalCurrentShowIndex);
+    }
+  }, [externalCurrentShowIndex]);
 
   const { setCurrentShow, setViewerCount, setLikeCount, viewerCount, likeCount } = useShowContext();
 
@@ -298,7 +311,9 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   }, []);
 
   const moveToNextShow = () => {
-    setCurrentShowIndex((prev) => (prev + 1) % sortedShows.length);
+    const nextIndex = (currentShowIndex + 1) % sortedShows.length;
+    setCurrentShowIndex(nextIndex);
+    if (typeof onCurrentShowChange === 'function') onCurrentShowChange(nextIndex);
   };
 
   useEffect(() => {
@@ -365,11 +380,50 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const handleVideoPlay = () => {
     console.log('Video started playing');
     setIsVideoPlaying(true);
+    setPaused(false);
   };
 
   const handleVideoPause = () => {
     console.log('Video paused');
     setIsVideoPlaying(false);
+    setPaused(true);
+  };
+
+  const togglePlayPause = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      // If a YouTube player is present, use its API
+      if (youtubePlayerRef.current && typeof youtubePlayerRef.current.playVideo === 'function') {
+        const state = youtubePlayerRef.current.getPlayerState ? youtubePlayerRef.current.getPlayerState() : null;
+        // YT state 1 == playing
+        if (state === 1) {
+          youtubePlayerRef.current.pauseVideo();
+          setIsVideoPlaying(false);
+          setPaused(true);
+        } else {
+          youtubePlayerRef.current.playVideo();
+          setIsVideoPlaying(true);
+          setPaused(false);
+        }
+        return;
+      }
+
+      // Native video element
+      if (videoRef.current) {
+        if (videoRef.current.paused) {
+          // attempt to play (may require user gesture in some browsers)
+          await videoRef.current.play();
+          setIsVideoPlaying(true);
+          setPaused(false);
+        } else {
+          videoRef.current.pause();
+          setIsVideoPlaying(false);
+          setPaused(true);
+        }
+      }
+    } catch (err) {
+      console.error('[VideoContainer] play/pause toggle error:', err);
+    }
   };
 
   const handleVideoTimeUpdate = () => {
@@ -459,6 +513,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   useEffect(() => {
     if (currentShowIndex >= sortedShows.length) {
       setCurrentShowIndex(0);
+      if (typeof onCurrentShowChange === 'function') onCurrentShowChange(0);
     }
   }, [currentShowIndex, sortedShows.length]);
 
@@ -608,72 +663,82 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             )}
 
             {/* Overlays and controls */}
-            {(isFullscreen ? showOverlay : true) && (
-              <>
-                {/* Exit fullscreen button (only in fullscreen) */}
-                {isFullscreen && (
-                  <button
-                    onClick={() => {
-                      setIsFullscreen(false);
-                      document.body.style.overflow = 'auto';
-                      if (document.exitFullscreen) {
-                        document.exitFullscreen();
-                      } else if ((document as any).webkitExitFullscreen) {
-                        (document as any).webkitExitFullscreen();
-                      } else if ((document as any).mozCancelFullScreen) {
-                        (document as any).mozCancelFullScreen();
-                      } else if ((document as any).msExitFullscreen) {
-                        (document as any).msExitFullscreen();
-                      }
-                    }}
-                    className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full z-20"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                )}
+            <div className={`absolute inset-0 transition-opacity duration-300 ${showOverlay ? 'opacity-100' : 'opacity-0'} pointer-events-none`}>
+              {/* Centered Play/Pause floating control */}
+              <button
+                onClick={(e) => { e.stopPropagation(); togglePlayPause(e); }}
+                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white p-3 rounded-full z-30 pointer-events-auto"
+                aria-label="Play/Pause"
+              >
+                {isVideoPlaying ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6" />}
+              </button>
 
-                {/* Live indicator */}
-                {currentShow?.is_live && (
-                  <div className={`absolute top-4 left-4 z-${isFullscreen ? '20' : '10'}`}> 
-                    <div className="flex items-center space-x-2">
-                      <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-                      <Badge className="bg-red-500 text-white text-sm font-medium">LIVE</Badge>
-                    </div>
-                  </div>
-                )}
-                {currentShow && (
-                  <div className={`absolute bottom-4 left-4 px-3 py-1 rounded-full text-sm font-medium z-${isFullscreen ? '20' : '10'} ${getTimeStatus(currentShow).className}`}>
-                    {currentShow.is_live && <Eye className="inline w-4 h-4 mr-1" />}
-                    {!currentShow.is_live && currentShow.scheduled_time && <Clock className="inline w-4 h-4 mr-1" />}
-                    {getTimeStatus(currentShow).text}
-                  </div>
-                )}
-                {/* Mobile Overlay Bar */}
-                <div className={`sm:hidden absolute bottom-16 right-2 flex flex-col space-y-2 z-${isFullscreen ? '20' : '10'}`}>
-                  <div className="flex flex-row items-center bg-black/50 text-white px-3 py-1 rounded-full">
-                    <Users className="w-4 h-4 text-red-500 mr-1" />
-                    <span className="text-[10px] font-medium">{viewerCount.toLocaleString()}</span>
-                  </div>
-                  <div className="flex flex-row items-center bg-black/50 text-pink-500 px-3 py-1 rounded-full cursor-pointer hover:bg-black/70" onClick={handleLike}>
-                    <Heart className="w-4 h-4 fill-current mr-1" />
-                    <span className="text-[10px] font-medium text-white">{likeCount}</span>
-                  </div>
-                  <div className="flex flex-row items-center bg-black/50 text-blue-500 px-3 py-1 rounded-full cursor-pointer hover:bg-black/70" onClick={handleCommentClick}>
-                    <MessageCircle className="w-4 h-4 mr-1" />
-                    <span className="text-[10px] font-medium text-white">{messages.length}</span>
+              {/* Exit fullscreen button (only in fullscreen) */}
+              {isFullscreen && (
+                <button
+                  onClick={() => {
+                    setIsFullscreen(false);
+                    document.body.style.overflow = 'auto';
+                    if (document.exitFullscreen) {
+                      document.exitFullscreen();
+                    } else if ((document as any).webkitExitFullscreen) {
+                      (document as any).webkitExitFullscreen();
+                    } else if ((document as any).mozCancelFullScreen) {
+                      (document as any).mozCancelFullScreen();
+                    } else if ((document as any).msExitFullscreen) {
+                      (document as any).msExitFullscreen();
+                    }
+                  }}
+                  className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full z-20 pointer-events-auto"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              )}
+
+              {/* Live indicator */}
+              {currentShow?.is_live && (
+                <div className={`absolute top-4 left-4 z-${isFullscreen ? '20' : '10'} pointer-events-auto`}> 
+                  <div className="flex items-center space-x-2">
+                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                    <Badge className="bg-red-500 text-white text-sm font-medium">LIVE</Badge>
                   </div>
                 </div>
-                {/* Mute toggle for YouTube in overlays */}
-                {isYouTubeUrl(currentShow?.video_url || '') && (
-                  <button
-                    onClick={handleMuteToggle}
-                    className={`absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full transition-colors z-${isFullscreen ? '20' : '10'}`}
-                  >
-                    {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                  </button>
-                )}
-              </>
-            )}
+              )}
+
+              {currentShow && (
+                <div className={`absolute bottom-4 left-4 px-3 py-1 rounded-full text-sm font-medium z-${isFullscreen ? '20' : '10'} ${getTimeStatus(currentShow).className} pointer-events-auto`}>
+                  {currentShow.is_live && <Eye className="inline w-4 h-4 mr-1" />}
+                  {!currentShow.is_live && currentShow.scheduled_time && <Clock className="inline w-4 h-4 mr-1" />}
+                  {getTimeStatus(currentShow).text}
+                </div>
+              )}
+
+              {/* Mobile Overlay Bar */}
+              <div className={`sm:hidden absolute bottom-16 right-2 flex flex-col space-y-2 z-${isFullscreen ? '20' : '10'} pointer-events-auto`}>
+                <div className="flex flex-row items-center bg-black/50 text-white px-3 py-1 rounded-full pointer-events-auto">
+                  <Users className="w-4 h-4 text-red-500 mr-1" />
+                  <span className="text-[10px] font-medium">{viewerCount.toLocaleString()}</span>
+                </div>
+                <div className="flex flex-row items-center bg-black/50 text-pink-500 px-3 py-1 rounded-full cursor-pointer hover:bg-black/70 pointer-events-auto" onClick={handleLike}>
+                  <Heart className="w-4 h-4 fill-current mr-1" />
+                  <span className="text-[10px] font-medium text-white">{likeCount}</span>
+                </div>
+                <div className="flex flex-row items-center bg-black/50 text-blue-500 px-3 py-1 rounded-full cursor-pointer hover:bg-black/70 pointer-events-auto" onClick={handleCommentClick}>
+                  <MessageCircle className="w-4 h-4 mr-1" />
+                  <span className="text-[10px] font-medium text-white">{messages.length}</span>
+                </div>
+              </div>
+
+              {/* Mute toggle for YouTube in overlays */}
+              {isYouTubeUrl(currentShow?.video_url || '') && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleMuteToggle(); }}
+                  className={`absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full transition-colors z-${isFullscreen ? '20' : '10'} pointer-events-auto`}
+                >
+                  {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                </button>
+              )}
+            </div>
           </div>
           {/* Description and Now Watching (portrait only) */}
           {!isFullscreen && currentShow && (

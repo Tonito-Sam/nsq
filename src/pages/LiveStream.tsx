@@ -716,9 +716,21 @@ const LiveStream = () => {
             )}
 
             {isBroadcasting && (
-              <div className="absolute left-0 right-0 bottom-0 z-40 px-4">
+              <div
+                // make fixed to viewport and very high z-index so nothing overlaps it
+                style={{
+                  position: 'fixed',
+                  left: 0,
+                  right: 0,
+                  bottom: 'calc(env(safe-area-inset-bottom, 0px) + 64px)',
+                  zIndex: 999999,
+                  paddingLeft: '1rem',
+                  paddingRight: '1rem',
+                  pointerEvents: 'auto'
+                }}
+              >
                 <div className="mx-auto max-w-6xl">
-                  <div className="bg-black/70 p-3 flex items-center gap-2 rounded-full">
+                  <div className="bg-black/80 p-3 flex items-center gap-2 rounded-full shadow-lg">
                     <FaCommentDots className="text-purple-400" size={20} />
                     <input
                       id="livestream-comment-input"

@@ -40,19 +40,23 @@ import {
   Share,
   Eye,
   Plus,
-  Volume2,
-  VolumeX,
+  Play,
+  Pause,
   VideoIcon,
   Radio,
   Settings,
   Users
 } from "lucide-react";
 
+import { ENABLE_LIVE } from '@/config/featureFlags';
+import { supabase } from '@/integrations/supabase/client';
+
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { ProfileModal } from "./ProfileModal";
 import CommentsSection from "./CommentsSection";
+import VideoShareModal from './VideoShareModal';
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import type { ReelVideo } from "@/components/ReelCard";
@@ -77,6 +81,8 @@ interface ReelCardProps {
   isFollowing: boolean;
   isActive: boolean;
   userData?: any; // Pass userData as prop
+  // When true, hide studio-level controls like the Go Live button regardless of feature flag
+  hideLive?: boolean;
 }
 
 export function ReelCard({
@@ -88,13 +94,16 @@ export function ReelCard({
   isLiked,
   isFollowing,
   isActive,
-  userData = null
+  userData = null,
+  hideLive = false,
 }: ReelCardProps) {
   // Debug: log the video prop, video_url, and userData
   console.log('ReelCard video prop:', video);
   console.log('ReelCard userData:', userData);
   const navigate = useNavigate();
+  // Feature flags (imported at top-level)
   const [isPlaying, setIsPlaying] = useState(false);
+  const [userPaused, setUserPaused] = useState(false);
   const [progress, setProgress] = useState(0);
   // For seekable progress bar
   const [seeking, setSeeking] = useState(false);
@@ -103,6 +112,7 @@ export function ReelCard({
   const [showControls, setShowControls] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const isMobile = useIsMobile();
+  // Recording button navigates directly to the Record page; no inline popover on ReelCard.
 
   // --- OUTRO overlay state and logic ---
   const [showOutro, setShowOutro] = useState(false);
@@ -116,57 +126,190 @@ export function ReelCard({
   const [commentLoading, setCommentLoading] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [posting, setPosting] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const commentChannelRef = useRef<any>(null);
+  const [commentsCount, setCommentsCount] = useState<number>(video.comments_count ?? 0);
 
   // --- Fetch comments for this video (Studio.tsx logic) ---
   const fetchComments = async () => {
     setCommentLoading(true);
     try {
       // Use correct PostgREST join syntax for related users table
-      if (!video.id) return;
-      const supabase = (window as any).supabase || undefined;
-      if (!supabase) return;
+      if (!video?.id) return;
+      if (!supabase) throw new Error('Supabase client not available');
       const { data, error } = await supabase
         .from('studio_video_comments')
         .select('id, user_id, comment, created_at, users:user_id(id,username,avatar_url)')
+        .order('created_at', { ascending: false })
+        .limit(100)
         .eq('video_id', video.id)
-        .order('created_at', { ascending: false });
-      if (!error && data) {
-        setComments(data.map((c: any) => ({ ...c, user: c.users })));
+        ;
+      if (error) {
+        console.error('[ReelCard] fetchComments supabase error:', error);
+      } else if (data) {
+        const mapped = data.map((c: any) => ({ ...c, user: c.users || null }));
+        setComments(mapped);
+        setCommentsCount(mapped.length);
       }
     } catch (e) {
-      // ignore
+      console.error('[ReelCard] fetchComments error:', e);
+    } finally {
+      setCommentLoading(false);
     }
-    setCommentLoading(false);
   };
+
+  // Prefetch comments when this card becomes active so modal opens faster
+  useEffect(() => {
+    if (!video?.id) return;
+    if (isActive && comments.length === 0 && !commentLoading) {
+      // fire-and-forget; fetchComments manages its own loading state
+      fetchComments().catch(err => console.error('[ReelCard] prefetchComments error:', err));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
+
+  // Realtime subscription for comments on this video
+  useEffect(() => {
+    if (!video?.id) return;
+    try {
+      // Create a channel for this video's comments
+      const channel = supabase.channel(`studio-video-comments-${video.id}`);
+      channel.on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'studio_video_comments', filter: `video_id=eq.${video.id}` },
+        (payload: any) => {
+          // Append new comment and increment count
+          const newComment = { ...payload.new, user: payload.new.users || null };
+          setComments(prev => {
+            // Avoid duplicates
+            if (prev.some(c => String(c.id) === String(newComment.id))) return prev;
+            return [...prev, newComment];
+          });
+          setCommentsCount(c => (c || 0) + 1);
+        }
+      );
+      channel.subscribe();
+      commentChannelRef.current = channel;
+    } catch (e) {
+      console.error('[ReelCard] realtime subscription error:', e);
+    }
+
+    return () => {
+      if (commentChannelRef.current) {
+        supabase.removeChannel(commentChannelRef.current);
+        commentChannelRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [video?.id]);
+
+  // 360 eligibility check removed from ReelCard; move gating to the Record page if needed.
 
   // Open comments modal and load comments
   const handleOpenComments = () => {
+    // pause the video when opening comments
+    try {
+      if (videoRef.current && !videoRef.current.paused) {
+        videoRef.current.pause();
+        setIsPlaying(false);
+      }
+    } catch (e) {
+      console.warn('[ReelCard] Failed to pause video when opening comments', e);
+    }
     setShowComments(true);
     setTimeout(fetchComments, 0);
   };
 
+  const handleCloseComments = () => {
+    // simply close the comments modal and let the user control playback explicitly
+    setShowComments(false);
+  };
+
+  // Compute a friendly creator object to display: prefer video.creator, then channel name,
+  // then fall back to the logged-in user if this reel belongs to them, otherwise Unknown.
+  const displayCreator = ((): { name: string; avatar_url?: string } => {
+    // 1) Prefer explicit creator object populated server-side
+    if (video.creator && video.creator.name) return { name: video.creator.name, avatar_url: video.creator.avatar_url };
+    // 2) Next prefer a channel name if present
+    if (video.channel_name) return { name: video.channel_name };
+    // 3) If the logged-in user appears to be the owner, use their username (try several id locations)
+    const candidateUserIds = [userData?.id, userData?.user_metadata?.id, userData?.sub, userData?.user_metadata?.sub];
+    const ownerId = video.user_id || video.creator_id || null;
+    if (userData && ownerId && candidateUserIds.some(id => id && String(id) === String(ownerId))) {
+      return { name: userData.username || userData?.user_metadata?.username || 'You', avatar_url: userData.avatar_url || userData?.user_metadata?.avatar_url };
+    }
+    // 4) Last resort, unknown
+    return { name: 'Unknown' };
+  })();
+
   // Post a new comment
   const handlePostComment = async () => {
-    const supabase = (window as any).supabase || undefined;
-  const userId = userData?.id || userData?.user_metadata?.id;
-  if (!userId || !newComment.trim() || !supabase) return;
+    const userId = userData?.id || userData?.user_metadata?.id;
+    const userDisplayName = userData?.username || (userData?.user_metadata && userData.user_metadata.username) || 'Someone';
+    const commentText = newComment.trim();
+    if (!userId || !commentText || !supabase) return;
     setPosting(true);
     try {
-      const { error } = await supabase
+      // Insert the comment and request the generated id so we can reference it
+      const { data: commentData, error: commentError } = await supabase
         .from('studio_video_comments')
         .insert({
           user_id: userId,
           video_id: video.id,
-          comment: newComment.trim(),
-        });
-      if (!error) {
+          comment: commentText,
+        })
+        .select('id')
+        .single();
+
+      if (!commentError && commentData) {
         setNewComment('');
+        // optimistic update of comment count then refresh
+        setCommentsCount(c => (c || 0) + 1);
         fetchComments();
+
+        // Create a notification server-side via the backend route so we don't rely on client RLS rules
+        try {
+          const recipientId = video.user_id || video.creator_id || null;
+          if (recipientId && String(recipientId) !== String(userId)) {
+            // POST to our backend which will call Supabase with the service role key
+            const resp = await fetch('/api/notifications/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                user_id: recipientId,
+                actor_id: userId,
+                type: 'comment',
+                title: `${userDisplayName} commented`,
+                message: commentText.slice(0, 240),
+                action_id: commentData.id,
+                target_table: 'studio_video_comments',
+                data: {
+                  comment_id: commentData.id,
+                  video_id: video.id,
+                  commenter_id: userId,
+                }
+              })
+            });
+            if (!resp.ok) {
+              const txt = await resp.text().catch(() => '');
+              console.error('[ReelCard] notification create failed', resp.status, txt);
+            }
+          }
+        } catch (nErr) {
+          // log but don't block the user experience
+          console.error('[ReelCard] failed to create notification via server', nErr);
+        }
       }
     } finally {
       setPosting(false);
     }
   };
+
+  // Keep local commentsCount in sync if parent video prop updates
+  useEffect(() => {
+    setCommentsCount(video.comments_count ?? (comments.length || 0));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [video.id, video.comments_count]);
 
   // Animated comment display logic - cycle through comments every 12 seconds
   useEffect(() => {
@@ -230,19 +373,37 @@ export function ReelCard({
     const videoEl = videoRef.current;
     if (!videoEl) return;
 
-    if (isActive) {
-      // On mobile, always unmute and play
-      if (isMobile) {
+    if (isActive && !userPaused) {
+      // Attempt to unmute on both desktop and mobile when active.
+      // Browsers may block autoplay with sound; if so, fall back to muted playback.
+      try {
         videoEl.muted = false;
         setIsMuted(false);
+      } catch (e) {
+        console.warn('[ReelCard] Could not set muted=false directly', e);
       }
+
       videoEl
         .play()
         .then(() => {
           setIsPlaying(true);
           onView(video.id);
         })
-        .catch(console.error);
+        .catch((err) => {
+          console.warn('[ReelCard] Autoplay with sound blocked or failed, falling back to muted playback:', err);
+          try {
+            videoEl.muted = true;
+            setIsMuted(true);
+            videoEl.play().then(() => {
+              setIsPlaying(true);
+              onView(video.id);
+            }).catch((err2) => {
+              console.error('[ReelCard] Muted playback also failed:', err2);
+            });
+          } catch (e2) {
+            console.error('[ReelCard] Error during muted fallback playback:', e2);
+          }
+        });
     } else if (!isActive) {
       videoEl.pause();
       videoEl.currentTime = 0;
@@ -302,21 +463,40 @@ export function ReelCard({
     if (isPlaying) {
       videoRef.current.pause();
       setIsPlaying(false);
+      setUserPaused(true);
     } else {
       videoRef.current.play();
       setIsPlaying(true);
+      setUserPaused(false);
     }
   };
 
 
-  const handleMuteToggle = () => {
-    setIsMuted((prev) => {
-      const newMuted = !prev;
-      if (videoRef.current) {
-        videoRef.current.muted = newMuted;
+  // (mute toggle removed here because the action button now controls play/pause)
+
+  // Toggle play/pause when user clicks the action button
+  const handlePlayPauseToggle = async () => {
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      // Prefer the actual element state to avoid out-of-sync state vars
+      if (!v.paused && !v.ended) {
+        v.pause();
+        setIsPlaying(false);
+        setUserPaused(true);
+      } else {
+        const playPromise = v.play();
+        if (playPromise && (playPromise as Promise<any>).then) {
+          await playPromise;
+        }
+        // Reflect actual element state after attempting play
+        setIsPlaying(!v.paused && !v.ended);
+        setUserPaused(false);
+        try { onView(video.id); } catch (e) { /* ignore */ }
       }
-      return newMuted;
-    });
+    } catch (err) {
+      console.error('[ReelCard] play/pause toggle error:', err);
+    }
   };
 
   // Keep DOM video muted property in sync with isMuted
@@ -332,6 +512,27 @@ export function ReelCard({
     if (count < 1000000) return `${(count / 1000).toFixed(1)}K`;
     return `${(count / 1000000).toFixed(1)}M`;
   };
+
+  // small helper to compute days since a date
+  const daysSince = (maybeDate?: string | Date | null): number | null => {
+    if (!maybeDate) return null;
+    const d = typeof maybeDate === 'string' ? new Date(maybeDate) : new Date(maybeDate as Date);
+    if (Number.isNaN(d.getTime())) return null;
+    const diffDays = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+    return diffDays >= 0 ? diffDays : null;
+  };
+
+  const formatDaysAgo = (maybeDate?: string | Date | null) => {
+    const ds = daysSince(maybeDate);
+    if (ds === null) return null;
+    if (ds === 0) return 'Premiered: today';
+    if (ds === 1) return 'Premiered: 1 day ago';
+    return `Premiered: ${ds} days ago`;
+  };
+
+  const premieredSource = (video as any)?.published_at || (video as any)?.publishedAt || (video as any)?.created_at || (video as any)?.createdAt || null;
+  const premieredDays = daysSince(premieredSource as string | Date | null);
+  const premieredLabel = formatDaysAgo(premieredSource as string | Date | null);
 
   // Format time as mm:ss
   function formatTime(s: number) {
@@ -394,32 +595,40 @@ export function ReelCard({
       <audio ref={outroAudioRef} src="/whistle.mp3" preload="auto" />
       
       {/* Left studio tools */}
-      <div className="absolute top-1/2 left-4 flex flex-col items-center gap-4 -translate-y-1/2 z-20">
-        <button
-          className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
-          onClick={() => navigate("/studio/upload")}
-        >
-          <Plus className="h-5 w-5" />
-        </button>
-        <button
-          className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
-          onClick={() => navigate("/studio/record")}
-        >
-          <VideoIcon className="h-5 w-5" />
-        </button>
-        <button
-          className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
-          onClick={() => navigate("/studio/live")}
-        >
-          <Radio className="h-5 w-5" />
-        </button>
-        <button
-          className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
-          onClick={() => navigate("/studio/settings")}
-        >
-          <Settings className="h-5 w-5" />
-        </button>
-      </div>
+          <div className="absolute top-1/2 left-4 flex flex-col items-center gap-4 -translate-y-1/2 z-20">
+            <button
+              className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
+              onClick={() => navigate("/studio/upload")}
+            >
+              <Plus className="h-5 w-5" />
+            </button>
+
+            {/* Recording button: navigate straight to the Record page (90s default) */}
+            <div className="relative">
+              <button
+                className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
+                onClick={() => navigate('/studio/record?duration=90')}
+                aria-label="Record"
+              >
+                <VideoIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            {!hideLive && ENABLE_LIVE && (
+              <button
+                className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
+                onClick={() => navigate('/studio/live')}
+              >
+                <Radio className="h-5 w-5" />
+              </button>
+            )}
+            <button
+              className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
+              onClick={() => navigate("/studio/settings")}
+            >
+              <Settings className="h-5 w-5" />
+            </button>
+          </div>
 
       {/* Video */}
       <video
@@ -438,7 +647,7 @@ export function ReelCard({
   <div className="absolute right-2 bottom-40 flex flex-col gap-6">
         {/* Avatar + ProfileModal + Channel/Subscriber badges */}
         <ProfileModal
-          creator={video.creator && video.creator.name ? video.creator : { name: 'Unknown' }}
+          creator={displayCreator}
           channelName={video.channel_name}
           subscriberCount={video.subscriber_count || 0}
           isFollowing={isFollowing}
@@ -448,12 +657,12 @@ export function ReelCard({
             <Avatar className="h-12 w-12 border-2 border-white/20">
               <AvatarImage src={video.creator?.avatar_url} alt={video.creator?.name || 'User'} />
               <AvatarFallback className="text-xs bg-primary text-primary-foreground">
-                {(video.creator?.name || 'U').slice(0, 2).toUpperCase()}
+                {(displayCreator.name || 'U').slice(0, 2).toUpperCase()}
               </AvatarFallback>
             </Avatar>
             {/* Slim, small username badge closely stacked under avatar */}
             <Badge className="-mt-1 px-3 py-0.5 rounded-full bg-purple-700/90 text-white text-[11px] font-medium shadow border border-purple-400/40">
-              @{video.creator?.name || 'unknown'}
+              @{displayCreator.name || 'unknown'}
             </Badge>
             {/* Channel and subscriber badges stacked below username badge */}
             <div className="flex flex-col items-center gap-1 mt-2 w-full">
@@ -494,18 +703,21 @@ export function ReelCard({
             >
               <MessageCircle className="w-4 h-4 text-white" />
             </Button>
-            {formatCount(video.comments_count ?? comments.length ?? 0)}
+            {formatCount(commentsCount ?? video.comments_count ?? comments.length ?? 0)}
           </Badge>
           <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center">
-            <Button
-              onClick={() => onShare(video.id)}
-              size="icon"
-              variant="ghost"
-              className="w-5 h-5 p-0 bg-transparent hover:bg-black/30"
-              aria-label="Share"
-            >
-              <Share className="w-4 h-4 text-white" />
-            </Button>
+              <Button
+                onClick={() => {
+                  setShowShareModal(true);
+                  try { onShare(video.id); } catch (e) { /* ignore */ }
+                }}
+                size="icon"
+                variant="ghost"
+                className="w-5 h-5 p-0 bg-transparent hover:bg-black/30"
+                aria-label="Share"
+              >
+                <Share className="w-4 h-4 text-white" />
+              </Button>
             {formatCount(video.shares_count ?? 0)}
           </Badge>
           <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center">
@@ -513,16 +725,17 @@ export function ReelCard({
             {formatCount(video.views_count ?? video.views ?? 0)}
           </Badge>
           <Button
-            onClick={handleMuteToggle}
+            onClick={(e) => { e.stopPropagation(); handlePlayPauseToggle(); }}
+            type="button"
             size="icon"
             variant="ghost"
             className="w-12 h-12 rounded-full bg-black/20 hover:bg-black/40 mt-2"
-            aria-label="Mute"
+            aria-label="Play/Pause"
           >
-            {isMuted ? (
-              <VolumeX className="w-6 h-6 text-white" />
+            {isPlaying ? (
+              <Pause className="w-6 h-6 text-white" />
             ) : (
-              <Volume2 className="w-6 h-6 text-white" />
+              <Play className="w-6 h-6 text-white" />
             )}
           </Button>
         </div>
@@ -550,13 +763,13 @@ export function ReelCard({
               setSeeking(true);
               setSeekValue(Number(e.target.value));
             }}
-            onMouseUp={e => {
+            onMouseUp={() => {
               if (videoRef.current) {
                 videoRef.current.currentTime = seekValue;
               }
               setSeeking(false);
             }}
-            onTouchEnd={e => {
+            onTouchEnd={() => {
               if (videoRef.current) {
                 videoRef.current.currentTime = seekValue;
               }
@@ -614,7 +827,7 @@ export function ReelCard({
       {/* Comment Modal/Panel - Instagram style slide up from bottom (modular) */}
       <CommentsSection
         show={showComments}
-        onClose={() => setShowComments(false)}
+        onClose={handleCloseComments}
         comments={comments}
         commentLoading={commentLoading}
         newComment={newComment}
@@ -622,7 +835,13 @@ export function ReelCard({
         userData={userData}
         setNewComment={setNewComment}
         handlePostComment={handlePostComment}
+        premieredDays={premieredDays}
+        premieredLabel={premieredLabel}
+        viewerCount={video.views_count ?? video.views}
+        likeCount={video.likes_count ?? 0}
+        commentsCount={commentsCount}
       />
+      <VideoShareModal show={showShareModal} onClose={() => setShowShareModal(false)} videoUrl={video.video_url} videoId={video.id} title={video.title} />
     </div>
   );
 }

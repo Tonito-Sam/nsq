@@ -110,8 +110,8 @@ const ChannelPage: React.FC = () => {
       // Fetch streams from studio_streams
       const { data: streamData } = await supabase.from('studio_streams').select('*').eq('channel_id', channelId).order('created_at', { ascending: false });
       // Only show public videos to non-owners
-      const visibleVideos = isOwner ? videoData : (videoData || []).filter((v: any) => v.visibility === 'public');
-      setVideos(visibleVideos);
+  const visibleVideos = isOwner ? (videoData || []) : (videoData || []).filter((v: any) => v.visibility === 'public');
+  setVideos(visibleVideos);
       setStreamVideos(streamData || []);
       const { count } = await supabase.from('studio_channel_subscribers').select('id', { count: 'exact', head: true }).eq('channel_id', channelId);
       setSubscriberCount(count || 0);
@@ -150,7 +150,7 @@ const ChannelPage: React.FC = () => {
     }
 
     const visibleVideos = isOwner
-      ? updatedVideos
+      ? (updatedVideos || [])
       : (updatedVideos || []).filter((v: any) => v.visibility === 'public');
 
     setVideos(visibleVideos);
@@ -171,8 +171,8 @@ const ChannelPage: React.FC = () => {
     // Refresh videos
     const { data: updatedVideos } = await supabase.from('studio_videos').select('*').eq('channel_id', channelId).order('created_at', { ascending: false });
     // Only show public videos to non-owners
-    const visibleVideos = isOwner ? updatedVideos : (updatedVideos || []).filter((v: any) => v.visibility === 'public');
-    setVideos(visibleVideos);
+  const visibleVideos = isOwner ? (updatedVideos || []) : (updatedVideos || []).filter((v: any) => v.visibility === 'public');
+  setVideos(visibleVideos);
     closeEditModal();
   };
 
@@ -185,16 +185,40 @@ const ChannelPage: React.FC = () => {
     // Refresh videos
     const { data: updatedVideos } = await supabase.from('studio_videos').select('*').eq('channel_id', channelId).order('created_at', { ascending: false });
     // Only show public videos to non-owners
-    const visibleVideos = isOwner ? updatedVideos : (updatedVideos || []).filter((v: any) => v.visibility === 'public');
-    setVideos(visibleVideos);
+  const visibleVideos = isOwner ? (updatedVideos || []) : (updatedVideos || []).filter((v: any) => v.visibility === 'public');
+  setVideos(visibleVideos);
     setDeletingVideoId(null);
   };
 
   const handleSubscribe = async () => {
     if (!subscribed) {
-      await supabase.from('studio_channel_subscribers').insert({ channel_id: channelId });
-      setSubscribed(true);
-      setSubscriberCount(c => c + 1);
+      const { error } = await supabase.from('studio_channel_subscribers').insert({ channel_id: channelId });
+      if (!error) {
+        setSubscribed(true);
+        setSubscriberCount(c => c + 1);
+        // Fire-and-forget notification to channel owner
+        try {
+          const actorId = currentUserId || null;
+          const recipientId = channel?.owner_id || null;
+          if (actorId && recipientId && String(actorId) !== String(recipientId)) {
+            fetch('/api/notifications/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                user_id: recipientId,
+                actor_id: actorId,
+                type: 'subscribe',
+                title: 'New subscriber',
+                message: 'Someone subscribed to your channel',
+                target_table: 'studio_channel_subscribers',
+                data: { channel_id: channelId }
+              })
+            }).catch(e => console.warn('subscribe notification failed', e));
+          }
+        } catch (e) {
+          console.warn('failed to call subscribe notification', e);
+        }
+      }
     } else {
       await supabase.from('studio_channel_subscribers').delete().eq('channel_id', channelId);
       setSubscribed(false);
@@ -211,13 +235,37 @@ const ChannelPage: React.FC = () => {
     } else {
       await supabase.from('studio_video_likes').insert({ video_id: videoId });
       newLikes.add(videoId);
+      // Fire-and-forget notification for like to the video owner (if not self)
+      try {
+        const actorId = currentUserId || null;
+        // video may be owned by channel owner; try to get recipient id
+        const { data: videoRow } = await supabase.from('studio_videos').select('id, user_id, channel_id').eq('id', videoId).single();
+        const recipientId = videoRow?.user_id || channel?.owner_id || null;
+        if (actorId && recipientId && String(actorId) !== String(recipientId)) {
+          fetch('/api/notifications/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_id: recipientId,
+              actor_id: actorId,
+              type: 'like',
+              title: 'New like',
+              message: 'Someone liked your video',
+              target_table: 'studio_video_likes',
+              data: { video_id: videoId }
+            })
+          }).catch(e => console.warn('like notification failed', e));
+        }
+      } catch (nErr) {
+        console.warn('failed to create like notification', nErr);
+      }
     }
     setUserLikes(newLikes);
     // Refetch videos to sync counts
     const { data: updatedVideos } = await supabase.from('studio_videos').select('*').eq('channel_id', channelId).order('created_at', { ascending: false });
-    // Only show public videos to non-owners
-    const visibleVideos = isOwner ? updatedVideos : (updatedVideos || []).filter((v: any) => v.visibility === 'public');
-    setVideos(visibleVideos);
+  // Only show public videos to non-owners
+  const visibleVideos = isOwner ? (updatedVideos || []) : (updatedVideos || []).filter((v: any) => v.visibility === 'public');
+  setVideos(visibleVideos);
   };
 
   // Split videos into categories

@@ -13,6 +13,14 @@ export default defineConfig(({ mode }) => ({
       key: fs.readFileSync("localhost-key.pem"),
       cert: fs.readFileSync("localhost-cert.pem"),
     },
+    // Proxy local AI proxy endpoint to backend port where the Express ai-photo-studio-proxy runs
+    proxy: {
+      '/api/ai-photo-studio': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
   },
   plugins: [
     react(),

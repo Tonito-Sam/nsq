@@ -41,6 +41,7 @@ export const ChatModal: React.FC<ChatModalProps> = ({ product, onClose }) => {
     handleKeyPress,
     messagesEndRef
   } = useChatModal(product, user);
+  
 
   if (loading) {
     return (

@@ -1,11 +1,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { Send, Users, Heart, MessageCircle } from 'lucide-react';
+import { Send, Eye, Heart, MessageCircle, Tv } from 'lucide-react';
+import { EMOJI_PICKER_LIST } from '@/components/studio/emojiList';
 import { useShowContext } from '@/contexts/ShowContext';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -29,13 +31,20 @@ export const LiveChat = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const isAtBottomRef = useRef(true);
+  const isAtTopRef = useRef(true);
 
   const { currentShow, viewerCount, likeCount, setLikeCount } = useShowContext();
   const { user } = useAuth();
 
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  const openerRef = useRef<HTMLButtonElement | null>(null);
+  const [pickerPos, setPickerPos] = useState<{ left: number; top: number } | null>(null);
+
   console.log('LiveChat: user object:', user);
   console.log('LiveChat: currentShow:', currentShow);
+
+  // NOTE: premieredSource is computed below after formatDaysAgo to avoid using the helper before it's declared.
 
   const fetchMessages = async () => {
     // For now, let's use a default show ID if no current show
@@ -48,7 +57,8 @@ export const LiveChat = () => {
         .from('live_chat')
         .select('*')
         .eq('show_id', showId)
-        .order('timestamp', { ascending: true })
+        // fetch newest first so we can render newest at the top
+        .order('timestamp', { ascending: false })
         .limit(100);
 
       if (error) {
@@ -76,7 +86,8 @@ export const LiveChat = () => {
         filter: `show_id=eq.${showId}`,
       }, (payload) => {
         console.log('New message received:', payload.new);
-        setMessages((prev) => [...prev.slice(-99), payload.new as ChatMessage]);
+        // prepend newest message so newest items remain on top
+        setMessages((prev) => [payload.new as ChatMessage, ...prev].slice(0, 100));
       })
       .subscribe();
   };
@@ -91,10 +102,40 @@ export const LiveChat = () => {
 
   useEffect(() => {
     const el = chatContainerRef.current;
-    if (el && isAtBottomRef.current) {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    if (!el) return;
+    // If user is at the top (showing newest) then keep newest visible when messages update
+    if (isAtTopRef.current) {
+      el.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, [messages]);
+
+  // Close emoji picker when clicking outside
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (showEmojiPicker) {
+        // If picker exists and click is outside, close
+        if (pickerRef.current && target && !pickerRef.current.contains(target)) {
+          setShowEmojiPicker(false);
+        }
+      }
+    };
+    document.addEventListener('click', onDocClick);
+    return () => document.removeEventListener('click', onDocClick);
+  }, [showEmojiPicker]);
+
+  // compute portal position when openerRef set and picker opens
+  useEffect(() => {
+    if (showEmojiPicker && openerRef.current) {
+      const r = openerRef.current.getBoundingClientRect();
+      // position picker above the opener button
+      const left = Math.max(8, r.left);
+      const top = Math.max(8, r.top - 220); // 220px above button
+      setPickerPos({ left, top });
+    } else {
+      setPickerPos(null);
+    }
+  }, [showEmojiPicker]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -176,46 +217,168 @@ export const LiveChat = () => {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  // Returns a friendly "Premiered: X days ago" string for a date.
+  const formatDaysAgo = (maybeDate?: string | Date | null) => {
+    if (!maybeDate) return null;
+    const date = typeof maybeDate === 'string' ? new Date(maybeDate) : new Date(maybeDate as Date);
+    if (Number.isNaN(date.getTime())) return null;
+
+    const diffMs = Date.now() - date.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) return `Premiered: in the future`;
+    if (diffDays === 0) return `Premiered: today`;
+    if (diffDays === 1) return `Premiered: 1 day ago`;
+    return `Premiered: ${diffDays} days ago`;
+  };
+
+  // Determine premiere source from a few possible field names (use any to avoid strict type checks)
+  const premieredSource = (currentShow as any)?.premiered_at || (currentShow as any)?.premieredAt || (currentShow as any)?.premieredOn || (currentShow as any)?.start_time || (currentShow as any)?.created_at || (currentShow as any)?.createdAt || null;
+  const premieredLabel = formatDaysAgo(premieredSource as string | Date | null);
+
+  // Compact days-since helper (returns number of days or null)
+  const daysSince = (maybeDate?: string | Date | null): number | null => {
+    if (!maybeDate) return null;
+    const d = typeof maybeDate === 'string' ? new Date(maybeDate) : new Date(maybeDate as Date);
+    if (Number.isNaN(d.getTime())) return null;
+    const diffDays = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+    return diffDays >= 0 ? diffDays : null;
+  };
+  const premieredDays = daysSince(premieredSource as string | Date | null);
+
   const handleLike = () => {
     setLikeCount(likeCount + 1);
   };
 
   return (
-    <Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700 h-[500px] flex flex-col rounded-xl shadow-md">
+    <Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700 max-h-[80vh] md:h-[500px] flex flex-col rounded-xl shadow-md">
       <div className="mb-4 p-3 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 rounded-lg">
         <div className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">NOW SHOWING</div>
         <div className="font-semibold text-gray-900 dark:text-gray-100 text-sm">
           {currentShow?.title || 'General Chat'}
         </div>
+        {/* Hide long description on small screens so chat input remains visible */}
         {currentShow?.description && (
-          <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{currentShow.description}</div>
+          <div className="hidden md:block text-xs text-gray-500 dark:text-gray-400 mt-1">{currentShow.description}</div>
         )}
       </div>
 
-      <div className="flex items-center justify-between mb-4 pb-3 border-b dark:border-gray-700">
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-1 text-red-500">
-            <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-            <span className="text-sm font-medium">WATCHING</span>
-            <Users className="w-4 h-4 text-red-500" />
-            <span className="text-sm text-gray-700 dark:text-gray-300">{viewerCount.toLocaleString()}</span>
-          </div>
-          <div className="flex items-center space-x-1 text-pink-500">
+      {/* Mobile: show input directly under WATCHING on small screens */}
+      <div className="md:hidden mb-3 px-1">
+        <form onSubmit={handleSendMessage} className="flex items-center gap-2 bg-gray-50 dark:bg-[#18181c] rounded-xl p-2 border border-gray-200 dark:border-gray-800">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-9 w-9 p-0 text-gray-400 hover:text-pink-500 transition"
+            onClick={handleLike}
+            aria-label="Like"
+          >
             <Heart className="w-4 h-4 fill-current" />
-            <span className="text-sm font-semibold">{likeCount}</span>
+          </Button>
+
+          <div className="relative flex-1">
+            <button
+              type="button"
+              onClick={(e) => { openerRef.current = e.currentTarget as HTMLButtonElement; setShowEmojiPicker(v => !v); }}
+              aria-label="Emoji picker"
+              className="absolute left-1 top-1.5 h-6 w-6 flex items-center justify-center text-lg"
+            >
+              😊
+            </button>
+
+            <Input
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              placeholder={user ? "Type your message..." : "Login to chat"}
+              className="h-9 text-sm rounded-lg pl-10 pr-8 bg-white dark:bg-[#23232b] border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition"
+              maxLength={200}
+              autoComplete="off"
+              disabled={!user || isSending}
+            />
+            <button type="submit" className="absolute right-1 top-1.5 h-6 w-6 flex items-center justify-center bg-purple-600 rounded text-white">
+              <Send className="h-3 w-3" />
+            </button>
+
+            {showEmojiPicker && pickerPos && createPortal(
+              <div ref={pickerRef} style={{ position: 'fixed', left: pickerPos.left, top: pickerPos.top, zIndex: 99999 }} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-2 w-56">
+                <div className="grid grid-cols-6 gap-2">
+                  {EMOJI_PICKER_LIST.map((e: any, i: number) => (
+                    <button
+                      key={`${e.char}-${i}`}
+                      type="button"
+                      title={e.name}
+                      onClick={() => {
+                        setNewMessage((m) => (m || '') + e.char + ' ');
+                        setShowEmojiPicker(false);
+                      }}
+                      className="p-1 text-lg rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                    >
+                      {e.char}
+                    </button>
+                  ))}
+                </div>
+              </div>,
+              document.body
+            )}
           </div>
+        </form>
+      </div>
+
+      <div className="flex items-center justify-between mb-4 pb-3 border-b dark:border-gray-700">
+        {/* Distribute badges evenly across the row */}
+        <div className="w-full flex items-center justify-between gap-3">
+          {/* Premiered badge (TV + days) - first */}
+          <button
+            type="button"
+            aria-label="Premiered"
+            title={premieredLabel || ''}
+            className="flex items-center space-x-2 bg-yellow-50 dark:bg-yellow-900 px-3 py-1 rounded-md">
+            <Tv className="w-4 h-4 text-yellow-600 dark:text-yellow-300" />
+            <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">{premieredDays === 0 ? 'today' : premieredDays !== null ? `${premieredDays}d` : '-'}</span>
+          </button>
+
+          {/* Views badge (Eye) */}
+          <button
+            type="button"
+            aria-label="Views"
+            className="flex items-center space-x-2 bg-blue-50 dark:bg-blue-900 px-3 py-1 rounded-md">
+            <Eye className="w-4 h-4 text-blue-600 dark:text-blue-300" />
+            <span className="text-xs font-medium text-blue-700 dark:text-blue-300">{viewerCount.toLocaleString()}</span>
+          </button>
+
+          {/* Likes badge */}
+          <button
+            type="button"
+            aria-label="Likes"
+            className="flex items-center space-x-2 bg-pink-50 dark:bg-pink-900 px-3 py-1 rounded-md">
+            <Heart className="w-4 h-4 text-pink-600 dark:text-pink-300" />
+            <span className="text-xs font-medium text-pink-700 dark:text-pink-300">{likeCount}</span>
+          </button>
+
+          {/* Comments badge */}
+          <button
+            type="button"
+            aria-label="Comments"
+            className="flex items-center space-x-2 bg-indigo-50 dark:bg-indigo-900 px-3 py-1 rounded-md">
+            <MessageCircle className="w-4 h-4 text-indigo-600 dark:text-indigo-300" />
+            <span className="text-xs font-medium text-indigo-700 dark:text-indigo-300">{messages.length}</span>
+          </button>
         </div>
       </div>
 
-      <div 
-        ref={chatContainerRef} 
+      <div
+        ref={chatContainerRef}
         onScroll={() => {
           const el = chatContainerRef.current;
           if (!el) return;
           const threshold = 80;
-          isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-        }} 
+          // when scrollTop is near 0 we consider user at top (newest messages)
+          isAtTopRef.current = el.scrollTop < threshold;
+        }}
         className="flex-1 overflow-y-auto space-y-3 mb-4 pr-1 scroll-smooth"
+        // ensure the messages area can shrink on very small viewports
+        style={{ minHeight: 0 }}
       >
         {isLoading ? (
           <p className="text-center text-sm text-gray-500 dark:text-gray-400">Loading messages...</p>
@@ -235,18 +398,20 @@ export const LiveChat = () => {
               </Avatar>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center space-x-2 mb-1">
-                  <span className={`text-xs font-medium ${
-                    msg.is_moderator ? 'text-green-600 dark:text-green-400'
-                      : msg.is_vip ? 'text-purple-600 dark:text-purple-400'
-                      : 'text-gray-700 dark:text-gray-300'
-                  }`}>
-                    {msg.username}
-                  </span>
+                  <div className="flex flex-col">
+                    <span className={`text-xs font-medium ${
+                      msg.is_moderator ? 'text-green-600 dark:text-green-400'
+                        : msg.is_vip ? 'text-purple-600 dark:text-purple-400'
+                        : 'text-gray-700 dark:text-gray-300'
+                    }`}>
+                      {msg.username}
+                    </span>
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500">
+                      {formatTime(msg.timestamp)}
+                    </span>
+                  </div>
                   {msg.is_moderator && <Badge className="bg-green-500 text-white text-xs h-4 px-1">MOD</Badge>}
                   {msg.is_vip && <Badge className="bg-purple-500 text-white text-xs h-4 px-1">VIP</Badge>}
-                  <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {formatTime(msg.timestamp)}
-                  </span>
                 </div>
                 <p className="text-sm text-gray-900 dark:text-gray-100 bg-gray-100 dark:bg-gray-800 rounded-lg px-3 py-1 inline-block max-w-[90%] break-words">
                   {msg.message}
@@ -257,7 +422,7 @@ export const LiveChat = () => {
         )}
       </div>
 
-      <form onSubmit={handleSendMessage} className="flex items-end gap-2 mt-auto bg-gray-50 dark:bg-[#18181c] rounded-xl px-3 py-2 shadow-inner border border-gray-200 dark:border-gray-800">
+  <form onSubmit={handleSendMessage} className="hidden md:flex items-end gap-2 mt-auto bg-gray-50 dark:bg-[#18181c] rounded-xl px-3 py-2 shadow-inner border border-gray-200 dark:border-gray-800">
         <Button
           type="button"
           size="icon"
@@ -270,15 +435,46 @@ export const LiveChat = () => {
         </Button>
 
         <div className="relative flex-1">
+          <button
+            type="button"
+            onClick={(e) => { openerRef.current = e.currentTarget as HTMLButtonElement; setShowEmojiPicker(v => !v); }}
+            aria-label="Emoji picker"
+            className="absolute left-3 top-3 h-6 w-6 flex items-center justify-center text-lg"
+          >
+            😊
+          </button>
+
           <Input
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             placeholder={user ? "Type your message..." : "Login to chat"}
-            className="h-10 text-sm rounded-lg pl-4 pr-10 bg-white dark:bg-[#23232b] border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition"
+            className="h-10 text-sm rounded-lg pl-10 pr-10 bg-white dark:bg-[#23232b] border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition"
             maxLength={200}
             autoComplete="off"
             disabled={!user || isSending}
           />
+
+            {showEmojiPicker && pickerPos && createPortal(
+              <div ref={pickerRef} style={{ position: 'fixed', left: pickerPos.left, top: pickerPos.top, zIndex: 99999 }} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-2 w-56">
+                <div className="grid grid-cols-6 gap-2">
+                  {EMOJI_PICKER_LIST.map((e: any, i: number) => (
+                    <button
+                      key={`${e.char}-${i}`}
+                      type="button"
+                      title={e.name}
+                      onClick={() => {
+                        setNewMessage((m) => (m || '') + e.char + ' ');
+                        setShowEmojiPicker(false);
+                      }}
+                      className="p-1 text-lg rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                    >
+                      {e.char}
+                    </button>
+                  ))}
+                </div>
+              </div>,
+              document.body
+            )}
         </div>
 
         <Button 

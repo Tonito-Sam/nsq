@@ -1,16 +1,22 @@
 [
   {
-    "id": "bank001",
-    "title": "Ride-Cover",
-    "url": "https://pfemdshixllwqqajsxxp.supabase.co/storage/v1/object/public/sound-bank/soundbank/1762496126636-planifax.ca_-_Chike___Ride_For_You__Cover__Prod._By_Dee_Yasso__320_KBps_.mp3",
-    "duration": 3,
-    "license": "samplelib-sample"
+    "id": 7,
+    "title": "Somo deyan by Ptee",
+    "url": "https://pfemdshixllwqqajsxxp.supabase.co/storage/v1/object/public/sound-bank/soundbank/1762518038884-www.shellac.co.za_-_somo_deyan__Audio__PTee_afro_gospel_gratitude_praise_worshipsongs__320_KBps_.mp3",
+    "metadata": {
+      "genre": "Afrobeats",
+      "category": "piano"
+    },
+    "created_at": null
   },
   {
-    "id": "bank002",
-    "title": "Upbeat Beat (sample)",
-    "url": "https://samplelib.com/lib/preview/mp3/sample-5s.mp3",
-    "duration": 5,
-    "license": "samplelib-sample"
+    "id": 4,
+    "title": "Ride Cover",
+    "url": "https://pfemdshixllwqqajsxxp.supabase.co/storage/v1/object/public/sound-bank/soundbank/1762496126636-planifax.ca_-_Chike___Ride_For_You__Cover__Prod._By_Dee_Yasso__320_KBps_.mp3",
+    "metadata": {
+      "genre": "Afrobeat",
+      "category": "piano"
+    },
+    "created_at": null
   }
 ]

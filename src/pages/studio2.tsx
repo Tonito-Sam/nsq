@@ -752,9 +752,11 @@ function ReelCard({ video, onLike, onView, userLikes, onSubscribe, isSubscribed,
         <button className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md" onClick={() => navigate('/studio/record')}>
           <Video className="h-5 w-5" />
         </button>
-        <button className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md" onClick={() => navigate('/studio/live')}>
-          <Radio className="h-5 w-5" />
-        </button>
+        {ENABLE_LIVE && (
+          <button className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md" onClick={() => navigate('/studio/live')}>
+            <Radio className="h-5 w-5" />
+          </button>
+        )}
         <button className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md" onClick={() => navigate('/studio/settings')}>
           <SettingsIcon className="h-5 w-5" />
         </button>
@@ -1098,6 +1100,7 @@ const MonetizationCard = ({ channel, totalChannelViews, subscriberCounts, handle
 };
 
 import { useSearchParams } from 'react-router-dom';
+import { ENABLE_LIVE } from '@/config/featureFlags';
 const Studio = () => {
   const isDesktop = useMediaQuery('(min-width: 1024px)');
   // Category filter state
@@ -1453,6 +1456,31 @@ const Studio = () => {
         });
 
         if (updateError) throw updateError;
+        // Fire-and-forget notification for like
+        (async () => {
+          try {
+            // find video owner
+            const { data: videoRow } = await supabase.from('studio_videos').select('id, user_id, channel_id').eq('id', videoId).single();
+            const recipientId = videoRow?.user_id || videoRow?.channel_id || null;
+            if (recipientId && String(recipientId) !== String(user.id)) {
+              fetch('/api/notifications/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  user_id: recipientId,
+                  actor_id: user.id,
+                  type: 'like',
+                  title: 'New like',
+                  message: 'Someone liked your video',
+                  target_table: 'studio_video_likes',
+                  data: { video_id: videoId }
+                })
+              }).catch(e => console.warn('like notification failed', e));
+            }
+          } catch (nErr) {
+            console.warn('failed to create like notification', nErr);
+          }
+        })();
       }
 
       // Trigger a background refetch to keep data in sync
@@ -1517,6 +1545,30 @@ const Studio = () => {
       await supabase
         .from('studio_channel_subscribers')
         .insert({ user_id: user.id, channel_id: channelId });
+      // notify channel owner
+      (async () => {
+        try {
+          const { data: channelRow } = await supabase.from('studio_channels').select('id, user_id').eq('id', channelId).single();
+          const recipientId = channelRow?.user_id || null;
+          if (recipientId && String(recipientId) !== String(user.id)) {
+            fetch('/api/notifications/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                user_id: recipientId,
+                actor_id: user.id,
+                type: 'subscribe',
+                title: 'New subscriber',
+                message: 'Someone subscribed to your channel',
+                target_table: 'studio_channel_subscribers',
+                data: { channel_id: channelId }
+              })
+            }).catch(e => console.warn('subscribe notification failed', e));
+          }
+        } catch (nErr) {
+          console.warn('failed to create subscribe notification', nErr);
+        }
+      })();
     }
     fetchSubscriptionsAndCounts();
   };
