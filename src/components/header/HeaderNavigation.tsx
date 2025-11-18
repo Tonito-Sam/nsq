@@ -21,53 +21,26 @@ export const HeaderNavigation = () => {
     let channel: any;
     
     const fetchUnreadCount = async () => {
-      console.log('Fetching unread count for user:', user?.id);
-      
+      console.log('Fetching unread count for user via RPC:', user?.id);
       if (!user) {
         setUnreadCount(0);
         return;
       }
 
       try {
-        // Get all conversations for this user
-        const { data: convs, error } = await supabase
-          .from('conversations')
-          .select('id')
-          .or(`customer_id.eq.${user.id},seller_id.eq.${user.id}`);
-
+        // Prefer RPC: get_unread_count_for_user
+        const { data, error } = await supabase.rpc('get_unread_count_for_user', { p_user_id: user.id });
         if (error) {
-          console.error('Error fetching conversations:', error);
+          console.error('Error calling get_unread_count_for_user:', error);
           setUnreadCount(0);
           return;
         }
-
-        if (!convs || convs.length === 0) {
-          console.log('No conversations found');
-          setUnreadCount(0);
-          return;
-        }
-
-        // Get unread messages in all conversations where sender is not the user
-        const convIds = convs.map(c => c.id);
-        console.log('Checking unread messages in conversations:', convIds);
-
-        const { count, error: msgError } = await supabase
-          .from('messages')
-          .select('*', { count: 'exact', head: true })
-          .in('conversation_id', convIds)
-          .neq('sender_id', user.id)
-          .is('read_at', null);
-
-        if (msgError) {
-          console.error('Error fetching unread messages:', msgError);
-          setUnreadCount(0);
-          return;
-        }
-
-        console.log('Unread message count:', count);
-        setUnreadCount(count || 0);
+        // RPC returns a single bigint value
+        const count = (data as any) || 0;
+        console.log('Unread message count (RPC):', count);
+        setUnreadCount(Number(count) || 0);
       } catch (error) {
-        console.error('Unexpected error fetching unread count:', error);
+        console.error('Unexpected error fetching unread count via RPC:', error);
         setUnreadCount(0);
       }
     };

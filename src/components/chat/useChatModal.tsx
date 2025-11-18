@@ -67,6 +67,14 @@ export const useChatModal = (product: Product, user: any) => {
 
       if (existingConversation && !fetchError) {
         setConversation(existingConversation);
+        // Mark this conversation as read for the current user (upsert last_read_at)
+        try {
+          await supabase
+            .from('conversation_participants')
+            .upsert({ conversation_id: existingConversation.id, user_id: user.id, last_read_at: new Date().toISOString() }, { onConflict: ['conversation_id', 'user_id'] });
+        } catch (e) {
+          console.warn('Failed to upsert conversation_participants for read mark', e);
+        }
       } else {
         // Create a new conversation
         const { data: newConversation, error: createError } = await supabase
@@ -81,6 +89,14 @@ export const useChatModal = (product: Product, user: any) => {
 
         if (createError) throw createError;
         setConversation(newConversation);
+        // Mark this conversation as read for the current user (upsert last_read_at)
+        try {
+          await supabase
+            .from('conversation_participants')
+            .upsert({ conversation_id: newConversation.id, user_id: user.id, last_read_at: new Date().toISOString() }, { onConflict: ['conversation_id', 'user_id'] });
+        } catch (e) {
+          console.warn('Failed to upsert conversation_participants for read mark', e);
+        }
       }
     } catch (error) {
       console.error('Error initializing conversation:', error);
