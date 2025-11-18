@@ -1,5 +1,10 @@
 export const openWhatsApp = async (phone: string, message: string) => {
   const encoded = encodeURIComponent(message);
+  try {
+    console.debug('openWhatsApp input', { phone, message });
+  } catch (e) {
+    /* ignore */
+  }
   const isMobile = /Android|iPhone|iPad|iPod|Windows Phone|IEMobile|Opera Mini/i.test(navigator.userAgent || '');
 
   const copyToClipboard = async (text: string) => {
@@ -24,16 +29,18 @@ export const openWhatsApp = async (phone: string, message: string) => {
     if (isMobile) {
       const native = `whatsapp://send?phone=${phone}&text=${encoded}`;
       window.location.href = native;
+      try { console.debug('openWhatsApp navigating to native', native); } catch (e) {}
       return { opened: true };
     } else {
       const web = `https://web.whatsapp.com/send?phone=${phone}&text=${encoded}`;
       const w = window.open(web, '_blank');
+      try { console.debug('openWhatsApp opening web', web, { openedWindow: !!w }); } catch (e) {}
       if (w) return { opened: true };
       return { opened: false, copied: await copyToClipboard(message) };
     }
   } catch (err) {
-    try { await copyToClipboard(message); return { opened: false, copied: true }; }
-    catch (e) { return { opened: false, copied: false }; }
+    try { await copyToClipboard(message); try { console.debug('openWhatsApp fallback copied'); } catch (e) {} return { opened: false, copied: true }; }
+    catch (e) { try { console.debug('openWhatsApp fully failed', e); } catch (er) {} return { opened: false, copied: false }; }
   }
 };
 

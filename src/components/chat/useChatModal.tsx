@@ -190,10 +190,11 @@ export const useChatModal = (product: Product, user: any) => {
       // Only forward if the store manager has opted-in (users_stores.notify_whatsapp === true)
       (async () => {
         try {
-          // Try to get seller store info from users_stores table
+          // Try to get seller store info from user_stores table
+          // (note: DB column is business_whatsapp_number)
           const { data: store } = await supabase
-            .from('users_stores')
-            .select('business_contact_number, store_name, notify_whatsapp')
+            .from('user_stores')
+            .select('business_whatsapp_number, store_name, notify_whatsapp')
             .eq('user_id', product.user_id)
             .maybeSingle();
 
@@ -207,9 +208,28 @@ export const useChatModal = (product: Product, user: any) => {
             storeName = (store as any).store_name || storeName;
           }
 
-          // Fallback to env var NEXT_PUBLIC_WHATSAPP_TARGET if no phone on store record
+          // Fallback to client-side env var if no phone on store record.
+          // Use import.meta.env (Vite) first; fall back to process.env for Node contexts.
           if (!sellerPhone) {
-            sellerPhone = (process.env.NEXT_PUBLIC_WHATSAPP_TARGET || '').trim();
+            // prefer Vite-style env names for client builds
+            const fallback = (typeof import.meta !== 'undefined' && (import.meta as any).env)
+              ? ((import.meta as any).env.VITE_WHATSAPP_TARGET || (import.meta as any).env.NEXT_PUBLIC_WHATSAPP_TARGET || '')
+              : (process?.env?.NEXT_PUBLIC_WHATSAPP_TARGET || '');
+            sellerPhone = (fallback || '').trim();
+          }
+
+          // Debug: show forwarding decision and phone used
+          try {
+            console.debug('WhatsApp forwarding debug', {
+              managerOptIn,
+              sellerPhone,
+              storeName,
+              conversationId: conversation?.id,
+              productId: product.id,
+              message: messageText
+            });
+          } catch (e) {
+            /* ignore debug failures */
           }
 
           if (!sellerPhone) {
@@ -223,6 +243,7 @@ export const useChatModal = (product: Product, user: any) => {
           const plain = `Hi ${storeName}, a customer is waiting on your response about product (${product.id}).\nPlease open NexSq to reply.`;
 
           const res = await openWhatsApp(sellerPhone, plain);
+          try { console.debug('openWhatsApp result', { sellerPhone, res }); } catch (e) { /* ignore */ }
           if (res.opened) {
             toast({ title: 'WhatsApp opened', description: 'WhatsApp was opened for the seller.' });
           } else if (res.copied) {
