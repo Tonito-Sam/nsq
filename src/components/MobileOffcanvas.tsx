@@ -192,7 +192,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
     if (!user) return;
     // Fetch group IDs where user is a member
     const { data: memberships } = await supabase
-      .from('group_members')
+      .from('group_memberships')
       .select('group_id')
       .eq('user_id', user.id);
     const groupIds = memberships?.map((m: any) => m.group_id) || [];

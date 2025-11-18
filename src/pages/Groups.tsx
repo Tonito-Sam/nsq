@@ -28,7 +28,7 @@ const Groups = () => {
       let myGroupsData: any[] = [];
       if (user) {
         const { data: memberships } = await supabase
-          .from('group_members')
+          .from('group_memberships')
           .select('group_id')
           .eq('user_id', user.id);
         const groupIds = memberships?.map((m: any) => m.group_id) || [];
