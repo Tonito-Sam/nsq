@@ -83,8 +83,9 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
           throw new Error('Please provide a WhatsApp number to enable notifications.');
         }
 
-        // Pick API base from env (NEXT_PUBLIC_API_URL) or fallback to localhost:5000 for dev
-        const apiBase = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000').replace(/\/+$/g, '');
+  // Pick API base from env (NEXT_PUBLIC_API_URL) or fallback to localhost:5000 for dev
+  // Use import.meta.env for Vite, fall back to global process env when available
+  const apiBase = (((import.meta as any).env?.NEXT_PUBLIC_API_URL) || ((globalThis as any).process?.env?.NEXT_PUBLIC_API_URL) || 'http://localhost:5000').replace(/\/+$/g, '');
         const endpoint = `${apiBase}/api/stores/update-whatsapp-notify`;
 
         const resp = await fetch(endpoint, {
