@@ -21,6 +21,21 @@ app.use(express.json());
 const livepeerRoutes = require('./routes/livepeer.cjs');
 app.use('/api/livepeer', livepeerRoutes);
 
+// Aramex routes (prefer .cjs, fallback to .js)
+try {
+  const aramex = require('./routes/aramex.cjs');
+  app.use('/api/aramex', aramex);
+  console.log('✅ Mounted /api/aramex (aramex.cjs)');
+} catch (e) {
+  try {
+    const aramex = require('./routes/aramex');
+    app.use('/api/aramex', aramex);
+    console.log('✅ Mounted /api/aramex (aramex.js)');
+  } catch (err) {
+    console.warn('⚠️ aramex route not available:', err?.message || err);
+  }
+}
+
 // Admin routes (sync sounds)
 try {
   const adminSyncRoutes = require('./routes/sync-sounds');
@@ -28,6 +43,24 @@ try {
   console.log('✅ Mounted /api/admin (sync-sounds) route');
 } catch (e) {
   console.warn('⚠️ sync-sounds route not available:', e?.message || e);
+}
+
+// Notifications
+try {
+  const notifications = require('./routes/notifications');
+  app.use('/api/notifications', notifications);
+  console.log('✅ Mounted /api/notifications');
+} catch (e) {
+  console.warn('⚠️ notifications route not available:', e?.message || e);
+}
+
+// Stores (WhatsApp opt-in validation + user_stores updates)
+try {
+  const stores = require('./routes/stores');
+  app.use('/api/stores', stores);
+  console.log('✅ Mounted /api/stores');
+} catch (e) {
+  console.warn('⚠️ stores route not available:', e?.message || e);
 }
 
 // WebRTC -> RTMP bridge route
