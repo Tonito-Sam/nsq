@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { ArrowLeft, Shield, Eye, Database, Lock, UserCheck, Globe } from 'lucide-react';
+import { ArrowLeft, Shield, Eye, Database, UserCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import useMeta from '@/hooks/useMeta';
 

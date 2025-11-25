@@ -87,6 +87,8 @@ const categories = [
   { name: 'Art', icon: Palette },
 ];
 
+import useMeta from '@/hooks/useMeta';
+
 const Studio = () => {
   useMeta({
     title: 'Studio — Live & On-Demand Shows — NexSq',

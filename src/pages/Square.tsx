@@ -153,6 +153,8 @@ const QUERY_KEYS = {
   cartCount: ['cartCount'] as const,
 } as const;
 
+import useMeta from '@/hooks/useMeta';
+
 const Square = () => {
   // page-specific meta
   useMeta({
