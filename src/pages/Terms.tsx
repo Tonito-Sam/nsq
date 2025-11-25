@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import useMeta from '@/hooks/useMeta';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ArrowLeft, FileText, Shield, Users, AlertTriangle, Gavel } from 'lucide-react';
@@ -15,6 +16,12 @@ const TABS = [
 const Terms = () => {
   const navigate = useNavigate();
   const [tab, setTab] = useState('overview');
+
+  useMeta({
+    title: 'Terms of Service — NexSq',
+    description: 'Read the NexSq Terms of Service — legal terms, usage rules, liability, child safety, and more.',
+    url: window.location.href,
+  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#f8fafc] via-[#e0e7ff] to-[#f0fdfa] dark:from-[#18181b] dark:via-[#312e81] dark:to-[#0f172a]">

@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ArrowLeft, Shield, Eye, Database, Lock, UserCheck, Globe } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import useMeta from '@/hooks/useMeta';
 
 const TABS = [
   { key: 'overview', label: 'Overview', icon: <Shield className="h-5 w-5 mr-2" /> },
@@ -14,6 +15,12 @@ const TABS = [
 const PrivacyPolicy = () => {
   const navigate = useNavigate();
   const [tab, setTab] = useState('overview');
+
+  useMeta({
+    title: 'Privacy Policy — NexSq',
+    description: 'NexSq Privacy Policy: how we collect, use, and protect your personal data. Learn your rights and our practices.',
+    url: window.location.href,
+  });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#f8fafc] via-[#e0e7ff] to-[#f0fdfa] dark:from-[#18181b] dark:via-[#312e81] dark:to-[#0f172a]">

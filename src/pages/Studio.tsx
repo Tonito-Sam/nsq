@@ -88,6 +88,11 @@ const categories = [
 ];
 
 const Studio = () => {
+  useMeta({
+    title: 'Studio — Live & On-Demand Shows — NexSq',
+    description: 'Join live studio shows, watch on-demand content, and interact with creators on NexSq Studio.',
+    url: window.location.href,
+  });
   const isDesktop = useMediaQuery('(min-width: 1024px)');
   const mobileScrollRef = useRef<HTMLDivElement | null>(null);
   const touchStartYRef = useRef<number>(0);
