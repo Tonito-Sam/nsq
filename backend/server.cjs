@@ -63,6 +63,15 @@ try {
   console.warn('⚠️ stores route not available:', e?.message || e);
 }
 
+  // remove.bg proxy
+  try {
+    const removeBg = require('./routes/removebg');
+    app.use('/api/removebg', removeBg);
+    console.log('✅ Mounted /api/removebg');
+  } catch (e) {
+    console.warn('⚠️ removebg route not available:', e?.message || e);
+  }
+
 // WebRTC -> RTMP bridge route
 const webrtcBridgeRoutes = require('./routes/webrtc-bridge.cjs');
 app.use('/api/webrtc-bridge', webrtcBridgeRoutes);
