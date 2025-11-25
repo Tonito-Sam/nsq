@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route, useParams, useLocation } from "react-rout
 import { AuthProvider } from "@/hooks/useAuth";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ShowProvider } from "@/contexts/ShowContext";
+import RouteTracker from '@/components/RouteTracker';
 
 // Pages
 import Index from "./pages/Index";
@@ -60,6 +61,8 @@ import ForgotPassword from "./pages/ForgotPassword";
 import GroupDetails from "./pages/groups/[groupId]";
 import StorePage from "./pages/store/[store_id]";
 import ProductPage from "./pages/product/[product_id]";
+import Deals from './pages/Deals';
+import Sales from './pages/Sales';
 import { ManageOrders } from './components/ManageOrders';
 import OneVoiceAdmin from './pages/1voiceadmin';
 import EventSettingsPage from './pages/events/settings/[eventId]';
@@ -182,6 +185,8 @@ const App = () => {
                 <Toaster />
                 <Sonner />
                 <BrowserRouter>
+                  {/* Track last non-auth route for session restore */}
+                  <RouteTracker />
                   <Routes>
                     <Route path="/" element={<Index />} />
                     <Route path="/auth" element={<Auth />} />
@@ -193,6 +198,8 @@ const App = () => {
                     <Route path="/my-store" element={<MyStore />} />
                     <Route path="/create-store" element={<CreateStore />} />
                     <Route path="/square" element={<Square />} />
+                    <Route path="/deals" element={<Deals />} />
+                    <Route path="/sales" element={<Sales />} />
                     <Route path="/wallet" element={<Wallet />} />
                     <Route path="/studio" element={<Studio />} />
                     <Route path="/studio2" element={<Studio2 />} />
