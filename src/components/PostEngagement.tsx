@@ -73,9 +73,10 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
       window.removeEventListener('post-viewed', onViewed as EventListener);
     };
   }, [postId]);
+
   return (
     <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
-      <div className="flex items-center space-x-4">
+      <div className="flex items-center space-x-2 md:space-x-4">
         <ReactionPicker
           onReact={onReaction}
           currentReaction={selectedReaction ?? undefined}
@@ -87,48 +88,48 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
           variant="ghost"
           size="sm"
           onClick={onToggleComments}
-          className="flex items-center space-x-1.5 text-gray-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 px-2 py-1 rounded-lg transition-all duration-200 hover:scale-105"
+          className="flex items-center space-x-1 md:space-x-1.5 text-gray-500 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 px-1.5 py-0.5 md:px-2 md:py-1 rounded-lg transition-all duration-200 hover:scale-105"
         >
-          <MessageCircle className="h-4 w-4" />
-          <span className="text-sm font-medium">{currentComments}</span>
+          <MessageCircle className="h-3.5 w-3.5 md:h-4 md:w-4" />
+          <span className="text-xs md:text-sm font-medium">{currentComments}</span>
         </Button>
 
         <Button
           variant="ghost"
           size="sm"
           onClick={onRepost}
-          className={`flex items-center space-x-1.5 px-2 py-1 rounded-lg transition-all duration-200 hover:scale-105 ${
+          className={`flex items-center space-x-1 md:space-x-1.5 px-1.5 py-0.5 md:px-2 md:py-1 rounded-lg transition-all duration-200 hover:scale-105 ${
             reposted ? 'text-green-600 bg-green-50 dark:bg-green-900/20' : 'text-gray-500 hover:text-green-500 hover:bg-green-50 dark:hover:bg-green-900/20'
           }`}
         >
-          <Repeat className="h-4 w-4" />
-          <span className="text-sm font-medium">{currentReposts}</span>
+          <Repeat className="h-3.5 w-3.5 md:h-4 md:w-4" />
+          <span className="text-xs md:text-sm font-medium">{currentReposts}</span>
         </Button>
 
         <Button
           variant="ghost"
           size="sm"
           onClick={onShare}
-          className="flex items-center space-x-1.5 text-gray-500 hover:text-purple-500 hover:bg-purple-50 dark:hover:bg-purple-900/20 px-2 py-1 rounded-lg transition-all duration-200 hover:scale-105"
+          className="flex items-center space-x-1 md:space-x-1.5 text-gray-500 hover:text-purple-500 hover:bg-purple-50 dark:hover:bg-purple-900/20 px-1.5 py-0.5 md:px-2 md:py-1 rounded-lg transition-all duration-200 hover:scale-105"
         >
-          <Share2 className="h-4 w-4" />
-          <span className="text-sm font-medium">{shares}</span>
+          <Share2 className="h-3.5 w-3.5 md:h-4 md:w-4" />
+          <span className="text-xs md:text-sm font-medium">{shares}</span>
         </Button>
 
-  {/* Views */}
-  <div className="flex items-center">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="flex items-center space-x-1.5 text-gray-500 hover:text-gray-700 px-2 py-1 rounded-lg transition-all duration-200"
-              onClick={() => setViewersOpen(true)}
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
-              <span className="text-sm font-medium">{viewsCount !== null ? viewsCount : 0}</span>
-            </Button>
-            {postId && (
-              <PostViewersModal open={viewersOpen} onOpenChange={setViewersOpen} postId={postId} />
-            )}
+        {/* Views */}
+        <div className="flex items-center">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="flex items-center space-x-1 md:space-x-1.5 text-gray-500 hover:text-gray-700 px-1.5 py-0.5 md:px-2 md:py-1 rounded-lg transition-all duration-200"
+            onClick={() => setViewersOpen(true)}
+          >
+            <svg className="h-3.5 w-3.5 md:h-4 md:w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span className="text-xs md:text-sm font-medium">{viewsCount !== null ? viewsCount : 0}</span>
+          </Button>
+          {postId && (
+            <PostViewersModal open={viewersOpen} onOpenChange={setViewersOpen} postId={postId} />
+          )}
         </div>
       </div>
     </div>
