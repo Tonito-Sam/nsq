@@ -252,19 +252,30 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
       const rect = viewRef.current.getBoundingClientRect();
       const inView = rect.top >= 0 && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight);
       if (inView && !timer) {
+        // Count a view after a threshold (ms). Change this value to 5000 to use 5s, 15000 for 15s, etc.
+        const VIEW_THRESHOLD_MS = 15000;
         timer = setTimeout(async () => {
           // Record view via server endpoint to avoid client RLS/permission errors
           try {
-            await fetch('/api/post-views', {
+            const resp = await fetch('/api/post-views', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ post_id: post.id, user_id: currentUser.id })
             });
+            if (resp && resp.ok) {
+              // notify other components (e.g., PostEngagement) to update counts
+              try {
+                const ev = new CustomEvent('post-viewed', { detail: { postId: post.id } });
+                window.dispatchEvent(ev);
+              } catch (e) {
+                // ignore event dispatch errors
+              }
+            }
           } catch (err) {
             // Log but don't break the feed
             console.error('failed to report post view', err);
           }
-        }, 30000);
+        }, VIEW_THRESHOLD_MS);
       } else if (!inView && timer) {
         clearTimeout(timer);
         timer = null;

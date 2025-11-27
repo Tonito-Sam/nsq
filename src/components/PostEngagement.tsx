@@ -40,19 +40,36 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
 
   React.useEffect(() => {
     let mounted = true;
-  if (!postId) return;
+    if (!postId) return;
     const fetchCount = async () => {
       try {
-  const resp = await fetch(`/api/post-views?post_id=${encodeURIComponent(postId)}`);
+        const resp = await fetch(`/api/post-views?post_id=${encodeURIComponent(postId)}`);
         if (!resp.ok) return;
         const json = await resp.json();
-        if (mounted && json && typeof json.count === 'number') setViewsCount(json.count);
+        if (mounted && json && typeof json.count === 'number') setViewsCount(json.count ?? 0);
       } catch (err) {
         // ignore
       }
     };
     fetchCount();
-    return () => { mounted = false; };
+
+    // Listen for local post-view events to update the count in real-time
+    const onViewed = (e: any) => {
+      try {
+        if (!e || !e.detail) return;
+        if (e.detail.postId === postId) {
+          setViewsCount((v) => (typeof v === 'number' ? v + 1 : 1));
+        }
+      } catch (er) {
+        // ignore
+      }
+    };
+    window.addEventListener('post-viewed', onViewed as EventListener);
+
+    return () => {
+      mounted = false;
+      window.removeEventListener('post-viewed', onViewed as EventListener);
+    };
   }, [postId]);
   return (
     <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
