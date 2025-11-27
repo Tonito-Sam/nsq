@@ -11,6 +11,7 @@ interface PostEngagementProps {
   currentReposts: number;
   shares: number;
   reposted: boolean;
+  postId?: string;
   showReactions: boolean;
   onToggleReactions: () => void;
   onReaction: (reactionType: string) => void;
@@ -27,6 +28,7 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
   currentReposts,
   shares,
   reposted,
+  postId,
   showReactions,
   onToggleReactions,
   onReaction,
@@ -34,12 +36,30 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
   onRepost,
   onShare
 }) => {
+  const [viewsCount, setViewsCount] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    let mounted = true;
+  if (!postId) return;
+    const fetchCount = async () => {
+      try {
+  const resp = await fetch(`/api/post-views?post_id=${encodeURIComponent(postId)}`);
+        if (!resp.ok) return;
+        const json = await resp.json();
+        if (mounted && json && typeof json.count === 'number') setViewsCount(json.count);
+      } catch (err) {
+        // ignore
+      }
+    };
+    fetchCount();
+    return () => { mounted = false; };
+  }, [postId]);
   return (
     <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
       <div className="flex items-center space-x-4">
         <ReactionPicker
           onReact={onReaction}
-          currentReaction={selectedReaction}
+          currentReaction={selectedReaction ?? undefined}
           reactionCounts={reactionCounts}
           totalReactions={Object.values(reactionCounts).reduce((a, b) => a + b, 0)}
         />
@@ -75,6 +95,19 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
           <Share2 className="h-4 w-4" />
           <span className="text-sm font-medium">{shares}</span>
         </Button>
+
+  {/* Views */}
+  <div className="flex items-center">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="flex items-center space-x-1.5 text-gray-500 hover:text-gray-700 px-2 py-1 rounded-lg transition-all duration-200"
+            onClick={() => { /* maybe open viewers modal */ }}
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span className="text-sm font-medium">{viewsCount !== null ? viewsCount : ''}</span>
+          </Button>
+        </div>
       </div>
     </div>
   );

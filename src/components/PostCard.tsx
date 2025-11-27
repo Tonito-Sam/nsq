@@ -55,6 +55,16 @@ interface PostCardProps {
     feeling?: string;
     event_banner?: string;
     event_description?: string;
+    // Moment-related fields (shared from Moments)
+    moment_bg?: string | null;
+    moment_font?: string | null;
+    moment_font_size?: number | null;
+    moment_type?: string | null;
+    moment_special_message?: string | null;
+    moment_special_icon?: string | null;
+    moment_special_name?: string | null;
+    is_custom_special_day?: boolean | null;
+    moment_special_id?: string | null;
   };
   currentUser: any;
   reactionCounts?: { [key: string]: number };
@@ -243,11 +253,17 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
       const inView = rect.top >= 0 && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight);
       if (inView && !timer) {
         timer = setTimeout(async () => {
-          // Insert view if not already viewed
-          await supabase.from('post_views').upsert(
-            { post_id: post.id, user_id: currentUser.id },
-            { onConflict: 'user_id,post_id' }
-          );
+          // Record view via server endpoint to avoid client RLS/permission errors
+          try {
+            await fetch('/api/post-views', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ post_id: post.id, user_id: currentUser.id })
+            });
+          } catch (err) {
+            // Log but don't break the feed
+            console.error('failed to report post view', err);
+          }
         }, 30000);
       } else if (!inView && timer) {
         clearTimeout(timer);
@@ -363,6 +379,16 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
               eventLocation={post.event_location || ''}
               location={post.location || ''}
               feeling={post.feeling || ''}
+                // Pass moment fields so PostContent can render postcard style moments in-feed
+                momentBg={post.moment_bg}
+                momentFont={post.moment_font}
+                momentFontSize={post.moment_font_size}
+                momentType={post.moment_type}
+                momentSpecialMessage={post.moment_special_message}
+                momentSpecialIcon={post.moment_special_icon}
+                momentSpecialName={post.moment_special_name}
+                isCustomSpecialDay={post.is_custom_special_day}
+                momentSpecialId={post.moment_special_id}
             />
           )}
           {/* PostEngagement with share modal handler */}
@@ -374,7 +400,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
             currentReposts={post.reposts_count || 0}
             shares={0}
             reposted={false}
-            showReactions={false}
+              postId={post.id}
+              showReactions={false}
             onToggleReactions={() => {}}
             onReaction={onReact ? (type) => onReact(type) : handleLike}
             onToggleComments={handleComment}
