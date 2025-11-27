@@ -8,7 +8,6 @@ import { CreatePostModal } from './CreatePostModal';
 import { MobileOffcanvas } from './MobileOffcanvas';
 import { HeaderLogo } from './header/HeaderLogo';
 import { HeaderNavigation } from './header/HeaderNavigation';
-import { NotificationBell } from './NotificationBell';
 import { ProfileDropdown } from './header/ProfileDropdown';
 import { Video, ShoppingBag } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -36,7 +35,6 @@ export const Header = () => {
           {/* Right Side Actions */}
           <div className="flex items-center space-x-3">
             <HeaderNavigation />
-            <NotificationBell />
             <ProfileDropdown />
 
             {/* Mobile: Avatar button instead of hamburger */}
