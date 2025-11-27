@@ -2,6 +2,7 @@ import React from 'react';
 import { MessageCircle, Share2, Repeat } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ReactionPicker } from './ReactionPicker';
+import PostViewersModal from './PostViewersModal';
 
 interface PostEngagementProps {
   selectedReaction: string | null;
@@ -126,12 +127,7 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
               <span className="text-sm font-medium">{viewsCount !== null ? viewsCount : 0}</span>
             </Button>
             {postId && (
-              // PostViewersModal lazy import to avoid circular deps
-              React.createElement(require('./PostViewersModal').PostViewersModal, {
-                open: viewersOpen,
-                onOpenChange: setViewersOpen,
-                postId
-              })
+              <PostViewersModal open={viewersOpen} onOpenChange={setViewersOpen} postId={postId} />
             )}
         </div>
       </div>
