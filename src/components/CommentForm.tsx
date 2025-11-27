@@ -128,13 +128,15 @@ export const CommentForm: React.FC<CommentFormProps> = ({ postId, onCommentAdded
 
     setLoading(true);
     try {
-      const { error } = await supabase
+      const { data: inserted, error } = await supabase
         .from('comments')
         .insert({
           content: comment.trim(),
           post_id: postId,
           user_id: user.id
-        });
+        })
+        .select('id')
+        .single();
 
       if (error) throw error;
 
@@ -149,6 +151,35 @@ export const CommentForm: React.FC<CommentFormProps> = ({ postId, onCommentAdded
       setComment('');
       fetchComments();
       onCommentAdded?.();
+      // Send notification to the post owner (if not self)
+      (async () => {
+        try {
+          const { data: postData, error: postErr } = await supabase
+            .from('posts')
+            .select('user_id')
+            .eq('id', postId)
+            .single();
+          if (!postErr && postData && postData.user_id && String(postData.user_id) !== String(user.id)) {
+            await fetch('/api/notifications/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                user_id: postData.user_id,
+                actor_id: user.id,
+                type: 'comment',
+                title: `${user.user_metadata?.first_name || user.email || 'Someone'} commented`,
+                message: comment.trim().slice(0, 240),
+                target_table: 'comments',
+                action_id: inserted?.id || null,
+                data: { comment_id: inserted?.id || null, post_id: postId }
+              })
+            }).catch(() => {});
+          }
+        } catch (e) {
+          // ignore notification failures
+          console.warn('comment notification failed', e);
+        }
+      })();
     } catch (error) {
       console.error('Error adding comment:', error);
     } finally {
@@ -162,20 +193,82 @@ export const CommentForm: React.FC<CommentFormProps> = ({ postId, onCommentAdded
 
     setSubmittingReply(true);
     try {
-      const { error } = await supabase
+
+      const { data: insertedReply, error } = await supabase
         .from('comments')
         .insert({
           content: replyContent.trim(),
           post_id: postId,
           user_id: user.id,
           parent_comment_id: parentId
-        });
+        })
+        .select('id, user_id, parent_comment_id')
+        .single();
 
       if (error) throw error;
 
       setReplyContent('');
       setReplyingTo(null);
       fetchComments();
+    
+        // Send notification to post owner and optionally parent comment author
+        (async () => {
+          try {
+            const { data: postData, error: postErr } = await supabase
+              .from('posts')
+              .select('user_id')
+              .eq('id', postId)
+              .single();
+
+            if (!postErr && postData && postData.user_id && String(postData.user_id) !== String(user.id)) {
+              await fetch('/api/notifications/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  user_id: postData.user_id,
+                  actor_id: user.id,
+                  type: 'comment',
+                  title: `${user.user_metadata?.first_name || user.email || 'Someone'} replied`,
+                  message: replyContent.trim().slice(0, 240),
+                  target_table: 'comments',
+                  action_id: insertedReply?.id || null,
+                  data: { comment_id: insertedReply?.id || null, post_id: postId }
+                })
+              }).catch(() => {});
+            }
+
+            // Notify parent comment author (if exists and different from replier and post owner)
+            if (insertedReply?.parent_comment_id) {
+              try {
+                const { data: parentComment } = await supabase
+                  .from('comments')
+                  .select('user_id')
+                  .eq('id', insertedReply.parent_comment_id)
+                  .single();
+                if (parentComment && parentComment.user_id && String(parentComment.user_id) !== String(user.id)) {
+                  await fetch('/api/notifications/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      user_id: parentComment.user_id,
+                      actor_id: user.id,
+                      type: 'reply',
+                      title: `${user.user_metadata?.first_name || user.email || 'Someone'} replied to your comment`,
+                      message: replyContent.trim().slice(0, 240),
+                      target_table: 'comments',
+                      action_id: insertedReply?.id || null,
+                      data: { comment_id: insertedReply?.id || null, post_id: postId }
+                    })
+                  }).catch(() => {});
+                }
+              } catch (e) {
+                // swallow
+              }
+            }
+          } catch (e) {
+            console.warn('reply notification failed', e);
+          }
+        })();
     } catch (error) {
       console.error('Error adding reply:', error);
     } finally {

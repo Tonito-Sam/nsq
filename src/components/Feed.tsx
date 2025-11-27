@@ -126,6 +126,16 @@ export const Feed = () => {
           shares_count,
           reposts_count,
           post_type,
+          moment_bg,
+          moment_font,
+          moment_font_size,
+          moment_type,
+          moment_special_message,
+          moment_special_icon,
+          moment_special_name,
+          is_custom_special_day,
+          moment_special_id,
+          share_to_feed,
           media_url,
           media_urls,
           voice_note_url,
@@ -146,8 +156,9 @@ export const Feed = () => {
             bio
           )
         `, { count: 'exact' })
-        .is('group_id', null)
-        .neq('post_type', 'moment')
+  .is('group_id', null)
+  // Include regular posts and moments explicitly shared to feed
+  .or('post_type.neq.moment,share_to_feed.eq.true')
         .order('created_at', { ascending: false })
         .range(pageParam * 10, (pageParam + 1) * 10 - 1);
 
@@ -307,9 +318,41 @@ export const Feed = () => {
 
       return { postId, reactionType };
     },
-    onSuccess: () => {
+    onSuccess: async (result: any) => {
       // Invalidate reactions query to refetch
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.reactions(posts.map(p => p.id)) });
+
+      // Notify post owner when they receive a like (or reaction)
+      try {
+        if (!user?.id) return;
+        const postId = result.postId;
+        // Fetch post owner
+        const { data: postData, error: postErr } = await supabase
+          .from('posts')
+          .select('user_id')
+          .eq('id', postId)
+          .single();
+        const owner = postData?.user_id;
+        if (!postErr && owner && String(owner) !== String(user.id)) {
+          // Send notification via server route
+          fetch('/api/notifications/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_id: owner,
+              actor_id: user.id,
+              type: 'like',
+              title: 'New like',
+              message: 'Someone liked your post',
+              target_table: 'post_likes',
+              data: { post_id: postId }
+            })
+          }).catch(() => {});
+        }
+      } catch (e) {
+        // ignore notification errors
+        console.warn('post like notification failed', e);
+      }
     },
     onError: (error) => {
       console.error('Error handling reaction:', error);
