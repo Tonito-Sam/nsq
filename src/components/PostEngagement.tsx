@@ -37,6 +37,7 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
   onShare
 }) => {
   const [viewsCount, setViewsCount] = React.useState<number | null>(null);
+  const [viewersOpen, setViewersOpen] = React.useState(false);
 
   React.useEffect(() => {
     let mounted = true;
@@ -115,15 +116,23 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
 
   {/* Views */}
   <div className="flex items-center">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="flex items-center space-x-1.5 text-gray-500 hover:text-gray-700 px-2 py-1 rounded-lg transition-all duration-200"
-            onClick={() => { /* maybe open viewers modal */ }}
-          >
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
-            <span className="text-sm font-medium">{viewsCount !== null ? viewsCount : 0}</span>
-          </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="flex items-center space-x-1.5 text-gray-500 hover:text-gray-700 px-2 py-1 rounded-lg transition-all duration-200"
+              onClick={() => setViewersOpen(true)}
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+              <span className="text-sm font-medium">{viewsCount !== null ? viewsCount : 0}</span>
+            </Button>
+            {postId && (
+              // PostViewersModal lazy import to avoid circular deps
+              React.createElement(require('./PostViewersModal').PostViewersModal, {
+                open: viewersOpen,
+                onOpenChange: setViewersOpen,
+                postId
+              })
+            )}
         </div>
       </div>
     </div>
