@@ -9,6 +9,7 @@ const removeBgRoutes = require('./routes/removebg');
 const currencyRoutes = require('./routes/currency');
 const promoRoutes = require('./routes/promo');
 const usersRoutes = require('./routes/users');
+const campaignsRoutes = require('./routes/campaigns');
 
 const app = express();
 app.use(cors());
@@ -23,6 +24,7 @@ app.use('/api/removebg', removeBgRoutes);
 app.use('/api/currency', currencyRoutes);
 app.use('/api/promo', promoRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/campaigns', campaignsRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
