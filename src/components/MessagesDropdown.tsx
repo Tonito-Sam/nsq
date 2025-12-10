@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate } from 'react-router-dom';
 import { MessageCircle } from 'lucide-react';
@@ -47,7 +47,7 @@ export const MessagesDropdown = () => {
           .eq('conversation_id', conv.id)
           .order('created_at', { ascending: false })
           .limit(1)
-          .single();
+          .maybeSingle();
         const { count: unread } = await supabase
           .from('messages')
           .select('*', { count: 'exact', head: true })

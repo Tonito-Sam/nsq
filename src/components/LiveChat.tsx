@@ -325,47 +325,61 @@ export const LiveChat = () => {
         </form>
       </div>
 
-      <div className="flex items-center justify-between mb-4 pb-3 border-b dark:border-gray-700">
-        {/* Distribute badges evenly across the row */}
-        <div className="w-full flex items-center justify-between gap-3">
-          {/* Premiered badge (TV + days) - first */}
-          <button
-            type="button"
-            aria-label="Premiered"
-            title={premieredLabel || ''}
-            className="flex items-center space-x-2 bg-yellow-50 dark:bg-yellow-900 px-3 py-1 rounded-md">
-            <Tv className="w-4 h-4 text-yellow-600 dark:text-yellow-300" />
-            <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">{premieredDays === 0 ? 'today' : premieredDays !== null ? `${premieredDays}d` : '-'}</span>
-          </button>
+    <div className="flex items-center mb-4 pb-3 border-b dark:border-gray-700">
+  <div className="w-full flex flex-wrap items-center gap-4 shrink min-w-0 overflow-hidden">
 
-          {/* Views badge (Eye) */}
-          <button
-            type="button"
-            aria-label="Views"
-            className="flex items-center space-x-2 bg-blue-50 dark:bg-blue-900 px-3 py-1 rounded-md">
-            <Eye className="w-4 h-4 text-blue-600 dark:text-blue-300" />
-            <span className="text-xs font-medium text-blue-700 dark:text-blue-300">{viewerCount.toLocaleString()}</span>
-          </button>
+    {/* Premiered badge */}
+    <button
+      type="button"
+      aria-label="Premiered"
+      title={premieredLabel || ''}
+      className="inline-flex items-center flex-nowrap space-x-1 bg-yellow-50 dark:bg-yellow-900 px-2 py-1 rounded-md whitespace-nowrap min-w-0"
+    >
+      <Tv className="w-4 h-4 text-yellow-600 dark:text-yellow-300" />
+      <span className="text-xs font-medium text-yellow-700 dark:text-yellow-300">
+        {premieredDays === 0 ? 'today' : premieredDays !== null ? `${premieredDays}d` : '-'}
+      </span>
+    </button>
 
-          {/* Likes badge */}
-          <button
-            type="button"
-            aria-label="Likes"
-            className="flex items-center space-x-2 bg-pink-50 dark:bg-pink-900 px-3 py-1 rounded-md">
-            <Heart className="w-4 h-4 text-pink-600 dark:text-pink-300" />
-            <span className="text-xs font-medium text-pink-700 dark:text-pink-300">{likeCount}</span>
-          </button>
+    {/* Views badge */}
+    <button
+      type="button"
+      aria-label="Views"
+      className="inline-flex items-center flex-nowrap space-x-1 bg-blue-50 dark:bg-blue-900 px-2 py-1 rounded-md whitespace-nowrap min-w-0"
+    >
+      <Eye className="w-4 h-4 text-blue-600 dark:text-blue-300" />
+      <span className="text-xs font-medium text-blue-700 dark:text-blue-300">
+        {viewerCount.toLocaleString()}
+      </span>
+    </button>
 
-          {/* Comments badge */}
-          <button
-            type="button"
-            aria-label="Comments"
-            className="flex items-center space-x-2 bg-indigo-50 dark:bg-indigo-900 px-3 py-1 rounded-md">
-            <MessageCircle className="w-4 h-4 text-indigo-600 dark:text-indigo-300" />
-            <span className="text-xs font-medium text-indigo-700 dark:text-indigo-300">{messages.length}</span>
-          </button>
-        </div>
-      </div>
+    {/* Likes badge */}
+    <button
+      type="button"
+      aria-label="Likes"
+      className="inline-flex items-center flex-nowrap space-x-1 bg-pink-50 dark:bg-pink-900 px-2 py-1 rounded-md whitespace-nowrap min-w-0"
+    >
+      <Heart className="w-4 h-4 text-pink-600 dark:text-pink-300" />
+      <span className="text-xs font-medium text-pink-700 dark:text-pink-300">
+        {likeCount}
+      </span>
+    </button>
+
+    {/* Comments badge */}
+    <button
+      type="button"
+      aria-label="Comments"
+      className="inline-flex items-center flex-nowrap space-x-1 bg-indigo-50 dark:bg-indigo-900 px-2 py-1 rounded-md whitespace-nowrap min-w-0"
+    >
+      <MessageCircle className="w-4 h-4 text-indigo-600 dark:text-indigo-300" />
+      <span className="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+        {messages.length}
+      </span>
+    </button>
+
+  </div>
+</div>
+
 
       <div
         ref={chatContainerRef}
@@ -422,71 +436,87 @@ export const LiveChat = () => {
         )}
       </div>
 
-  <form onSubmit={handleSendMessage} className="hidden md:flex items-end gap-2 mt-auto bg-gray-50 dark:bg-[#18181c] rounded-xl px-3 py-2 shadow-inner border border-gray-200 dark:border-gray-800">
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          className="h-10 w-10 p-0 text-gray-400 hover:text-pink-500 transition"
-          onClick={handleLike}
-          aria-label="Like"
-        >
-          <Heart className="w-5 h-5 fill-current" />
-        </Button>
+<form
+  onSubmit={handleSendMessage}
+  className="hidden md:flex items-end gap-2 mt-auto bg-gray-50 dark:bg-[#18181c] rounded-xl px-3 py-2 shadow-inner border border-gray-200 dark:border-gray-800"
+>
+  {/* Like button */}
+  <Button
+    type="button"
+    size="icon"
+    variant="ghost"
+    className="h-10 w-10 p-0 text-gray-400 hover:text-pink-500 transition"
+    onClick={handleLike}
+    aria-label="Like"
+  >
+    <Heart className="w-5 h-5 fill-current" />
+  </Button>
 
-        <div className="relative flex-1">
-          <button
-            type="button"
-            onClick={(e) => { openerRef.current = e.currentTarget as HTMLButtonElement; setShowEmojiPicker(v => !v); }}
-            aria-label="Emoji picker"
-            className="absolute left-3 top-3 h-6 w-6 flex items-center justify-center text-lg"
-          >
-            😊
-          </button>
+  {/* Input wrapper */}
+  <div className="relative flex-1">
 
-          <Input
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            placeholder={user ? "Type your message..." : "Login to chat"}
-            className="h-10 text-sm rounded-lg pl-10 pr-10 bg-white dark:bg-[#23232b] border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition"
-            maxLength={200}
-            autoComplete="off"
-            disabled={!user || isSending}
-          />
+    {/* Emoji button */}
+    <button
+      type="button"
+      onClick={(e) => { openerRef.current = e.currentTarget as HTMLButtonElement; setShowEmojiPicker(v => !v); }}
+      aria-label="Emoji picker"
+      className="absolute left-3 top-3 h-6 w-6 flex items-center justify-center text-lg"
+    >
+      😊
+    </button>
 
-            {showEmojiPicker && pickerPos && createPortal(
-              <div ref={pickerRef} style={{ position: 'fixed', left: pickerPos.left, top: pickerPos.top, zIndex: 99999 }} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-2 w-56">
-                <div className="grid grid-cols-6 gap-2">
-                  {EMOJI_PICKER_LIST.map((e: any, i: number) => (
-                    <button
-                      key={`${e.char}-${i}`}
-                      type="button"
-                      title={e.name}
-                      onClick={() => {
-                        setNewMessage((m) => (m || '') + e.char + ' ');
-                        setShowEmojiPicker(false);
-                      }}
-                      className="p-1 text-lg rounded hover:bg-gray-100 dark:hover:bg-gray-700"
-                    >
-                      {e.char}
-                    </button>
-                  ))}
-                </div>
-              </div>,
-              document.body
-            )}
+    {/* Textarea input */}
+    <textarea
+      value={newMessage}
+      onChange={(e) => setNewMessage(e.target.value)}
+      placeholder={user ? "Type your message..." : "Login to chat"}
+      rows={2}
+      className="w-full h-auto min-h-[40px] max-h-[160px] resize-none text-sm rounded-lg pl-10 pr-12 py-2 bg-white dark:bg-[#23232b] border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-400 focus:border-blue-400 transition"
+      maxLength={400}
+      autoComplete="off"
+      disabled={!user || isSending}
+    />
+
+    {/* Send button inside the field */}
+    <button
+      type="submit"
+      disabled={!newMessage.trim() || !user || isSending}
+      aria-label="Send"
+      className="absolute right-2 bottom-2 h-8 w-8 flex items-center justify-center rounded-md bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-50 transition"
+    >
+      <Send className="w-4 h-4" />
+    </button>
+
+    {/* Emoji picker */}
+    {showEmojiPicker && pickerPos && createPortal(
+      <div
+        ref={pickerRef}
+        style={{ position: 'fixed', left: pickerPos.left, top: pickerPos.top, zIndex: 99999 }}
+        className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg p-2 w-56"
+      >
+        <div className="grid grid-cols-6 gap-2">
+          {EMOJI_PICKER_LIST.map((e: any, i: number) => (
+            <button
+              key={`${e.char}-${i}`}
+              type="button"
+              title={e.name}
+              onClick={() => {
+                setNewMessage((m) => (m || '') + e.char + ' ');
+                setShowEmojiPicker(false);
+              }}
+              className="p-1 text-lg rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              {e.char}
+            </button>
+          ))}
         </div>
+      </div>,
+      document.body
+    )}
 
-        <Button 
-          type="submit" 
-          size="icon" 
-          className="h-10 w-10 bg-purple-600 hover:bg-purple-700 text-white rounded-lg flex items-center justify-center shadow-md transition disabled:opacity-50" 
-          disabled={!newMessage.trim() || !user || isSending}
-          aria-label="Send"
-        >
-          <Send className="h-5 w-5 text-white" />
-        </Button>
-      </form>
+  </div>
+</form>
+
 
       {!user && (
         <div className="text-xs text-center text-gray-500 dark:text-gray-400 mt-2">

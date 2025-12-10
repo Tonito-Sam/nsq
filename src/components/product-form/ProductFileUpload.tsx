@@ -11,6 +11,8 @@ interface ProductFileUploadProps {
   onFileChange: (files: FileList | null) => void;
   onRemoveImage: (index: number) => void;
   onRemoveFile: (index: number) => void;
+  removeBgEnabled?: boolean;
+  onToggleRemoveBg?: (enabled: boolean) => void;
 }
 
 export const ProductFileUpload: React.FC<ProductFileUploadProps> = ({
@@ -21,6 +23,7 @@ export const ProductFileUpload: React.FC<ProductFileUploadProps> = ({
   onFileChange,
   onRemoveImage,
   onRemoveFile
+  , removeBgEnabled = false, onToggleRemoveBg
 }) => {
   // Services don't need file uploads typically
   if (productType === 'service') {
@@ -35,7 +38,12 @@ export const ProductFileUpload: React.FC<ProductFileUploadProps> = ({
               type="file"
               accept="image/*"
               multiple
-              onChange={(e) => onImageChange(e.target.files)}
+              onChange={(e) => {
+                const files = e.target.files;
+                onImageChange(files);
+                // reset input so same files can be selected again if needed
+                (e.target as HTMLInputElement).value = '';
+              }}
               className="hidden"
               id="service-images"
             />
@@ -74,6 +82,18 @@ export const ProductFileUpload: React.FC<ProductFileUploadProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Background removal toggle */}
+      <div className="flex items-center space-x-3">
+        <input
+          id="remove-bg"
+          type="checkbox"
+          checked={removeBgEnabled}
+          onChange={(e) => onToggleRemoveBg && onToggleRemoveBg(e.target.checked)}
+          className="h-4 w-4"
+        />
+        <label htmlFor="remove-bg" className="text-sm text-gray-700">Automatically remove background from uploaded images</label>
+      </div>
+
       {/* Product Images */}
       <div className="space-y-3">
         <Label>Product Images</Label>
@@ -82,7 +102,12 @@ export const ProductFileUpload: React.FC<ProductFileUploadProps> = ({
             type="file"
             accept="image/*"
             multiple
-            onChange={(e) => onImageChange(e.target.files)}
+            onChange={(e) => {
+              const files = e.target.files;
+              onImageChange(files);
+              // reset input so same files can be selected again if needed
+              (e.target as HTMLInputElement).value = '';
+            }}
             className="hidden"
             id="images"
           />
@@ -125,7 +150,11 @@ export const ProductFileUpload: React.FC<ProductFileUploadProps> = ({
             <input
               type="file"
               multiple
-              onChange={(e) => onFileChange(e.target.files)}
+              onChange={(e) => {
+                const files = e.target.files;
+                onFileChange(files);
+                (e.target as HTMLInputElement).value = '';
+              }}
               className="hidden"
               id="files"
             />

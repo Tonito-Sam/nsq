@@ -145,7 +145,23 @@ const Auth = () => {
 
   useEffect(() => {
     if (user) {
-      navigate('/');
+      // After login/session restore, try to return user to their last visited route
+      try {
+        const last = localStorage.getItem('last_route');
+        const lastTs = Number(localStorage.getItem('last_route_ts') || '0');
+        const skipPrefixes = ['/auth', '/forgot-password', '/reset-password', '/email-confirmed'];
+        const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+        const now = Date.now();
+        const isRecent = last && lastTs && now - lastTs < MAX_AGE_MS;
+        if (isRecent && !skipPrefixes.some(p => last!.startsWith(p))) {
+          navigate(last!);
+        } else {
+          // older than 24h or missing, go to main feed (root '/'). Restored to canonical '/'
+          navigate('/');
+        }
+      } catch (e) {
+        navigate('/');
+      }
     }
   }, [user, navigate]);
 
@@ -239,7 +255,22 @@ const Auth = () => {
             return;
           }
         }
-        navigate('/');
+        // Navigate to last saved route if available
+        try {
+          const last = localStorage.getItem('last_route');
+          const lastTs = Number(localStorage.getItem('last_route_ts') || '0');
+          const skipPrefixes = ['/auth', '/forgot-password', '/reset-password', '/email-confirmed'];
+          const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+          const now = Date.now();
+          const isRecent = last && lastTs && now - lastTs < MAX_AGE_MS;
+          if (isRecent && !skipPrefixes.some(p => last!.startsWith(p))) {
+            navigate(last!);
+          } else {
+            navigate('/');
+          }
+        } catch (e) {
+          navigate('/');
+        }
       } else {
         if (password !== confirmPassword) {
           throw new Error("Passwords don't match");

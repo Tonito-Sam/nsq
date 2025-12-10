@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "nodemon server.cjs",
     "start": "node server.cjs",
+    "notification-worker": "node -r dotenv/config workers/notification-worker.js",
+  "notification-digest-worker": "node -r dotenv/config workers/notification-digest-worker.js",
     "bridge": "node webrtc-rtmp-bridge.cjs",
     "ai-proxy": "node ai-photo-studio-proxy.js"
   },

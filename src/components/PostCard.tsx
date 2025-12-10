@@ -270,6 +270,13 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
               } catch (e) {
                 // ignore event dispatch errors
               }
+            } else {
+              try {
+                const txt = resp ? await resp.text() : 'no response';
+                console.warn('post-view POST returned non-ok:', resp ? resp.status : 'no-resp', txt);
+              } catch (e) {
+                console.warn('post-view POST returned non-ok and failed to read body');
+              }
             }
           } catch (err) {
             // Log but don't break the feed

@@ -12,8 +12,8 @@ const FLUTTERWAVE_CURRENCIES = ['NGN', 'USD', 'GBP', 'EUR', 'KES', 'GHS', 'UGX',
 export const getAvailableGateways = (
   buyerCountry: string,
   buyerCurrency: string,
-  sellerCountry: string,
-  sellerCurrency: string
+  _sellerCountry: string,
+  _sellerCurrency: string
 ): PaymentGateway[] => {
   const availableGateways: PaymentGateway[] = [];
 
@@ -205,7 +205,13 @@ const initiatePaystackPayment = async (payment: any) => {
   const config = {
     key: publicKey,
     email: payment.metadata.email,
-    amount: payment.amount * 100, // Convert to kobo
+    // Paystack requires amount as an integer in the smallest currency unit (kobo for NGN, cents for others).
+    // Use Math.round to avoid floating point precision issues (e.g. 12.06 * 100 -> 1206.0000000000002).
+    amount: (() => {
+      const n = Number(payment.amount);
+      if (!Number.isFinite(n)) return 0;
+      return Math.round(n * 100);
+    })(),
     currency: payment.currency,
     ref: payment.reference,
     metadata: payment.metadata,
@@ -250,6 +256,12 @@ const initiatePaystackPayment = async (payment: any) => {
   };
 
   if ((window as any).PaystackPop) {
+    // Validate amount before setup
+    if (!Number.isInteger((config as any).amount) || (config as any).amount <= 0) {
+      console.error('Invalid Paystack amount in config:', (config as any).amount, 'original:', payment.amount);
+      throw new Error('Invalid payment amount for Paystack. Amount must be a positive integer (in kobo/cents).');
+    }
+
     const handler = (window as any).PaystackPop.setup(config);
     handler.openIframe();
   }
@@ -371,7 +383,7 @@ const initiateApplePayPayment = async (payment: any) => {
 
     const session = new (window as any).ApplePaySession(3, request);
 
-    session.onvalidatemerchant = (event: any) => {
+    session.onvalidatemerchant = () => {
       console.log('Validating merchant for Apple Pay');
     };
 

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { specialBackgrounds, SpecialBackground } from './specialBackgrounds';
 import dayjs from 'dayjs';
 import { supabase } from '@/integrations/supabase/client';
@@ -32,7 +33,7 @@ function getUserCountry(user: any): string | null {
 }
 
 // Helper to check if today matches a special background's date
-function isTodaySpecial(bg: SpecialBackground, userCountry: string | null): boolean {
+function isTodaySpecial(bg: SpecialBackground, _userCountry: string | null): boolean {
   const today = dayjs();
   // Handle fixed date (MM-DD)
   if (typeof bg.date === 'string' && /^\d{2}-\d{2}$/.test(bg.date)) {
@@ -71,7 +72,8 @@ const FONT_SIZES = [24, 32, 40, 48, 56];
 
 interface TextMomentCreatorProps {
   user: any;
-  onMomentCreated?: () => void;
+  // Called after a moment is successfully created. Receives the inserted post object.
+  onMomentCreated?: (inserted?: any) => void;
   isUploading?: boolean;
   setIsUploading?: (v: boolean) => void;
 }
@@ -92,6 +94,8 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({ user, onMomentCre
   const [customSpecialIcon, setCustomSpecialIcon] = useState<string>(CUSTOM_ICONS[0]);
   const [customSpecialName, setCustomSpecialName] = useState('My Special Day');
   const [customSpecialMsg, setCustomSpecialMsg] = useState('');
+  const [shareToFeed, setShareToFeed] = useState(false);
+  const queryClient = useQueryClient();
 
   // Handle background selection
   const handleBgSelect = (color: string) => {
@@ -162,14 +166,50 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({ user, onMomentCre
         insertObj.moment_special_message = customSpecialMsg.trim() || undefined;
         insertObj.moment_special_icon = customSpecialIcon;
         insertObj.moment_special_name = customSpecialName;
+        insertObj.share_to_feed = shareToFeed || false;
       }
-      const { error } = await supabase
+      // If a predefined special was selected, include share flag as well
+      if (selectedSpecial) {
+        insertObj.share_to_feed = shareToFeed || false;
+      }
+      const { data: inserted, error } = await supabase
         .from('posts')
         .insert(insertObj)
         .select()
         .single();
       if (error) throw error;
-      if (onMomentCreated) onMomentCreated();
+      // Invalidate posts query so the main feed picks up the newly shared moment without a full page refresh
+      try {
+        // Invalidate using the filters object to match project's react-query usage
+        queryClient.invalidateQueries({ queryKey: ['posts'] });
+      } catch (e) {
+        // non-fatal
+        console.debug('Failed to invalidate posts query', e);
+      }
+      if (onMomentCreated) onMomentCreated(inserted);
+      // Optimistically add the inserted moment to the posts cache so it appears immediately in feed
+      try {
+        queryClient.setQueryData(['posts'], (old: any) => {
+          if (!old) return old;
+          const newPost = {
+            ...inserted,
+            comments_count: 0,
+            likes_count: 0,
+            shares_count: 0,
+            reposts_count: 0,
+            media_urls: inserted.media_urls || (inserted.media_url ? [inserted.media_url] : undefined),
+            media_url: inserted.media_url,
+          };
+          const pages = Array.isArray(old.pages) ? old.pages : [];
+          const newPages = pages.length > 0 ? pages.map((page: any, idx: number) => {
+            if (idx === 0) return { ...page, posts: [newPost, ...(page.posts || [])] };
+            return page;
+          }) : [{ posts: [newPost] }];
+          return { ...old, pages: newPages };
+        });
+      } catch (e) {
+        console.debug('Optimistic cache update failed', e);
+      }
       setText('');
       setCustomColor('');
       setSelectedSpecial(null);
@@ -346,6 +386,16 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({ user, onMomentCre
               <div className="text-xs text-muted-foreground text-right">{customSpecialMessage.length}/60</div>
             </div>
           )}
+          <div className="flex items-center gap-2 mt-2">
+            <input
+              id="share-to-feed"
+              type="checkbox"
+              checked={shareToFeed}
+              onChange={e => setShareToFeed(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <label htmlFor="share-to-feed" className="text-sm text-foreground">Also share this special moment to your main feed</label>
+          </div>
           <div style={previewStyle} className="relative overflow-hidden">
             {/* User text, centered */}
             <span style={{ width: '100%', zIndex: 1, color: getContrastYIQ(previewBg) }}>{text || 'Your text moment will appear here'}</span>

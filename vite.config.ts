@@ -15,8 +15,23 @@ export default defineConfig(({ mode }) => ({
     },
     // Proxy local AI proxy endpoint to backend port where the Express ai-photo-studio-proxy runs
     proxy: {
+      // Forward generic /api requests to the backend server (Express) running on :5000
+      // This ensures client calls like /api/notifications are routed to the backend
+      '/api': {
+        // Frontend dev proxy -> backend. Backend in this workspace runs on 3001.
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+        // don't rewrite so paths like /api/ai-photo-studio still match more specific rules below
+      },
       '/api/ai-photo-studio': {
         target: 'http://localhost:3001',
+        changeOrigin: true,
+        secure: false,
+      },
+      // Proxy remove.bg backend proxy to local backend so client can call /api/removebg
+      '/api/removebg': {
+        target: 'http://localhost:5000',
         changeOrigin: true,
         secure: false,
       },

@@ -364,6 +364,8 @@ const UploadReels = () => {
 
         let inserted, dbError;
         try {
+          // include the detected duration (if available) so DB can be queried by length
+          const detectedDuration = Array.isArray(durations) && typeof durations[i] !== 'undefined' ? durations[i] : -1;
           const dbRes = await supabase.from('studio_videos').insert({
             user_id: user.id,
             channel_id: channel.id,
@@ -375,6 +377,7 @@ const UploadReels = () => {
             created_at: new Date().toISOString(),
             video_hash: videoHash,
             badge_type,
+            duration: detectedDuration > 0 ? detectedDuration : null,
             ...(original_creator_id ? { original_creator_id } : {}),
             ...(isSeries
               ? {

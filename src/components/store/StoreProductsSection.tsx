@@ -26,6 +26,7 @@ interface StoreProductsSectionProps {
   onAddProduct: () => void;
   onDeleteProduct: (productId: string) => void;
   onEditProduct: (product: Product) => void;
+  onInspectProduct?: (productId: string) => void;
 }
 
 export const StoreProductsSection: React.FC<StoreProductsSectionProps> = ({
@@ -35,6 +36,7 @@ export const StoreProductsSection: React.FC<StoreProductsSectionProps> = ({
   onAddProduct,
   onDeleteProduct,
   onEditProduct
+  ,onInspectProduct
 }) => {
   return (
     <div className="space-y-6">
@@ -72,6 +74,7 @@ export const StoreProductsSection: React.FC<StoreProductsSectionProps> = ({
           products={products} 
           onDeleteProduct={onDeleteProduct}
           onEditProduct={onEditProduct}
+          onInspectProduct={onInspectProduct}
           storeCurrency={storeCurrency}
         />
       )}

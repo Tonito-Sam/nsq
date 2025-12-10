@@ -22,7 +22,8 @@ export const useNotifications = () => {
   useEffect(() => {
     if (user) {
       fetchNotifications();
-      subscribeToNotifications();
+      // keep realtime subscription optional; primary fetch now uses server API
+      try { subscribeToNotifications(); } catch (e) { /* ignore */ }
     }
   }, [user]);
 
@@ -31,17 +32,20 @@ export const useNotifications = () => {
 
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(20);
+      // Use server endpoint which uses SUPABASE_SERVICE_ROLE_KEY to read notifications
+      const resp = await fetch(`/api/notifications/list?user_id=${encodeURIComponent(user.id)}`);
+      if (!resp.ok) throw new Error(`notifications list failed: ${resp.status}`);
+      const body = await resp.json();
+      const data = body.notifications || [];
 
-      if (error) throw error;
+      // Normalize fields
+      const normalized = (data || []).map((n: any) => ({
+        ...n,
+        read: typeof n.read !== 'undefined' ? n.read : (typeof n.is_read !== 'undefined' ? n.is_read : false)
+      }));
 
-      setNotifications(data || []);
-      setUnreadCount(data?.filter(n => !n.read).length || 0);
+      setNotifications(normalized);
+      setUnreadCount(normalized.filter((n: any) => !n.read).length || 0);
     } catch (error) {
       console.error('Error fetching notifications:', error);
     } finally {
@@ -88,13 +92,13 @@ export const useNotifications = () => {
 
   const markAsRead = async (notificationId: string) => {
     try {
-      const { error } = await supabase
-        .from('notifications')
-        .update({ read: true })
-        .eq('id', notificationId);
-
-      if (error) throw error;
-
+      // Call server endpoint to mark as read
+      const resp = await fetch('/api/notifications/mark-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [notificationId] })
+      });
+      if (!resp.ok) throw new Error(`mark-read failed: ${resp.status}`);
       await fetchNotifications();
     } catch (error) {
       console.error('Error marking notification as read:', error);
@@ -105,14 +109,19 @@ export const useNotifications = () => {
     if (!user) return;
 
     try {
-      const { error } = await supabase
-        .from('notifications')
-        .update({ read: true })
-        .eq('user_id', user.id)
-        .eq('read', false);
-
-      if (error) throw error;
-
+      // Fetch current unread notifications then mark them via server
+      const resp = await fetch(`/api/notifications/list?user_id=${encodeURIComponent(user.id)}&unread_only=true`);
+      if (!resp.ok) throw new Error(`failed to fetch unread: ${resp.status}`);
+      const body = await resp.json();
+      const unread = body.notifications || [];
+      const ids = unread.map((n: any) => n.id).filter(Boolean);
+      if (ids.length === 0) return;
+      const markResp = await fetch('/api/notifications/mark-read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids })
+      });
+      if (!markResp.ok) throw new Error(`mark-read failed: ${markResp.status}`);
       await fetchNotifications();
     } catch (error) {
       console.error('Error marking all notifications as read:', error);

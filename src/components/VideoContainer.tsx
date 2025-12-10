@@ -53,6 +53,10 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  // keep a ref for the latest time to avoid stale closures when seeking on remount
+  const videoCurrentTimeRef = useRef<number>(0);
+  const youtubeTimePollRef = useRef<number | null>(null);
+  const nativeSeekRetryRefs = useRef<number[]>([]);
   const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -70,7 +74,31 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       
       // Store current video time before orientation change
       if (videoRef.current) {
-        setVideoCurrentTime(videoRef.current.currentTime);
+        const t = videoRef.current.currentTime;
+        setVideoCurrentTime(t);
+        videoCurrentTimeRef.current = t;
+        try {
+          sessionStorage.setItem('nsq_video_time', JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }));
+        } catch (err) {
+          /* ignore storage errors */
+        }
+      }
+      // If a YouTube player exists, capture its current time as well
+      if (youtubePlayerRef.current && typeof youtubePlayerRef.current.getCurrentTime === 'function') {
+        try {
+          const t = youtubePlayerRef.current.getCurrentTime();
+          if (typeof t === 'number' && !isNaN(t)) {
+            setVideoCurrentTime(t);
+            videoCurrentTimeRef.current = t;
+            try {
+              sessionStorage.setItem('nsq_video_time', JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }));
+            } catch (err) {
+              /* ignore storage errors */
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to read YouTube currentTime:', err);
+        }
       }
       
       if (isMobile && isLandscape && !isFullscreen) {
@@ -323,7 +351,11 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     if (!videoId) return;
 
     if (youtubePlayerRef.current) {
-      youtubePlayerRef.current.destroy();
+      try {
+        youtubePlayerRef.current.destroy();
+      } catch (err) {
+        console.warn('Error destroying previous YouTube player', err);
+      }
       youtubePlayerRef.current = null;
     }
 
@@ -346,7 +378,40 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         events: {
           onStateChange: (event: any) => {
             console.log('YouTube player state change:', event.data);
-            setIsVideoPlaying(event.data === 1);
+            const playing = event.data === 1;
+            setIsVideoPlaying(playing);
+
+            // manage polling of currentTime while playing to keep the ref fresh
+            if (playing) {
+              // start poll
+              if (!youtubeTimePollRef.current) {
+                youtubeTimePollRef.current = window.setInterval(() => {
+                  try {
+                    if (youtubePlayerRef.current && typeof youtubePlayerRef.current.getCurrentTime === 'function') {
+                      const t = youtubePlayerRef.current.getCurrentTime();
+                      if (typeof t === 'number' && !isNaN(t)) {
+                        videoCurrentTimeRef.current = t;
+                        setVideoCurrentTime(t);
+                        try {
+                          sessionStorage.setItem('nsq_video_time', JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }));
+                        } catch (err) {
+                          /* ignore */
+                        }
+                      }
+                    }
+                  } catch (err) {
+                    console.warn('YT poll error', err);
+                  }
+                }, 1000);
+              }
+            } else {
+              // stopped/paused/ended -> clear poll
+              if (youtubeTimePollRef.current) {
+                clearInterval(youtubeTimePollRef.current);
+                youtubeTimePollRef.current = null;
+              }
+            }
+
             if (event.data === 0) {
               console.log('Video ended, moving to next show');
               moveToNextShow();
@@ -357,6 +422,32 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             if (muted) {
               event.target.mute();
             }
+
+            // If we don't have a fresh time in the ref, try reading from sessionStorage
+            try {
+              if (!videoCurrentTimeRef.current) {
+                const raw = sessionStorage.getItem('nsq_video_time');
+                if (raw) {
+                  const parsed = JSON.parse(raw);
+                  if (parsed && parsed.showId === currentShow?.id && typeof parsed.time === 'number') {
+                    videoCurrentTimeRef.current = parsed.time;
+                  }
+                }
+              }
+            } catch (err) {
+              /* ignore parse errors */
+            }
+
+            // Restore playback position if available
+            try {
+              const seekToTime = videoCurrentTimeRef.current || videoCurrentTime;
+              if (typeof event.target.seekTo === 'function' && seekToTime > 0) {
+                event.target.seekTo(seekToTime, true);
+              }
+            } catch (err) {
+              console.warn('Failed to seek YouTube player:', err);
+            }
+
             setIsVideoPlaying(true);
           },
         },
@@ -365,11 +456,44 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
     return () => {
       if (youtubePlayerRef.current) {
-        youtubePlayerRef.current.destroy();
+        try {
+          youtubePlayerRef.current.destroy();
+        } catch (err) {
+          console.warn('Error destroying YouTube player on cleanup', err);
+        }
         youtubePlayerRef.current = null;
+      }
+      if (youtubeTimePollRef.current) {
+        clearInterval(youtubeTimePollRef.current);
+        youtubeTimePollRef.current = null;
       }
     };
   }, [currentShow, ytReady, muted]);
+
+  // When the currentShow changes, try to load any persisted time for native videos as well
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('nsq_video_time');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.showId === currentShow?.id && typeof parsed.time === 'number') {
+          videoCurrentTimeRef.current = parsed.time;
+          setVideoCurrentTime(parsed.time);
+        }
+      }
+    } catch (err) {
+      // ignore
+    }
+
+    // cleanup any pending native seek retries when show changes
+    nativeSeekRetryRefs.current.forEach(id => clearTimeout(id));
+    nativeSeekRetryRefs.current = [];
+
+    return () => {
+      nativeSeekRetryRefs.current.forEach(id => clearTimeout(id));
+      nativeSeekRetryRefs.current = [];
+    };
+  }, [currentShow]);
 
   const handleVideoEnded = () => {
     console.log('Regular video ended, moving to next show');
@@ -428,8 +552,63 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
   const handleVideoTimeUpdate = () => {
     if (videoRef.current) {
-      setVideoCurrentTime(videoRef.current.currentTime);
+      const t = videoRef.current.currentTime;
+      setVideoCurrentTime(t);
+      videoCurrentTimeRef.current = t;
+      try {
+        sessionStorage.setItem('nsq_video_time', JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }));
+      } catch (err) {
+        /* ignore storage errors */
+      }
     }
+  };
+
+  // Robustly restore native video position with retries and optional autoplay
+  const restoreNativePosition = (seekToTime: number) => {
+    if (!videoRef.current || !seekToTime || seekToTime <= 0) return;
+
+    try {
+      videoRef.current.currentTime = seekToTime;
+    } catch (err) {
+      console.warn('Initial native seek failed:', err);
+    }
+
+    let attempts = 0;
+    const maxAttempts = 6;
+    const trySeek = () => {
+      if (!videoRef.current) return;
+      attempts += 1;
+      const current = videoRef.current.currentTime || 0;
+      const diff = Math.abs(current - seekToTime);
+      if (diff > 0.5 && attempts <= maxAttempts) {
+        try {
+          videoRef.current.currentTime = seekToTime;
+        } catch (err) {
+          // ignore
+        }
+        const id = window.setTimeout(trySeek, 250);
+        nativeSeekRetryRefs.current.push(id);
+      } else {
+        // if video is paused try to play (muted autoplay more likely to succeed)
+        try {
+          if (videoRef.current.paused) {
+            const p = videoRef.current.play();
+            if (p && typeof p.then === 'function') {
+              p.then(() => {
+                // played
+              }).catch(() => {
+                // play rejected
+              });
+            }
+          }
+        } catch (err) {
+          // ignore play errors
+        }
+      }
+    };
+
+    // start retry loop if needed
+    trySeek();
   };
 
   const handleMuteToggle = () => {
@@ -587,9 +766,10 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             objectFit: 'cover'
           }}
           onLoadedMetadata={() => {
-            // Restore video time if transitioning between modes
-            if (videoRef.current && videoCurrentTime > 0) {
-              videoRef.current.currentTime = videoCurrentTime;
+            // Restore video time if transitioning between modes (with retries)
+            const seekToTime = videoCurrentTimeRef.current || videoCurrentTime;
+            if (videoRef.current && seekToTime > 0) {
+              restoreNativePosition(seekToTime);
             }
           }}
           {...(isIOS && {

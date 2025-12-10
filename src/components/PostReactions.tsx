@@ -32,21 +32,20 @@ export const PostReactions: React.FC<PostReactionsProps> = ({
 				variant="ghost"
 				size="sm"
 				onClick={onToggleReactions}
-				className={`flex items-center space-x-1.5 px-2 py-1 rounded-lg transition-all duration-200 hover:scale-105 ${
+				className={`flex items-center space-x-1 px-1.5 py-0.5 md:space-x-1.5 md:px-2 md:py-1 rounded-lg transition-all duration-200 hover:scale-105 ${
 					selectedReaction ? 'text-red-500 hover:text-red-600 bg-red-50 dark:bg-red-900/20' : 'text-gray-500 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20'
-				}`}
-			>
+				}`}>
 				{selectedReaction ? (
 					<>
 						{React.createElement(reactionTypes.find(r => r.type === selectedReaction)?.icon || Heart, {
-							className: `h-4 w-4 ${reactionTypes.find(r => r.type === selectedReaction)?.color || 'text-red-500'} fill-current`
+							className: `h-3.5 w-3.5 md:h-4 md:w-4 ${reactionTypes.find(r => r.type === selectedReaction)?.color || 'text-red-500'} fill-current`
 						})}
-						<span className="text-sm font-medium">{currentLikes}</span>
+						<span className="text-xs md:text-sm font-medium">{currentLikes}</span>
 					</>
 				) : (
 					<>
-						<Heart className="h-4 w-4" />
-						<span className="text-sm font-medium">{currentLikes}</span>
+						<Heart className="h-3.5 w-3.5 md:h-4 md:w-4" />
+						<span className="text-xs md:text-sm font-medium">{currentLikes}</span>
 					</>
 				)}
 			</Button>

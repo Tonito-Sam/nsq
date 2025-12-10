@@ -44,6 +44,48 @@ const RecordReel = () => {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
+  // Get video duration (robust on various platforms) - adapted from UploadReels
+  const getVideoDuration = (file: File): Promise<number> => {
+    return new Promise((resolve) => {
+      try {
+        const url = URL.createObjectURL(file);
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.muted = true;
+        video.playsInline = true;
+        let done = false;
+        const finish = (val: number) => {
+          if (done) return;
+          done = true;
+          try { URL.revokeObjectURL(url); } catch {}
+          resolve(val);
+        };
+        const timeoutId = window.setTimeout(() => {
+          finish(-1);
+        }, 7000);
+        video.onloadedmetadata = () => {
+          window.clearTimeout(timeoutId);
+          if (!isFinite(video.duration) || video.duration === 0) {
+            video.currentTime = 0.001;
+            setTimeout(() => {
+              finish(Number.isFinite(video.duration) ? Math.floor(video.duration) : -1);
+            }, 250);
+          } else {
+            finish(Math.floor(video.duration));
+          }
+        };
+        video.onerror = () => {
+          window.clearTimeout(timeoutId);
+          finish(-1);
+        };
+        video.src = url;
+        try { video.load(); } catch {}
+      } catch {
+        resolve(-1);
+      }
+    });
+  };
+
   // Cleanup video URL on unmount
   useEffect(() => {
     return () => {
@@ -90,7 +132,13 @@ const RecordReel = () => {
           .from('studio_videos')
           .select('id', { count: 'exact', head: false })
           .eq('user_id', userId)
-          .gte('duration', 90);
+          // Count reels that are 90s or shorter. Also include rows where duration is null
+          // (older uploads may not have duration populated). Use an OR filter so both
+          // conditions are considered by PostgREST / Supabase.
+          .or('duration.lte.90,duration.is.null');
+        // Debugging output to help validate counts during development
+        // (will appear in browser console when this effect runs)
+        console.debug('[RecordReel] checkEligible query result', { dataCount: Array.isArray(data) ? data.length : undefined, count, error });
         if (error) {
           console.warn('[RecordReel] checkEligible supabase error:', error);
           setCanEnable360(false);
@@ -293,6 +341,15 @@ const RecordReel = () => {
       // FIXED: Generate video hash for recorded video
       const file = new File([blob], `reel-${Date.now()}.${extension}`, { type: mimeType });
       const videoHash = await hashFile(file);
+
+      // Try to detect duration and include it in DB so eligibility and sorting work
+      let detectedDuration = -1;
+      try {
+        detectedDuration = await getVideoDuration(file);
+      } catch (e) {
+        console.warn('[RecordReel] failed to get video duration', e);
+        detectedDuration = -1;
+      }
       
       console.log('Uploading video:', {
         size: file.size,
@@ -361,8 +418,10 @@ const RecordReel = () => {
           video_hash: videoHash, // FIXED: Now includes video_hash
           badge_type, // FIXED: Now includes badge_type
           ...(original_creator_id ? { original_creator_id } : {}), // FIXED: Include original creator if remixed
+          // persist duration (seconds) when available to support eligibility & sorting
+          duration: detectedDuration > 0 ? detectedDuration : null,
           created_at: new Date().toISOString()
-        }).select('id');
+        }).select('*').single();
       if (dbError) {
         console.error('Database error:', dbError);
         throw dbError;
@@ -375,8 +434,11 @@ const RecordReel = () => {
       }
       setVideoUrl(null);
       setRecordedChunks([]);
-      if (inserted && inserted.length > 0) {
-        navigate(`/studio?highlight=${inserted[0].id}`);
+      if (inserted && inserted.id) {
+        // Navigate to studio and pass the created record via location.state so Studio
+        // can immediately prepend it to the feed even if caching/pagination would
+        // otherwise delay its appearance.
+        navigate(`/studio?highlight=${inserted.id}`, { state: { highlightedReel: inserted } });
       } else {
         navigate('/studio');
       }
@@ -482,7 +544,18 @@ const RecordReel = () => {
         <div>
           <button
             disabled={checking360 || (selectedMode === '360' && !canEnable360)}
-            onClick={() => startRecording(enable360 ? 360 : 90)}
+            onClick={() => {
+              console.log('[RecordReel] Start button clicked (navigate to preview)', { enable360, selectedMode, canEnable360, checking360 });
+              // Navigate to the dedicated preview/record page so the preview can open in its own route
+              try {
+                const dur = enable360 ? 360 : 90;
+                navigate(`/studio/record-preview?duration=${dur}`);
+              } catch (e) {
+                console.error('[RecordReel] navigation failed:', e);
+                // fallback to local preview flow
+                startRecording(enable360 ? 360 : 90);
+              }
+            }}
             className={`w-full h-12 rounded-full text-sm font-semibold shadow-sm transition ${ (selectedMode === '360' && !canEnable360) ? 'bg-neutral-700 text-neutral-300 cursor-not-allowed opacity-70' : 'bg-purple-600 text-white'}`}
           >
             {`Start ${enable360 ? '360s' : '90s'} Recording`}

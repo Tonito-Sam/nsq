@@ -6,6 +6,8 @@ import { StoreSidebar } from '@/components/StoreSidebar';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { supabase } from '@/integrations/supabase/client';
 import { Package } from 'lucide-react';
+import { getDisplayPrice } from '@/utils/pricing';
+import useMeta from '@/hooks/useMeta';
 
 interface Store {
   id: string;
@@ -39,6 +41,14 @@ const StorePage: React.FC = () => {
   const [store, setStore] = useState<Store | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Update meta when store data becomes available
+  useMeta({
+    title: store ? `${store.store_name} — Store on NexSq` : 'Store — NexSq',
+    description: store ? (store.description ? store.description.slice(0, 160) : `${store.store_name} on NexSq`) : 'Store on NexSq',
+    image: store?.logo_url,
+    url: window.location.href,
+  });
 
   useEffect(() => {
     if (store_id) {
@@ -154,7 +164,10 @@ const StorePage: React.FC = () => {
                   </div>
                   <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-1 line-clamp-2">{product.title}</h3>
                   <p className="text-sm text-gray-600 dark:text-gray-400 mb-2 line-clamp-2">{product.description}</p>
-                  <span className="text-lg font-bold text-purple-600">{store.base_currency} {product.price.toLocaleString()}</span>
+                  <span className="text-lg font-bold text-purple-600">{store.base_currency} {(() => {
+                    const pi = getDisplayPrice(product as any);
+                    return pi.displayPrice.toLocaleString();
+                  })()}</span>
                 </Card>
               ))}
             </div>

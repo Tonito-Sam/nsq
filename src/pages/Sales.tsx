@@ -6,6 +6,7 @@ import { Package } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { getDisplayPrice } from '@/utils/pricing';
 import { useNavigate } from 'react-router-dom';
+import useMeta from '@/hooks/useMeta';
 
 const Sales = () => {
   const navigate = useNavigate();
@@ -27,6 +28,12 @@ const Sales = () => {
 
   // filter to only items currently on sale according to pricing util
   const saleItems = (products || []).filter((p: any) => getDisplayPrice(p).isOnSale);
+
+  useMeta({
+    title: 'Sales — Discounted Products — NexSq',
+    description: 'Discover discounted products and sales across NexSq stores. Save on featured items and limited-time promotions.',
+    url: window.location.href,
+  });
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">

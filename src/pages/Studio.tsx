@@ -1,4 +1,4 @@
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useLocation } from 'react-router-dom';
 import MonetizationCard from '../components/studio/MonetizationCard';
 // Animated comment display logic should be placed inside the ReelCard component only ONCE.
 // Remove all duplicate declarations from the top-level scope.
@@ -126,6 +126,8 @@ const Studio = () => {
   // Channel is now fetched with React Query
   const [searchParams] = useSearchParams();
   const highlightId = searchParams.get('highlight');
+  const location = useLocation();
+  const highlightedReelFromState: any = (location && (location as any).state && (location as any).state.highlightedReel) || null;
   // Remove loading state, use React Query's status
   const [userLikes, setUserLikes] = useState<Set<string>>(new Set());
   const [userViews, setUserViews] = useState<Set<string>>(new Set());
@@ -217,6 +219,25 @@ const Studio = () => {
       if (idx > -1) {
         const [highlighted] = videosWithChannelName.splice(idx, 1);
         videosWithChannelName.unshift(highlighted);
+      }
+    }
+
+    // If the router navigation passed the full highlighted record via location.state,
+    // ensure it appears at the top of page 0 even if the fetched results did not include it yet.
+    if (highlightedReelFromState && pageParam === 0) {
+      const exists = videosWithChannelName.some(v => String(v.id) === String(highlightedReelFromState.id));
+      if (!exists) {
+        const hr = highlightedReelFromState;
+        const processed = {
+          ...hr,
+          video_url: getPublicUrl(hr.video_url || hr.url || hr.src || ''),
+          channel_name: channelsById[hr.channel_id] ? channelsById[hr.channel_id].name : '',
+          creator: usersById[hr.user_id] ? { name: usersById[hr.user_id].username, avatar_url: usersById[hr.user_id].avatar_url } : { name: '', avatar_url: '' },
+          likes_count: hr.likes || 0,
+          comments_count: hr.comments || 0,
+          shares_count: hr.shares || 0,
+        };
+        videosWithChannelName.unshift(processed as any);
       }
     }
     return { videos: videosWithChannelName, nextPage: (allVideos && allVideos.length === BATCH_SIZE) ? pageParam + 1 : undefined };

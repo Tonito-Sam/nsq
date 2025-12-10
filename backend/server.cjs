@@ -7,6 +7,17 @@ dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 console.log('✅ LIVEPEER_API_KEY:', process.env.LIVEPEER_API_KEY);
 
+// Log Supabase env status (masked) to help debug invalid-api-key issues in dev
+try {
+  const srk = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE || '';
+  const supaUrl = process.env.SUPABASE_URL || '';
+  const masked = srk ? `${srk.slice(0,4)}...${srk.slice(-4)}` : '(not set)';
+  console.log('✅ SUPABASE_URL:', supaUrl ? supaUrl : '(not set)');
+  console.log('✅ SUPABASE_SERVICE_ROLE_KEY (masked):', masked);
+} catch (e) {
+  console.warn('Could not read SUPABASE env vars', e && e.message);
+}
+
 // Init app
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -54,6 +65,15 @@ try {
   console.warn('⚠️ notifications route not available:', e?.message || e);
 }
 
+// Post views route (records when a user views a post)
+try {
+  const postViews = require('./routes/post-views');
+  app.use('/api/post-views', postViews);
+  console.log('✅ Mounted /api/post-views');
+} catch (e) {
+  console.warn('⚠️ post-views route not available:', e?.message || e);
+}
+
 // Stores (WhatsApp opt-in validation + user_stores updates)
 try {
   const stores = require('./routes/stores');
@@ -71,6 +91,42 @@ try {
   } catch (e) {
     console.warn('⚠️ removebg route not available:', e?.message || e);
   }
+
+// Currency rates route (added to expose /api/currency)
+try {
+  const currency = require('./routes/currency');
+  app.use('/api/currency', currency);
+  console.log('✅ Mounted /api/currency');
+} catch (e) {
+  console.warn('⚠️ currency route not available:', e?.message || e);
+}
+
+// Promo route (promo_transfers)
+try {
+  const promo = require('./routes/promo');
+  app.use('/api/promo', promo);
+  console.log('✅ Mounted /api/promo');
+} catch (e) {
+  console.warn('⚠️ promo route not available:', e?.message || e);
+}
+
+// Users search route (service-role search)
+try {
+  const users = require('./routes/users');
+  app.use('/api/users', users);
+  console.log('✅ Mounted /api/users');
+} catch (e) {
+  console.warn('⚠️ users route not available:', e?.message || e);
+}
+
+// Payments (dev-safe webhooks for Flutterwave / Paystack)
+try {
+  const payments = require('./routes/payments');
+  app.use('/api/payments', payments);
+  console.log('✅ Mounted /api/payments');
+} catch (e) {
+  console.warn('⚠️ payments route not available:', e?.message || e);
+}
 
 // WebRTC -> RTMP bridge route
 const webrtcBridgeRoutes = require('./routes/webrtc-bridge.cjs');

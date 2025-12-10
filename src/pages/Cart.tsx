@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { getDisplayPrice } from '@/utils/pricing';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { Card } from '@/components/ui/card';
@@ -6,8 +7,9 @@ import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { toast } from '@/hooks/use-toast';
 import { Header } from '@/components/Header';
-import { ShoppingCart, Trash2, Plus, Minus, Truck, Percent, AlertCircle } from 'lucide-react';
-import { shippingPartners } from '@/utils/shippingPartners';
+import { ShoppingCart, Trash2, Plus, Minus, Truck, Percent, AlertCircle, ArrowLeft, Store, CreditCard } from 'lucide-react';
+import { MobileBottomNav } from '@/components/MobileBottomNav';
+// removed unused import
 import { getShippingSettingsForStore, calculateShippingCost, Address, Parcel } from '@/utils/shippingCost';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
@@ -23,6 +25,11 @@ interface CartItem {
     title: string;
     images: string[];
     user_id: string;
+    is_on_sale?: boolean;
+    sale_price?: number | null;
+    sale_starts?: string | null;
+    sale_ends?: string | null;
+    discount_price?: number | null;
   };
 }
 
@@ -31,6 +38,7 @@ interface StoreShippingInfo {
   loading: boolean;
   error?: string;
   partner?: any;
+  skippedForDigital?: boolean;
 }
 
 const Cart = () => {
@@ -78,46 +86,100 @@ const Cart = () => {
 
     setLoading(true);
     try {
+      // try a straightforward join selection — fetch all available product columns to avoid schema mismatch
       const { data, error } = await supabase
         .from('cart_items')
-        .select(`
-          id,
-          quantity,
-          product_id,
-          store_products!inner(
-            id,
-            store_id,
-            price,
-            title,
-            images,
-            user_id
-          )
-        `)
+        .select('id, quantity, product_id, store_products(*)')
         .eq('user_id', user.id);
 
-      if (error) throw error;
+      // Log response for debugging when running in dev
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('[Cart] fetchCart response', { data, error });
+      }
 
-      const items = data || [];
-      setCartItems(items);
+      let fetchedItems: any[] = [];
+      if (error) {
+        console.error('[Cart] initial cart fetch error', error);
+        // Attempt fallback: fetch simple cart rows then fetch products separately
+        try {
+          const { data: simpleCart, error: simpleErr } = await supabase
+            .from('cart_items')
+            .select('id,quantity,product_id')
+            .eq('user_id', user.id);
+          if (simpleErr) throw simpleErr;
 
-      // Calculate shipping for each unique store
-      const uniqueStoreIds = Array.from(new Set(items.map(item => item.store_products.store_id).filter(Boolean))) as string[];
+          const productIds = Array.from(new Set((simpleCart || []).map((c: any) => c.product_id).filter(Boolean)));
+          let productsMap: Record<string, any> = {};
+          if (productIds.length > 0) {
+            const { data: prods, error: prodErr } = await supabase
+              .from('store_products')
+              .select('*')
+              .in('id', productIds as unknown as string[]);
+            if (prodErr) throw prodErr;
+            productsMap = (prods || []).reduce((acc: any, p: any) => { acc[p.id] = p; return acc; }, {});
+          }
+
+          fetchedItems = (simpleCart || []).map((c: any) => ({ ...c, store_products: productsMap[c.product_id] || null }));
+          setCartItems(fetchedItems as unknown as CartItem[]);
+        } catch (fallbackErr) {
+          console.error('[Cart] fallback fetch error', fallbackErr);
+          throw error; // rethrow original to be handled by outer catch
+        }
+      } else {
+        fetchedItems = (data || []);
+        setCartItems(fetchedItems as unknown as CartItem[]);
+      }
+
+      // Calculate shipping for each unique store — handle store_products being returned as an array or object
+      const uniqueStoreIds = Array.from(new Set(fetchedItems.map((item: any) => {
+        const sp = (item as any).store_products;
+        return Array.isArray(sp) ? sp[0]?.store_id : sp?.store_id;
+      }).filter(Boolean))) as string[];
       await calculateShippingForStores(uniqueStoreIds);
 
     } catch (error) {
       console.error('Error fetching cart:', error);
+      try {
+        console.error('[Cart] fetch error details:', JSON.stringify(error));
+      } catch (e) {}
+      const msg = (error && (error as any).message) || 'Failed to load cart items';
       toast({
-        title: "Error",
-        description: "Failed to load cart items",
-        variant: "destructive"
+        title: 'Error',
+        description: msg,
+        variant: 'destructive'
       });
+      // ensure cartItems is empty on error
+      setCartItems([]);
     } finally {
       setLoading(false);
     }
   };
 
   const calculateShippingForStores = async (storeIds: string[]) => {
+    // helper: a store only needs shipping if it has at least one physical product
+    // treat anything that includes 'digital' or 'download' as non-physical (consistent with Checkout.tsx)
+    const isStoreHasPhysical = (storeId: string) => {
+      return cartItems.some(item => {
+        const sp = (item as any).store_products;
+        const prod = Array.isArray(sp) ? sp[0] : sp;
+        const sid = prod?.store_id;
+        const pt = (prod?.product_type || '').toString().toLowerCase();
+        // consider product physical unless its type explicitly indicates digital/download
+        const isDigital = pt.includes('digital') || pt.includes('download');
+        return sid === storeId && !isDigital;
+      });
+    };
+
     for (const storeId of storeIds) {
+      // If a store has no physical products, skip shipping calculation and mark cost as 0
+      if (!isStoreHasPhysical(storeId)) {
+        setStoreShipping(prev => ({
+          ...prev,
+          [storeId]: { cost: 0, loading: false, skippedForDigital: true }
+        }));
+        continue;
+      }
+
       setStoreShipping(prev => ({
         ...prev,
         [storeId]: { cost: null, loading: true }
@@ -194,7 +256,10 @@ const Cart = () => {
   };
 
   const getSubtotal = () => {
-    return cartItems.reduce((sum, item) => sum + (item.store_products.price * item.quantity), 0);
+    return cartItems.reduce((sum, item) => {
+      const pi = getDisplayPrice(item.store_products as any);
+      return sum + (pi.displayPrice * item.quantity);
+    }, 0);
   };
 
   const getTotalShipping = () => {
@@ -226,7 +291,41 @@ const Cart = () => {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a] transition-colors">
       <Header />
-      <div className="max-w-4xl mx-auto px-4 py-8">
+  <div className="max-w-4xl mx-auto px-4 py-8 pb-28 md:pb-0">
+        {/* Top navigation: Back, Continue Shopping, Cart (responsive for mobile) */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between">
+            <Button
+              variant="ghost"
+              onClick={() => navigate(-1)}
+              className="flex flex-col items-center sm:flex-row sm:items-center gap-0 sm:gap-2 text-gray-600 dark:text-gray-400 hover:text-purple-600 dark:hover:text-purple-400"
+            >
+              <ArrowLeft className="h-4 w-4 mt-1 mb-0 sm:mb-0 rounded" />
+              <span className="text-[11px] sm:text-sm">Back</span>
+            </Button>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => navigate('/square')}
+                className="flex flex-col items-center sm:flex-row sm:items-center gap-0 sm:gap-2 border-purple-200 text-purple-700 hover:bg-purple-50 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-900/30 px-2 py-1 rounded"
+              >
+                <Store className="h-4 w-4 mt-1 mb-0 sm:mb-0 rounded" />
+                <span className="text-[11px] sm:text-sm">Continue Shopping</span>
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={() => navigate('/checkout')}
+                className="flex flex-col items-center sm:flex-row sm:items-center gap-0 sm:gap-2 border-purple-200 text-purple-700 hover:bg-purple-50 dark:border-purple-800 dark:text-purple-300 dark:hover:bg-purple-900/30 px-2 py-1 rounded"
+              >
+                <CreditCard className="h-4 w-4 mt-1 mb-0 sm:mb-0 rounded" />
+                <span className="text-[11px] sm:text-sm">Checkout</span>
+              </Button>
+            </div>
+          </div>
+        </div>
+
         <h1 className="text-3xl font-bold mb-6 text-gray-900 dark:text-gray-100 flex items-center gap-2">
           <ShoppingCart className="h-8 w-8 text-purple-700" /> Your Cart
         </h1>
@@ -280,7 +379,10 @@ const Cart = () => {
                                     </div>
                                   </TableCell>
                                   <TableCell className="text-center">
-                                    ZAR {item.store_products.price.toLocaleString()}
+                                    ZAR {(() => {
+                                      const pi = getDisplayPrice(item.store_products as any);
+                                      return pi.displayPrice.toLocaleString();
+                                    })()}
                                   </TableCell>
                                   <TableCell className="text-center">
                                     <div className="flex items-center justify-center gap-2">
@@ -305,7 +407,10 @@ const Cart = () => {
                                     </div>
                                   </TableCell>
                                   <TableCell className="text-center font-bold">
-                                    ZAR {(item.store_products.price * item.quantity).toLocaleString()}
+                                    ZAR {(() => {
+                                      const pi = getDisplayPrice(item.store_products as any);
+                                      return (pi.displayPrice * item.quantity).toLocaleString();
+                                    })()}
                                   </TableCell>
                                   <TableCell className="text-center">
                                     <Button 
@@ -343,39 +448,49 @@ const Cart = () => {
                 </div>
 
                 {/* Shipping per store */}
-                {Array.from(new Set(cartItems.map(item => item.store_products.store_id))).map(storeId => {
-                  const shipping = storeShipping[storeId];
-                  return (
-                    <div key={storeId} className="flex flex-col">
-                      <div className="flex items-center justify-between">
-                        <span className="flex items-center gap-2">
-                          <Truck className="h-4 w-4 text-purple-700" /> 
-                          Shipping
-                          {shipping?.partner && (
-                            <span className="text-xs text-gray-500">({shipping.partner.name})</span>
-                          )}
-                        </span>
-                        <span className="font-medium">
-                          {shipping?.loading ? (
-                            <span className="text-xs text-gray-400">Calculating...</span>
-                          ) : shipping?.error ? (
-                            <span className="text-xs text-red-500 flex items-center gap-1">
-                              <AlertCircle className="h-3 w-3" />
-                              Error
-                            </span>
-                          ) : shipping?.cost ? (
-                            `ZAR ${shipping.cost.toLocaleString()}`
-                          ) : (
-                            <span className="text-xs text-gray-400">Not configured</span>
-                          )}
-                        </span>
+                {(() => {
+                  const storeIds = Array.from(new Set(cartItems.map(item => {
+                    const sp = (item as any).store_products;
+                    const prod = Array.isArray(sp) ? sp[0] : sp;
+                    return prod?.store_id;
+                  }).filter(Boolean)));
+
+                  return storeIds.map(storeId => {
+                    const shipping = storeShipping[storeId];
+                    return (
+                      <div key={storeId} className="flex flex-col">
+                        <div className="flex items-center justify-between">
+                          <span className="flex items-center gap-2">
+                            <Truck className="h-4 w-4 text-purple-700" /> 
+                            Shipping
+                            {shipping?.partner && (
+                              <span className="text-xs text-gray-500">({shipping.partner.name})</span>
+                            )}
+                          </span>
+                          <span className="font-medium">
+                            {shipping?.skippedForDigital ? (
+                              <span className="text-xs text-gray-500">No shipping (digital products)</span>
+                            ) : shipping?.loading ? (
+                              <span className="text-xs text-gray-400">Calculating...</span>
+                            ) : shipping?.error ? (
+                              <span className="text-xs text-red-500 flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                Error
+                              </span>
+                            ) : (typeof shipping?.cost === 'number') ? (
+                              `ZAR ${shipping.cost.toLocaleString()}`
+                            ) : (
+                              <span className="text-xs text-gray-400">Not configured</span>
+                            )}
+                          </span>
+                        </div>
+                        {shipping?.error && (
+                          <span className="text-xs text-red-500 ml-6">{shipping.error}</span>
+                        )}
                       </div>
-                      {shipping?.error && (
-                        <span className="text-xs text-red-500 ml-6">{shipping.error}</span>
-                      )}
-                    </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
                 
                 <hr className="my-4" />
                 
@@ -394,6 +509,13 @@ const Cart = () => {
                 Proceed to Checkout
               </Button>
             </div>
+
+            {/* Mobile fixed checkout button (placed above the shared MobileBottomNav) */}
+            <div className="md:hidden fixed left-0 right-0 bottom-16 z-40 px-4">
+         
+            </div>
+
+            <MobileBottomNav />
           </>
         )}
       </div>

@@ -35,7 +35,7 @@ interface Moment {
   moment_special_icon?: string;
   moment_special_name?: string;
   is_custom_special_day?: boolean;
-  special_id?: string;
+  moment_special_id?: string;
   views_count?: number;
 }
 
@@ -81,6 +81,11 @@ export const Moments = () => {
           moment_font,
           moment_font_size,
           moment_type,
+          moment_special_message,
+          moment_special_icon,
+          moment_special_name,
+          is_custom_special_day,
+          moment_special_id,
           user:users!posts_user_id_fkey(
             first_name,
             last_name,
@@ -271,7 +276,7 @@ export const Moments = () => {
             user_id: momentObj.user.id,
             type: 'moment_like',
             title: 'Your moment was liked',
-            message: `${user?.username || user?.email?.split('@')[0] || 'Someone'} liked your moment`,
+            message: `${(user as any)?.username || user?.email?.split('@')[0] || 'Someone'} liked your moment`,
             data: { momentId: momentId, userId: user.id },
             read: false
           });
@@ -303,7 +308,7 @@ export const Moments = () => {
             user_id: momentObj.user.id,
             type: 'moment_like',
             title: 'Your moment was liked',
-            message: `${user?.username || user?.email?.split('@')[0] || 'Someone'} liked your moment`,
+            message: `${(user as any)?.username || user?.email?.split('@')[0] || 'Someone'} liked your moment`,
             data: { momentId: momentId, userId: user.id },
             read: false
           });
@@ -667,24 +672,28 @@ export const Moments = () => {
         )}
       </div>
 
-      {selectedUserId && groupedMoments[selectedUserId] && groupedMoments[selectedUserId][userMomentIndex] && (
-        <VideoModal
-          open={modalOpen}
-          onOpenChange={(open) => {
-            setModalOpen(open);
-            if (!open) {
-              setSelectedUserId(null);
-              setUserMomentIndex(0);
-            }
-          }}
-          videoUrl={(() => {
-            const m = groupedMoments[selectedUserId][userMomentIndex];
-            return m.media_url && m.media_url.match(/\.(mp4|webm|ogg|mov|avi)$/i) ? getMediaUrl(m.media_url, 'posts') : undefined;
-          })()}
-          imageUrl={(() => {
-            const m = groupedMoments[selectedUserId][userMomentIndex];
-            return m.media_url && !m.media_url.match(/\.(mp4|webm|ogg|mov|avi)$/i) ? getMediaUrl(m.media_url, 'posts') : undefined;
-          })()}
+      {selectedUserId && groupedMoments[selectedUserId] && groupedMoments[selectedUserId][userMomentIndex] && (() => {
+        const currentMoment = groupedMoments[selectedUserId][userMomentIndex];
+        const videoUrlValue = currentMoment.media_url && currentMoment.media_url.match(/\.(mp4|webm|ogg|mov|avi)$/i) ? getMediaUrl(currentMoment.media_url, 'posts') : undefined;
+        const imageUrlValue = currentMoment.media_url && !currentMoment.media_url.match(/\.(mp4|webm|ogg|mov|avi)$/i) ? getMediaUrl(currentMoment.media_url, 'posts') : undefined;
+
+        // Debug: log moments array and the computed media props being passed to VideoModal
+        console.debug('Opening VideoModal - selectedUserId:', selectedUserId, 'userMomentIndex:', userMomentIndex);
+        console.debug('Moments for user:', groupedMoments[selectedUserId]);
+        console.debug('Computed media props -> videoUrl:', videoUrlValue, 'imageUrl:', imageUrlValue);
+
+        return (
+          <VideoModal
+            open={modalOpen}
+            onOpenChange={(open) => {
+              setModalOpen(open);
+              if (!open) {
+                setSelectedUserId(null);
+                setUserMomentIndex(0);
+              }
+            }}
+            videoUrl={videoUrlValue}
+            imageUrl={imageUrlValue}
           user={{
             name: `${groupedMoments[selectedUserId][userMomentIndex].user?.first_name || ''} ${groupedMoments[selectedUserId][userMomentIndex].user?.last_name || ''}`.trim() || groupedMoments[selectedUserId][userMomentIndex].user?.username || 'User',
             avatar: groupedMoments[selectedUserId][userMomentIndex].user?.avatar_url || '/placeholder.svg'
@@ -710,7 +719,8 @@ export const Moments = () => {
           trimStart={trimStart}
           trimEnd={trimEnd}
         />
-      )}
+        );
+      })()}
       {selectedUserId && groupedMoments[selectedUserId] && groupedMoments[selectedUserId][userMomentIndex] && user && groupedMoments[selectedUserId][userMomentIndex].user?.id === user.id && (
         <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-900 rounded shadow">
           <h4 className="font-semibold mb-2">Views ({viewers.length})</h4>

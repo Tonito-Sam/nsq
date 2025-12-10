@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { VoicePlayer } from './VoicePlayer';
 import { Calendar, MapPin, ArrowLeft, ArrowRight, Volume2, VolumeX } from 'lucide-react';
+import { specialBackgrounds } from './moment/specialBackgrounds';
 
 interface PostContentProps {
   content: string;
@@ -18,6 +19,16 @@ interface PostContentProps {
   eventLocation?: string;
   location?: string;
   feeling?: string;
+  // Moment-specific props to allow postcard rendering in the feed
+  momentBg?: string | null;
+  momentFont?: string | null;
+  momentFontSize?: number | null;
+  momentType?: string | null;
+  momentSpecialMessage?: string | null;
+  momentSpecialIcon?: string | null;
+  momentSpecialName?: string | null;
+  isCustomSpecialDay?: boolean | null;
+  momentSpecialId?: string | null;
 }
 
 const AspectRatioBox: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -41,7 +52,137 @@ export const PostContent: React.FC<PostContentProps> = ({
   eventLocation,
   location,
   feeling,
+  momentBg,
+  momentFont,
+  momentFontSize,
+  momentType,
+  momentSpecialMessage,
+  momentSpecialIcon,
+  momentSpecialName,
+  isCustomSpecialDay,
+  momentSpecialId,
 }) => {
+  // Determine whether we should render the postcard-style moment box
+  const showMomentPostcard = (
+    postType === 'moment' ||
+    Boolean(momentBg) ||
+    momentType === 'text' ||
+    Boolean(momentSpecialMessage)
+  ) && (!media_url || momentType === 'text');
+
+  const renderMomentIcon = () => {
+    if (!momentSpecialIcon) return null;
+    const icon = String(momentSpecialIcon);
+    // If it looks like a URL, render an image; otherwise treat as emoji/text
+    if (/^https?:\/\//i.test(icon) || icon.includes('/')) {
+      return (
+        <img
+          src={icon}
+          alt={momentSpecialName || 'icon'}
+          style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 6, marginBottom: 6 }}
+        />
+      );
+    }
+    return (
+      <div style={{ fontSize: 28, marginBottom: 6 }} aria-hidden>
+        {icon}
+      </div>
+    );
+  };
+
+  // Determine contrast color for text on top of background
+  function getContrastYIQ(bg: string | null | undefined): '#222' | '#fff' {
+    const val = String(bg || '');
+    if (val.startsWith('linear-gradient') || val.startsWith('radial-gradient')) return '#fff';
+    if (val.startsWith('url(')) return '#fff';
+    let hex = val;
+    if (hex.startsWith('#')) hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(x => x + x).join('');
+    if (hex.length !== 6) return '#fff';
+    const r = parseInt(hex.substr(0,2),16);
+    const g = parseInt(hex.substr(2,2),16);
+    const b = parseInt(hex.substr(4,2),16);
+    const yiq = ((r*299)+(g*587)+(b*114))/1000;
+    return yiq >= 180 ? '#222' : '#fff';
+  }
+
+  const renderSpecialDayOverlay = () => {
+    // similar logic to VideoModal: prefer custom special day, otherwise check predefined by id
+    let icon: string | undefined | null = null;
+    let message: string | undefined | null = null;
+    if (isCustomSpecialDay) {
+      icon = momentSpecialIcon || null;
+      message = momentSpecialMessage || momentSpecialName || null;
+    } else if (momentSpecialId) {
+      const special = specialBackgrounds.find(bg => bg.id === momentSpecialId);
+      if (special) {
+        icon = special.icon || null;
+        message = momentSpecialMessage || special.description || special.name;
+      }
+    }
+    if (!icon && !message) return null;
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: 8,
+          display: 'flex',
+          flexDirection: 'row',
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+          width: '100%',
+          padding: '0 12px',
+          pointerEvents: 'none',
+          zIndex: 3,
+        }}
+      >
+        {icon && (
+          <span
+            style={{
+              fontSize: 26,
+              textShadow: '0 2px 8px #0008',
+              background: 'rgba(0,0,0,0.10)',
+              borderRadius: 8,
+              padding: '2px 6px',
+              minWidth: 36,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {/* If icon looks like URL show image */}
+            {/^https?:\/\//i.test(String(icon)) || String(icon).includes('/') ? (
+              <img src={String(icon)} alt={momentSpecialName || 'icon'} style={{ width: 26, height: 26, objectFit: 'cover', borderRadius: 6 }} />
+            ) : (
+              <span aria-hidden>{icon}</span>
+            )}
+          </span>
+        )}
+        {message && (
+          <span
+            style={{
+              fontSize: 13,
+              color: '#fff',
+              background: 'rgba(0,0,0,0.35)',
+              borderRadius: 8,
+              padding: '2px 8px',
+              fontWeight: 600,
+              textShadow: '0 1px 4px #000',
+              marginLeft: icon ? 'auto' : 0,
+              minWidth: 60,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end'
+            }}
+          >
+            {message}
+          </span>
+        )}
+      </div>
+    );
+  };
   // Autoplay and unmute videos when in viewport
   useEffect(() => {
     const videos = document.querySelectorAll("video");
@@ -687,7 +828,47 @@ export const PostContent: React.FC<PostContentProps> = ({
 
   return (
   <div ref={containerRef}>
-      {content && (
+      {/* If this post was created as a moment (or carries moment metadata), render postcard-style */}
+      {showMomentPostcard && (
+        <div
+          className="mt-3 rounded-lg overflow-hidden flex items-center justify-center"
+          style={{
+            position: 'relative',
+            background: momentBg || 'linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%)',
+            color: getContrastYIQ(momentBg),
+            padding: '1rem',
+            textAlign: 'center',
+            borderRadius: 12,
+          }}
+        >
+          <div style={{ maxWidth: '100%', width: '100%' }}>
+            {/* Special icon (emoji, text or image) - keep it inside the canvas */}
+            {renderMomentIcon()}
+
+            {/* Main text - rendered on the canvas; if there's no content we skip */}
+            {content ? (
+              <div
+                style={{
+                  fontFamily: momentFont || 'inherit',
+                  fontSize: momentFontSize ? `${momentFontSize}px` : '16px',
+                  fontWeight: 600,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  color: getContrastYIQ(momentBg),
+                }}
+              >
+                {content}
+              </div>
+            ) : null}
+
+          </div>
+          {/* Special day overlay (icon bottom-left and caption bottom-right) */}
+          {renderSpecialDayOverlay()}
+        </div>
+      )}
+
+      {/* When the postcard is shown the canvas already contains the text, so avoid duplicating */}
+      {!showMomentPostcard && content && (
         <p className="text-gray-900 dark:text-gray-100 leading-relaxed whitespace-pre-wrap">
           {content}
         </p>

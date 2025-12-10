@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, User, FileText } from 'lucide-react';
+import { Search, User, FileText, ShoppingBag, Store } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useSearch } from '@/hooks/useSearch';
@@ -7,9 +7,10 @@ import { formatDistanceToNow } from 'date-fns';
 
 interface SearchDropdownProps {
   className?: string;
+  inputClassName?: string;
 }
 
-export const SearchDropdown: React.FC<SearchDropdownProps> = ({ className }) => {
+export const SearchDropdown: React.FC<SearchDropdownProps> = ({ className, inputClassName }) => {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const { results, loading } = useSearch(query);
@@ -51,7 +52,7 @@ export const SearchDropdown: React.FC<SearchDropdownProps> = ({ className }) => 
   };
 
   return (
-    <div ref={searchRef} className={`relative ${className}`}>
+    <div ref={searchRef} className={`relative ${className || ''}`}>
       <div className="relative">
         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
@@ -59,15 +60,15 @@ export const SearchDropdown: React.FC<SearchDropdownProps> = ({ className }) => 
           value={query}
           onChange={handleInputChange}
           onFocus={() => setIsOpen(true)}
-          className="pl-10 bg-muted/50 border-none focus:bg-background"
+          className={`pl-10 bg-muted/50 border-none focus:bg-background ${inputClassName || ''}`}
         />
       </div>
 
-      {isOpen && (query.trim() || results.length > 0) && (
+      {isOpen && (query.trim() || (results && results.length > 0)) && (
         <div className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
           {loading ? (
             <div className="p-4 text-center text-gray-500">Searching...</div>
-          ) : results.length > 0 ? (
+          ) : results && results.length > 0 ? (
             <div className="py-2">
               {results.map((result) => (
                 <button

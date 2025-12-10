@@ -97,7 +97,7 @@ const Groups = () => {
                       <Avatar className="h-16 w-16">
                         <AvatarImage src={group.avatar_url || '/placeholder.svg'} />
                         <AvatarFallback className="bg-gradient-to-r from-purple-500 to-blue-500 text-white">
-                          {group.name.split(' ').map(n => n[0]).join('')}
+                          {group.name.split(' ').map((n: string) => n[0]).join('')}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0">
@@ -139,7 +139,7 @@ const Groups = () => {
                       <Avatar className="h-12 w-12">
                         <AvatarImage src={group.avatar_url || '/placeholder.svg'} />
                         <AvatarFallback className="bg-gradient-to-r from-green-500 to-teal-500 text-white">
-                          {group.name.split(' ').map(n => n[0]).join('')}
+                          {group.name.split(' ').map((n: string) => n[0]).join('')}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0">

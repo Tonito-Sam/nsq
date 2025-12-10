@@ -32,6 +32,7 @@ interface ProductsTableProps {
   products: Product[];
   onDeleteProduct: (productId: string) => void;
   onEditProduct: (product: Product) => void;
+  onInspectProduct?: (productId: string) => void;
   storeCurrency: string;
 }
 
@@ -39,6 +40,7 @@ export const ProductsTable: React.FC<ProductsTableProps> = ({
   products,
   onDeleteProduct,
   onEditProduct,
+  onInspectProduct,
   storeCurrency
 }) => {
   const getProductTypeColor = (type: string) => {
@@ -123,6 +125,9 @@ export const ProductsTable: React.FC<ProductsTableProps> = ({
                 <div className="flex items-center justify-end space-x-2">
                   <Button variant="outline" size="sm" onClick={() => onEditProduct(product)}>
                     <Edit className="h-4 w-4" />
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => onInspectProduct && onInspectProduct(product.id)}>
+                    Inspect
                   </Button>
                   <Button 
                     variant="outline" 

@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Heart, MessageCircle, X, Eye } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { getMediaUrl } from '@/utils/mediaUtils';
 import { HeartAnimation } from './HeartAnimation';
 import { ViewersModal } from './ViewersModal';
 import { LikesModal } from './LikesModal';
@@ -47,7 +48,7 @@ interface VideoModalProps {
     moment_font_size?: number;
     moment_type?: string;
     moment_special_message?: string;
-    special_id?: string;
+  moment_special_id?: string;
     media_url?: string;
     video_duration?: number;
     is_custom_special_day?: boolean;
@@ -134,7 +135,7 @@ export const VideoModal: React.FC<VideoModalProps> = (props) => {
     console.log('=== SPECIAL DAY DEBUG ===');
     console.log('Current moment:', moment);
     console.log('moment.is_custom_special_day:', moment?.is_custom_special_day);
-    console.log('moment.special_id:', moment?.special_id);
+  console.log('moment.moment_special_id:', moment?.moment_special_id);
     console.log('moment.moment_special_icon:', moment?.moment_special_icon);
     console.log('moment.moment_special_name:', moment?.moment_special_name);
     console.log('moment.moment_special_message:', moment?.moment_special_message);
@@ -143,22 +144,38 @@ export const VideoModal: React.FC<VideoModalProps> = (props) => {
   // Get current media URLs based on the current moment
   const getCurrentMediaUrls = useCallback(() => {
     console.log('Getting current media URLs for moment:', moment?.id, 'index:', storyIndex);
-    
+
+    // If there's no moment, fall back to external props
     if (!moment) {
       console.log('No moment found, using fallback URLs');
       return {
-        currentVideoUrl: videoUrl,
-        currentImageUrl: imageUrl,
+        currentVideoUrl: videoUrl || null,
+        currentImageUrl: imageUrl || null,
         currentMediaUrl: ''
       };
     }
-    
-    const currentMediaUrl = moment.media_url || '';
+
+    // Normalize moment media URL: if it's a storage key (not a full URL), convert it
+    let currentMediaUrl = moment.media_url || '';
+    if (currentMediaUrl && !currentMediaUrl.match(/^https?:\/\//i) && !currentMediaUrl.startsWith('data:') && !currentMediaUrl.startsWith('blob:')) {
+      try {
+        currentMediaUrl = getMediaUrl(currentMediaUrl, 'posts') || currentMediaUrl;
+      } catch (e) {
+        console.debug('getMediaUrl failed to build full URL for', currentMediaUrl, e);
+      }
+    }
     console.log('Current media URL from moment:', currentMediaUrl);
-    
+
+    // Prefer the moment's media first. Only fall back to the component-level props
+    const isMomentVideo = currentMediaUrl && currentMediaUrl.match(/\.(mp4|webm|ogg|mov|avi)$/i);
+    const isMomentImage = currentMediaUrl && currentMediaUrl.match(/\.(jpe?g|png|gif|bmp|webp|svg)$/i);
+
+    const currentVideoUrl = isMomentVideo ? currentMediaUrl : (videoUrl || null);
+    const currentImageUrl = isMomentImage ? currentMediaUrl : (imageUrl || null);
+
     return {
-      currentVideoUrl: videoUrl || (currentMediaUrl && currentMediaUrl.match(/\.(mp4|webm|ogg|mov|avi)$/i) ? currentMediaUrl : null),
-      currentImageUrl: imageUrl || (currentMediaUrl && currentMediaUrl.match(/\.(jpe?g|png|gif|bmp|webp|svg)$/i) ? currentMediaUrl : null),
+      currentVideoUrl,
+      currentImageUrl,
       currentMediaUrl
     };
   }, [moment, videoUrl, imageUrl, storyIndex]);
@@ -227,9 +244,9 @@ export const VideoModal: React.FC<VideoModalProps> = (props) => {
       message = moment.moment_special_message || moment.moment_special_name;
     }
     // Then check for predefined special days
-    else if (moment.special_id) {
-      console.log('Found predefined special day with ID:', moment.special_id);
-      const special = specialBackgrounds.find(bg => bg.id === moment.special_id);
+    else if (moment.moment_special_id) {
+      console.log('Found predefined special day with ID:', moment.moment_special_id);
+      const special = specialBackgrounds.find(bg => bg.id === moment.moment_special_id);
       console.log('Special background found:', special);
       if (special) {
         icon = special.icon;

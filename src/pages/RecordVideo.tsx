@@ -1,7 +1,7 @@
 import { Header } from '@/components/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
 import { Camera, CameraOff, Play, X, Maximize2, Minimize2 } from 'lucide-react';
 import { ArrowLeft } from 'lucide-react';
@@ -55,6 +55,8 @@ const RecordReel = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
 
+  const location = useLocation();
+
   // Hash a file using SHA-256, returning hex string - ADDED FROM UPLOAD COMPONENT
   async function hashFile(file: File): Promise<string> {
     const arrayBuffer = await file.arrayBuffer();
@@ -80,6 +82,23 @@ const RecordReel = () => {
       videoRef.current.srcObject = mediaStream;
     }
   }, [mediaStream]);
+
+  // If the route was opened with ?duration=90 or ?duration=360, auto-start the preview
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(location.search);
+      const durationParam = params.get('duration');
+      if ((durationParam === '90' || durationParam === '360') && !isPreviewing && !isRecording && !videoUrl) {
+        // set timer to the desired duration before starting preview
+        setTimer(durationParam === '360' ? 360 : 90);
+        // Start the preview automatically so the user sees the camera immediately
+        handleStartPreview();
+      }
+    } catch (e) {
+      // ignore malformed URL params
+    }
+    // Intentionally watch location.search so navigating back to this route restarts preview
+  }, [location.search, isPreviewing, isRecording, videoUrl]);
 
   const handleStartPreview = () => {
     setIsPreviewing(true);

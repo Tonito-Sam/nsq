@@ -5,9 +5,11 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, children, ...props }, ref) => (
+  ({ className, children, type, ...props }, ref) => (
     <button
       ref={ref}
+      // default to type=button to avoid accidental form submits when used inside forms
+      type={type || 'button'}
       className={`px-4 py-2 rounded-md font-medium transition-colors ${className}`}
       {...props}
     >

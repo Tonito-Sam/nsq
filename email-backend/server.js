@@ -79,7 +79,24 @@ app.post('/send-bulk', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
+// Basic health endpoint for service checks
+app.get('/health', (req, res) => {
+  res.json({ ok: true, now: new Date().toISOString() });
+});
+
+// Global error handlers to capture crashes when started under PM2/windows terminals
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION', err && err.stack ? err.stack : err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION', reason);
+});
+
+const PORT = parseInt(process.env.PORT || '4000', 10) || 4000;
+// Bind explicitly to 0.0.0.0 to make sure it listens on all interfaces on Windows
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Email backend running on port ${PORT}`);
+}).on('error', (err) => {
+  console.error('Failed to start email backend', err && err.stack ? err.stack : err);
+  process.exit(1);
 });

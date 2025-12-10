@@ -32,8 +32,9 @@ router.post('/', async (req, res) => {
     }
     if (!fetchFn) return res.status(500).json({ error: 'fetch is not available on the server runtime' });
 
-    const body = req.body || {};
-    if (!body.post_id || !body.user_id) return res.status(400).json({ error: 'missing post_id or user_id' });
+  const body = req.body || {};
+  console.log('POST /api/post-views body:', body);
+  if (!body.post_id || !body.user_id) return res.status(400).json({ error: 'missing post_id or user_id' });
 
     const payload = { post_id: body.post_id, user_id: body.user_id };
 
@@ -51,6 +52,7 @@ router.post('/', async (req, res) => {
     });
 
     const text = await resp.text();
+    console.log('Supabase post_views response status:', resp.status, 'body:', text);
     if (!resp.ok) {
       return res.status(502).json({ error: 'supabase insert failed', status: resp.status, body: text });
     }

@@ -1,13 +1,13 @@
 
-import React, { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { X, Upload, Plus } from 'lucide-react';
+import { X, Plus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
@@ -22,12 +22,19 @@ export const AddProductForm = ({ onClose, onSuccess }: { onClose: () => void; on
     category: '',
     tags: [] as string[],
     images: [] as string[],
-    files: [] as string[]
+    files: [] as string[],
   });
+  // sale / deals fields will be stored as strings in the form and converted when submitting
+  // is_on_sale: boolean, sale_price: string, sale_starts: string (datetime), sale_ends: string (datetime), is_deals_of_day: boolean
+  const [isOnSale, setIsOnSale] = useState(false);
+  const [salePrice, setSalePrice] = useState('');
+  const [saleStarts, setSaleStarts] = useState('');
+  const [saleEnds, setSaleEnds] = useState('');
+  const [isDealsOfDay, setIsDealsOfDay] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!user) return;
 
@@ -38,6 +45,11 @@ export const AddProductForm = ({ onClose, onSuccess }: { onClose: () => void; on
         .insert({
           ...formData,
           price: parseFloat(formData.price),
+          is_on_sale: !!isOnSale,
+          sale_price: salePrice ? parseFloat(salePrice) : null,
+          sale_starts: saleStarts || null,
+          sale_ends: saleEnds || null,
+          is_deals_of_day: !!isDealsOfDay,
           user_id: user.id
         });
 
@@ -137,6 +149,48 @@ export const AddProductForm = ({ onClose, onSuccess }: { onClose: () => void; on
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Sale controls: sale toggle, sale price and period, deals of the day */}
+            <div className="mt-4 space-y-2">
+              <label className="flex items-center justify-between">
+                <span className="text-sm">Put on Sale</span>
+                <input type="checkbox" checked={isOnSale} onChange={(e) => setIsOnSale(e.target.checked)} />
+              </label>
+
+              {isOnSale && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Input
+                    id="sale_price"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={salePrice}
+                    onChange={(e) => setSalePrice(e.target.value)}
+                    placeholder={`Sale price`}
+                    className="h-10"
+                  />
+                  <div className="grid grid-cols-1 gap-2">
+                    <input
+                      type="datetime-local"
+                      value={saleStarts}
+                      onChange={(e) => setSaleStarts(e.target.value)}
+                      className="h-10 rounded border p-2"
+                    />
+                    <input
+                      type="datetime-local"
+                      value={saleEnds}
+                      onChange={(e) => setSaleEnds(e.target.value)}
+                      className="h-10 rounded border p-2"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <label className="flex items-center justify-between">
+                <span className="text-sm">List as Deals of the Day</span>
+                <input type="checkbox" checked={isDealsOfDay} onChange={(e) => setIsDealsOfDay(e.target.checked)} />
+              </label>
+            </div>
           </div>
 
           <div>
@@ -178,6 +232,13 @@ export const AddProductForm = ({ onClose, onSuccess }: { onClose: () => void; on
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
+            <div className="flex items-center space-x-3 mr-2">
+          
+            </div>
+            <div className="flex items-center space-x-3 mr-2">
+           
+           
+            </div>
             <Button type="submit" disabled={loading}>
               {loading ? 'Adding...' : 'Add Product'}
             </Button>

@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { uploadFile } from '@/utils/mediaUtils';
+import { removeBgUsingRemoveBgApi } from '@/utils/imageProcessing';
 import { StoreRequiredModal } from './StoreRequiredModal';
 import { EnhancedStoreSetupModal } from './EnhancedStoreSetupModal';
 import { ProductFormFields } from './product-form/ProductFormFields';
@@ -16,12 +17,16 @@ interface ProductFormData {
   description: string;
   price: string;
   category: string;
-  product_type: 'physical' | 'digital' | 'service';
+  product_type: 'physical' | 'digital';
   tags: string[];
   images: File[];
   files: File[];
-  requirements?: string;
-  delivery_time?: number;
+  // sale/deal fields
+  is_on_sale?: boolean;
+  sale_price?: string;
+  sale_starts?: string;
+  sale_ends?: string;
+  is_deals_of_day?: boolean;
 }
 
 interface EnhancedAddProductFormProps {
@@ -34,12 +39,12 @@ interface EnhancedAddProductFormProps {
 export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ onClose, onSuccess, storeCurrency, onChangeCurrency }) => {
   const { user } = useAuth();
   const { toast } = useToast();
-  // storeCurrency and onChangeCurrency are now properly destructured from props
   const [hasStore, setHasStore] = useState<boolean | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
   const [showStoreRequired, setShowStoreRequired] = useState(false);
   const [showStoreSetup, setShowStoreSetup] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [removeBgEnabled, setRemoveBgEnabled] = useState(false);
   const [currentTag, setCurrentTag] = useState('');
   const [formData, setFormData] = useState<ProductFormData>({
     title: '',
@@ -50,8 +55,11 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
     tags: [],
     images: [],
     files: [],
-    requirements: '',
-    delivery_time: undefined,
+    is_on_sale: false,
+    sale_price: '',
+    sale_starts: '',
+    sale_ends: '',
+    is_deals_of_day: false,
   });
 
   useEffect(() => {
@@ -198,24 +206,31 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
       return;
     }
 
-    if (formData.product_type === 'service') {
-      if (!formData.requirements || !formData.delivery_time) {
-        toast({
-          title: "Missing Information",
-          description: "Please fill in the requirements and delivery time for your service.",
-          variant: "destructive"
-        });
-        return;
-      }
-    }
-
     setIsSubmitting(true);
 
     try {
       console.log('Starting file uploads...');
-      
+
+      // If background removal is enabled and an API key is configured, process images first
+      let imagesToUpload: File[] = formData.images;
+      if (removeBgEnabled && formData.images.length > 0) {
+        console.log('Background removal enabled - processing images...');
+        const processed: File[] = [];
+        for (const f of formData.images) {
+          try {
+            // removeBgUsingRemoveBgApi will return original file if API key not set or on error
+            const out = await removeBgUsingRemoveBgApi(f);
+            processed.push(out);
+          } catch (err) {
+            console.warn('Background removal failed for file', f.name, err);
+            processed.push(f);
+          }
+        }
+        imagesToUpload = processed;
+      }
+
       const imageUrls = await Promise.all(
-        formData.images.map(file => uploadFile(file, 'products', 'images/', user.id))
+        imagesToUpload.map(file => uploadFile(file, 'products', 'images/', user.id))
       );
 
       const fileUrls = formData.product_type === 'digital' ? await Promise.all(
@@ -227,7 +242,7 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
       console.log('Store ID for product:', storeId);
 
       const productData: any = {
-        user_id: user.id, // Ensure user_id is included if required by schema or RLS
+        user_id: user.id,
         store_id: storeId,
         title: formData.title.trim(),
         price: parseFloat(formData.price),
@@ -241,9 +256,22 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
       if (formData.tags.length > 0) productData.tags = formData.tags;
       if (imageUrls.length > 0) productData.images = imageUrls;
       if (fileUrls.length > 0) productData.files = fileUrls;
-      if (formData.product_type === 'service') {
-        if (formData.requirements?.trim()) productData.requirements = formData.requirements.trim();
-        if (formData.delivery_time) productData.delivery_time = formData.delivery_time;
+
+      // Include sale/deal fields when present
+      if (typeof formData.is_on_sale !== 'undefined') {
+        productData.is_on_sale = !!formData.is_on_sale;
+      }
+      if (formData.sale_price) {
+        productData.sale_price = parseFloat(formData.sale_price);
+      }
+      if (formData.sale_starts) {
+        productData.sale_starts = formData.sale_starts;
+      }
+      if (formData.sale_ends) {
+        productData.sale_ends = formData.sale_ends;
+      }
+      if (typeof formData.is_deals_of_day !== 'undefined') {
+        productData.is_deals_of_day = !!formData.is_deals_of_day;
       }
 
       console.log('Product data to insert:', productData);
@@ -261,22 +289,46 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
       console.log('Session user ID:', session.user.id);
       console.log('Product user ID:', productData.user_id);
 
-      const { error } = await supabase
-        .from('store_products')
-        .insert(productData);
-
-      if (error) {
-        console.error('Database insertion error:', error);
-        // Log the full error object for debugging
-        toast({
-          title: "Error",
-          description: error.message + (error.details ? ` | Details: ${error.details}` : ''),
-          variant: "destructive"
-        });
-        throw error;
+      // Attempt insert. If PostgREST schema cache is missing optional columns
+      // the error message will look like: "Could not find the 'sale_ends' column of 'store_products' in the schema cache"
+      // In that case, parse missing column names, remove them from the payload, and retry once.
+      let insertError: any = null;
+      try {
+        const res = await supabase.from('store_products').insert(productData);
+        insertError = (res as any).error;
+      } catch (err) {
+        insertError = err;
       }
 
-      console.log('Product inserted successfully');
+      if (insertError) {
+        const msg: string = insertError.message || insertError.toString() || '';
+        const missing: string[] = [];
+        const re = /Could not find the '([a-zA-Z0-9_]+)' column/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(msg)) !== null) {
+          if (m[1]) missing.push(m[1]);
+        }
+
+        if (missing.length > 0) {
+          console.warn('Missing columns detected in schema cache, retrying insert without these fields:', missing);
+          const safePayload = { ...productData };
+          for (const c of missing) delete (safePayload as any)[c];
+
+          const retryRes = await supabase.from('store_products').insert(safePayload);
+          if ((retryRes as any).error) {
+            console.error('Retry insert error:', (retryRes as any).error);
+            toast({ title: 'Error', description: (retryRes as any).error.message || 'Failed to add product on retry', variant: 'destructive' });
+            throw (retryRes as any).error;
+          }
+          console.log('Product inserted successfully after removing missing columns');
+        } else {
+          console.error('Database insertion error:', insertError);
+          toast({ title: 'Error', description: insertError.message + (insertError.details ? ` | Details: ${insertError.details}` : ''), variant: 'destructive' });
+          throw insertError;
+        }
+      } else {
+        console.log('Product inserted successfully');
+      }
 
       toast({
         title: "Product Added",
@@ -368,6 +420,8 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
               onFileChange={(files) => handleFileChange('files', files)}
               onRemoveImage={(index) => removeFile('images', index)}
               onRemoveFile={(index) => removeFile('files', index)}
+              removeBgEnabled={removeBgEnabled}
+              onToggleRemoveBg={(v) => setRemoveBgEnabled(v)}
             />
 
             <div className="flex justify-end space-x-3 pt-6 border-t">

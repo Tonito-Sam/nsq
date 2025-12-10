@@ -71,7 +71,10 @@ export const useChatModal = (product: Product, user: any) => {
         try {
           await supabase
             .from('conversation_participants')
-            .upsert({ conversation_id: existingConversation.id, user_id: user.id, last_read_at: new Date().toISOString() }, { onConflict: ['conversation_id', 'user_id'] });
+            .upsert(
+              { conversation_id: existingConversation.id, user_id: user.id, last_read_at: new Date().toISOString() },
+              { onConflict: 'conversation_id,user_id' }
+            );
         } catch (e) {
           console.warn('Failed to upsert conversation_participants for read mark', e);
         }
@@ -93,7 +96,10 @@ export const useChatModal = (product: Product, user: any) => {
         try {
           await supabase
             .from('conversation_participants')
-            .upsert({ conversation_id: newConversation.id, user_id: user.id, last_read_at: new Date().toISOString() }, { onConflict: ['conversation_id', 'user_id'] });
+            .upsert(
+              { conversation_id: newConversation.id, user_id: user.id, last_read_at: new Date().toISOString() },
+              { onConflict: 'conversation_id,user_id' }
+            );
         } catch (e) {
           console.warn('Failed to upsert conversation_participants for read mark', e);
         }
@@ -220,7 +226,7 @@ export const useChatModal = (product: Product, user: any) => {
           let sellerPhone: string | undefined = undefined;
           let storeName = product.store?.store_name || 'Store';
           if (store) {
-            sellerPhone = (store as any).business_contact_number as any;
+            sellerPhone = (store as any).business_whatsapp_number as any;
             storeName = (store as any).store_name || storeName;
           }
 

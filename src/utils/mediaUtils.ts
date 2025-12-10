@@ -8,8 +8,11 @@ export const uploadFile = async (
   userId: string
 ): Promise<string> => {
   try {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${userId}/${folder}${Date.now()}.${fileExt}`;
+  const fileExt = file.name.split('.').pop();
+  // Add a small random suffix to avoid collisions when multiple files are uploaded
+  // in the same millisecond. Keep the original file extension.
+  const random = Math.random().toString(36).slice(2, 8);
+  const fileName = `${userId}/${folder}${Date.now()}-${random}.${fileExt}`;
 
     console.log('Uploading file:', { fileName, bucket, fileSize: file.size });
 
