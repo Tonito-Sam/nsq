@@ -1,5 +1,5 @@
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 
@@ -18,6 +18,8 @@ export const useNotifications = () => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const mounted = useRef(true);
+  const consecutiveFailures = useRef(0);
 
   useEffect(() => {
     if (user) {
@@ -25,31 +27,40 @@ export const useNotifications = () => {
       // keep realtime subscription optional; primary fetch now uses server API
       try { subscribeToNotifications(); } catch (e) { /* ignore */ }
     }
+
+    return () => { mounted.current = false; };
   }, [user]);
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = async (opts?: { signal?: AbortSignal; force?: boolean }) => {
     if (!user) return;
 
-    setLoading(true);
+    // Avoid fetching while tab is hidden unless forced
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden' && !opts?.force) return;
+
+    // Respect abort signal
+    if (opts?.signal?.aborted) return;
+
+    if (mounted.current) setLoading(true);
     try {
-      // Use server endpoint which uses SUPABASE_SERVICE_ROLE_KEY to read notifications
-      const resp = await fetch(`/api/notifications/list?user_id=${encodeURIComponent(user.id)}`);
+      const resp = await fetch(`/api/notifications/list?user_id=${encodeURIComponent(user.id)}`, { signal: opts?.signal });
       if (!resp.ok) throw new Error(`notifications list failed: ${resp.status}`);
       const body = await resp.json();
       const data = body.notifications || [];
 
-      // Normalize fields
       const normalized = (data || []).map((n: any) => ({
         ...n,
         read: typeof n.read !== 'undefined' ? n.read : (typeof n.is_read !== 'undefined' ? n.is_read : false)
       }));
 
+      if (!mounted.current) return;
       setNotifications(normalized);
       setUnreadCount(normalized.filter((n: any) => !n.read).length || 0);
+      consecutiveFailures.current = 0;
     } catch (error) {
+      consecutiveFailures.current += 1;
       console.error('Error fetching notifications:', error);
     } finally {
-      setLoading(false);
+      if (mounted.current) setLoading(false);
     }
   };
 

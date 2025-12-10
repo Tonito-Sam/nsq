@@ -1,5 +1,6 @@
 import React from 'react';
-import { MessageCircle, Share2, Repeat } from 'lucide-react';
+import apiUrl from '@/lib/api';
+import { MessageCircle, Share2, Repeat, Rocket } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ReactionPicker } from './ReactionPicker';
 import PostViewersModal from './PostViewersModal';
@@ -19,23 +20,27 @@ interface PostEngagementProps {
   onToggleComments: () => void;
   onRepost: () => void;
   onShare: () => void;
+  onBoost?: () => void;
+  isOwner?: boolean;
 }
 
 export const PostEngagement: React.FC<PostEngagementProps> = ({
   selectedReaction,
   reactionCounts = {},
-  currentLikes,
+  currentLikes: _currentLikes,
   currentComments,
   currentReposts,
   shares,
   reposted,
   postId,
-  showReactions,
-  onToggleReactions,
+  showReactions: _showReactions,
+  onToggleReactions: _onToggleReactions,
   onReaction,
   onToggleComments,
   onRepost,
   onShare
+  , onBoost
+  , isOwner = false
 }) => {
   const [viewsCount, setViewsCount] = React.useState<number | null>(null);
   const [viewersOpen, setViewersOpen] = React.useState(false);
@@ -45,7 +50,7 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
     if (!postId) return;
     const fetchCount = async () => {
       try {
-        const resp = await fetch(`/api/post-views?post_id=${encodeURIComponent(postId)}`);
+        const resp = await fetch(apiUrl(`/api/post-views?post_id=${encodeURIComponent(postId)}`));
         if (!resp.ok) return;
         const json = await resp.json();
         if (mounted && json && typeof json.count === 'number') setViewsCount(json.count ?? 0);
@@ -131,6 +136,20 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
             <PostViewersModal open={viewersOpen} onOpenChange={setViewersOpen} postId={postId} />
           )}
         </div>
+        {/* Boost button for post owners */}
+        {isOwner && (
+          <div className="ml-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onBoost && onBoost()}
+              className="flex items-center space-x-1 text-yellow-600 hover:bg-yellow-50 dark:hover:bg-yellow-900/10 rounded-md px-2 py-1"
+            >
+              <Rocket className="h-4 w-4" />
+              <span className="text-xs hidden md:inline">Boost</span>
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

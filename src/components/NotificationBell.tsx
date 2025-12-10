@@ -16,6 +16,7 @@ export const NotificationBell: React.FC = () => {
 
   const fetchNotifications = async (unreadOnly = true) => {
     if (!user?.id) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     try {
       const url = `/api/notifications/list?user_id=${encodeURIComponent(user.id)}${unreadOnly ? '&unread_only=true' : ''}`;
       const resp = await fetch(url, { method: 'GET' });
@@ -32,33 +33,49 @@ export const NotificationBell: React.FC = () => {
 
   useEffect(() => {
     if (!user?.id) return;
-    // initial fetch (unread)
-    fetchNotifications(true);
-
-    // try realtime subscription when available
+    // Only poll/subscribe while tab is visible
     let channel: any = null;
-    try {
-      if ((supabase as any).channel) {
-        channel = (supabase as any).channel('public:notifications')
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload: any) => {
-            if (!payload || !payload.new) return;
-            if (String(payload.new.user_id) === String(user.id)) {
-              setItems(prev => [payload.new, ...prev]);
-              setUnreadCount(c => c + 1);
-            }
-          })
-          .subscribe();
-      }
-    } catch (e) {
-      // ignore
-    }
+    let iv: any = null;
 
-    // fallback polling
-    const iv = setInterval(() => fetchNotifications(true), 15000);
+    const start = () => {
+      fetchNotifications(true);
+      try {
+        if ((supabase as any).channel) {
+          channel = (supabase as any).channel('public:notifications')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, (payload: any) => {
+              if (!payload || !payload.new) return;
+              if (String(payload.new.user_id) === String(user.id)) {
+                setItems(prev => [payload.new, ...prev]);
+                setUnreadCount(c => c + 1);
+              }
+            })
+            .subscribe();
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      iv = setInterval(() => fetchNotifications(true), 15000);
+    };
+
+    const stop = () => {
+      try { if (iv) clearInterval(iv); } catch (e) {}
+      try { if (channel) (supabase as any).removeChannel(channel); } catch (e) {}
+      iv = null;
+      channel = null;
+    };
+
+    if (typeof document === 'undefined' || document.visibilityState === 'visible') start();
+
+    const onVis = () => {
+      if (document.visibilityState === 'visible') start(); else stop();
+    };
+
+    document.addEventListener('visibilitychange', onVis);
 
     return () => {
-      clearInterval(iv);
-      try { if (channel) (supabase as any).removeChannel(channel); } catch (e) {}
+      stop();
+      document.removeEventListener('visibilitychange', onVis);
     };
   }, [user?.id]);
 
