@@ -83,6 +83,15 @@ try {
   console.warn('⚠️ stores route not available:', e?.message || e);
 }
 
+// Health probe (checks Supabase connectivity)
+try {
+  const health = require('./routes/health');
+  app.use('/api/health', health);
+  console.log('✅ Mounted /api/health');
+} catch (e) {
+  console.warn('⚠️ health route not available:', e?.message || e);
+}
+
   // remove.bg proxy
   try {
     const removeBg = require('./routes/removebg');

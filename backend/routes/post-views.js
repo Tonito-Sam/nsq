@@ -58,6 +58,28 @@ router.post('/', async (req, res) => {
     }
 
     const json = JSON.parse(text || '[]');
+    // After recording unique view, also increment total impressions (posts.views_count)
+    try {
+      const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/increment_post_views`;
+      const rpcResp = await fetchFn(rpcUrl, {
+        method: 'POST',
+        headers: {
+          apikey: SERVICE_ROLE,
+          Authorization: `Bearer ${SERVICE_ROLE}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ pid: body.post_id })
+      });
+      const rpcText = await rpcResp.text();
+      if (!rpcResp.ok) {
+        console.warn('increment_post_views RPC failed', rpcResp.status, rpcText);
+      } else {
+        console.log('increment_post_views RPC ok');
+      }
+    } catch (rpcErr) {
+      console.error('increment_post_views error', rpcErr);
+    }
+
     return res.json({ ok: true, inserted: json[0] || null });
   } catch (err) {
     console.error('post-views.create error', err);
@@ -78,22 +100,23 @@ router.get('/', async (req, res) => {
     if (!SERVICE_ROLE) return res.status(500).json({ error: 'missing SUPABASE_SERVICE_ROLE_KEY on server' });
     if (!fetchFn) return res.status(500).json({ error: 'fetch is not available on the server runtime' });
 
-    // Return count and optional recent viewers
+    // Return total impressions from posts.views_count if available.
+    // limit parameter still controls recent viewers fetch from post_views table.
     const limit = parseInt(req.query.limit || '0', 10);
 
-    // Count via select=count
-    const countUrl = `${SUPABASE_URL}/rest/v1/post_views?select=count&post_id=eq.${encodeURIComponent(postId)}`;
-    const countResp = await fetchFn(countUrl, {
+    // Read posts.views_count
+    const postUrl = `${SUPABASE_URL}/rest/v1/posts?select=views_count&id=eq.${encodeURIComponent(postId)}`;
+    const postResp = await fetchFn(postUrl, {
       method: 'GET',
       headers: {
         apikey: SERVICE_ROLE,
         Authorization: `Bearer ${SERVICE_ROLE}`,
       }
     });
-    const countText = await countResp.text();
-    if (!countResp.ok) return res.status(502).json({ error: 'supabase count failed', status: countResp.status, body: countText });
-    const countJson = JSON.parse(countText || '[]');
-    const count = Array.isArray(countJson) && countJson[0] && typeof countJson[0].count !== 'undefined' ? Number(countJson[0].count) : 0;
+    const postText = await postResp.text();
+    if (!postResp.ok) return res.status(502).json({ error: 'supabase posts read failed', status: postResp.status, body: postText });
+    const postJson = JSON.parse(postText || '[]');
+    const views_count = Array.isArray(postJson) && postJson[0] && typeof postJson[0].views_count !== 'undefined' ? Number(postJson[0].views_count) : 0;
 
     let viewers = [];
     if (limit > 0) {
@@ -111,7 +134,7 @@ router.get('/', async (req, res) => {
       viewers = JSON.parse(viewersText || '[]');
     }
 
-    return res.json({ ok: true, count, viewers });
+    return res.json({ ok: true, count: views_count, viewers });
   } catch (err) {
     console.error('post-views.list error', err);
     return res.status(500).json({ error: err?.message || String(err) });
