@@ -194,8 +194,8 @@ export const WalletSidebar: React.FC<WalletSidebarProps> = ({
               <h3 className="ml-2 text-lg font-semibold text-gray-900 dark:text-gray-100">Details</h3>
             </div>
 
-            {/* Scrollable content */}
-            <div className="p-4 overflow-auto flex-1 space-y-4">
+            {/* Scrollable content (add bottom padding so content can scroll above fixed mobile nav) */}
+            <div className="p-4 overflow-auto flex-1 space-y-4 pb-40">
               {/* This Month */}
               <Card className="dark:bg-[#161616] border-gray-200 dark:border-gray-700">
                 <div className="p-4">
@@ -281,7 +281,7 @@ export const WalletSidebar: React.FC<WalletSidebarProps> = ({
               <MobileBottomNav />
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="hidden sm:block">
             <Button className="w-full" onClick={() => setShowMobileDetails(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
