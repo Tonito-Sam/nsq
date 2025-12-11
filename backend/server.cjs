@@ -119,6 +119,15 @@ try {
   console.warn('⚠️ promo route not available:', e?.message || e);
 }
 
+// Campaigns (ads & boosting)
+try {
+  const campaigns = require('./routes/campaigns');
+  app.use('/api/campaigns', campaigns);
+  console.log('✅ Mounted /api/campaigns');
+} catch (e) {
+  console.warn('⚠️ campaigns route not available:', e?.message || e);
+}
+
 // Users search route (service-role search)
 try {
   const users = require('./routes/users');
@@ -145,7 +154,13 @@ app.use('/api/webrtc-bridge', webrtcBridgeRoutes);
 const turnRoutes = require('./routes/turn.cjs');
 app.use('/api/turn', turnRoutes);
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`✅ Backend running on port ${PORT}`);
+// Start server and print helpful debug info (PID + address)
+const server = app.listen(PORT, () => {
+  try {
+    const addr = server.address && typeof server.address === 'function' ? server.address() : { port: PORT };
+    console.log('✅ Backend running on port', addr && addr.port ? addr.port : PORT);
+  } catch (e) {
+    console.log(`✅ Backend running on port ${PORT}`);
+  }
+  console.log('ℹ️ PID:', process.pid);
 });

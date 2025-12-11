@@ -116,10 +116,10 @@ const Wallet = () => {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [recentRecipients, setRecentRecipients] = useState<User[]>([]);
-  const [baseCurrency, setBaseCurrency] = useState<string>(() => {
+  const [baseCurrency, _setBaseCurrency] = useState<string>(() => {
     try { return localStorage.getItem('baseCurrency') || 'USD'; } catch(e) { return 'USD'; }
   });
-  const { rates, loading: ratesLoading, updatedAt, refresh, isCached } = useCurrencyRates(baseCurrency, 5 * 60 * 1000);
+  const { rates, loading: ratesLoading, updatedAt, refresh, isCached: _isCached } = useCurrencyRates(baseCurrency, 5 * 60 * 1000);
 
   // Backwards-compatible wrappers for components that expect 2-arg convert functions
   const convertToUSDForModals = (amount: number, fromCurrency: string) => convertToUSD(amount, fromCurrency, rates);

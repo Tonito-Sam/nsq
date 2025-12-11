@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import apiUrl from '@/lib/api';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -12,7 +13,7 @@ export function PostViewersModal({ open, onOpenChange, postId }: { open: boolean
     (async () => {
       setLoading(true);
       try {
-        const resp = await fetch(`/api/post-views?post_id=${encodeURIComponent(postId)}&limit=10`);
+        const resp = await fetch(apiUrl(`/api/post-views?post_id=${encodeURIComponent(postId)}&limit=10`));
         if (!resp.ok) {
           setViewers([]);
           return;

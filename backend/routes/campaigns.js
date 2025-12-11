@@ -190,24 +190,71 @@ router.delete('/:id', async (req, res) => {
 
     // refund if requested and amount > 0
     if (refund === 'true' && remaining > 0) {
-      // naive refill: add remaining back to virtual balance
+      // Determine refund routing. By default we refund to the original source(s) used to pay
+      // the campaign. Caller may override with ?refund_to=virtual|real
+      const refundTo = (req.query.refund_to || 'original').toString();
+
+      // Fetch charge transactions for this campaign to determine how it was funded
+      const adtxUrl = `${SUPABASE_URL.replace(/\/+$/,'')}/rest/v1/ad_transactions`;
+      let totalVirtualCharged = 0;
+      let totalRealCharged = 0;
+      try {
+        const txRes = await axios.get(`${adtxUrl}?campaign_id=eq.${id}&type=eq.charge`, { headers: supabaseAuthHeaders() });
+        const txs = Array.isArray(txRes.data) ? txRes.data : [];
+        for (const t of txs) {
+          totalVirtualCharged += Number(t.amount_virtual_charged || 0);
+          totalRealCharged += Number(t.amount_real_charged || 0);
+        }
+      } catch (e) {
+        console.warn('could not fetch ad_transactions for refund proportions', e && e.response ? e.response.data : e.message || e);
+      }
+
       const wallet = await getWallet(camp.user_id);
       if (wallet) {
-        const newVirtual = +(Number(wallet.virtual_balance || 0) + remaining).toFixed(2);
-        const newTotal = +(newVirtual + Number(wallet.real_balance || 0)).toFixed(2);
         const walletsUrl = `${SUPABASE_URL.replace(/\/+$/,'')}/rest/v1/wallets`;
-        await axios.patch(`${walletsUrl}?user_id=eq.${camp.user_id}`, { virtual_balance: newVirtual, total_balance: newTotal, updated_at: new Date().toISOString() }, { headers: supabaseAuthHeaders() });
 
-        // record refund transaction
-        const adtxUrl = `${SUPABASE_URL.replace(/\/+$/,'')}/rest/v1/ad_transactions`;
+        // Decide distribution of refund between virtual and real
+        let virtualRefund = 0;
+        let realRefund = 0;
+
+        if (refundTo === 'virtual') {
+          virtualRefund = remaining;
+        } else if (refundTo === 'real') {
+          realRefund = remaining;
+        } else {
+          // original: if campaign was paid entirely from one source, refund there.
+          // if mixed, refund proportionally based on amounts charged.
+          const totalCharged = totalVirtualCharged + totalRealCharged;
+          if (totalCharged <= 0) {
+            // fallback: refund to virtual by default if we don't know the source
+            virtualRefund = remaining;
+          } else if (totalVirtualCharged > 0 && totalRealCharged === 0) {
+            virtualRefund = remaining;
+          } else if (totalRealCharged > 0 && totalVirtualCharged === 0) {
+            realRefund = remaining;
+          } else {
+            // proportional split
+            virtualRefund = Math.round((remaining * (totalVirtualCharged / totalCharged)) * 100) / 100;
+            realRefund = +(remaining - virtualRefund).toFixed(2);
+          }
+        }
+
+        // Apply refund to wallet balances (add amounts back)
+        const newVirtual = +(Number(wallet.virtual_balance || 0) + virtualRefund).toFixed(2);
+        const newReal = +(Number(wallet.real_balance || 0) + realRefund).toFixed(2);
+        const newTotal = +(newVirtual + newReal).toFixed(2);
+
+        await axios.patch(`${walletsUrl}?user_id=eq.${camp.user_id}`, { virtual_balance: newVirtual, real_balance: newReal, total_balance: newTotal, updated_at: new Date().toISOString() }, { headers: supabaseAuthHeaders() });
+
+        // record refund transaction with breakdown
         await axios.post(adtxUrl, {
           campaign_id: id,
           user_id: camp.user_id,
           amount_usd: remaining,
-          amount_virtual_charged: 0,
-          amount_real_charged: 0,
+          amount_virtual_charged: virtualRefund,
+          amount_real_charged: realRefund,
           type: 'refund',
-          meta: { note: 'campaign cancelled refund' },
+          meta: { note: 'campaign cancelled refund', refund_to: refundTo },
           created_at: new Date().toISOString()
         }, { headers: supabaseAuthHeaders() });
       }

@@ -14,6 +14,8 @@ import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Profile from "./pages/Profile";
 import EditProfile from "./pages/EditProfile";
+import Campaigns from './pages/Campaigns';
+import CampaignCreate from './pages/CampaignCreate';
 import MyStore from "./pages/MyStore";
 import Square from "./pages/Square";
 import Wallet from "./pages/Wallet";
@@ -196,6 +198,8 @@ const App = () => {
                     <Route path="/profile" element={<Profile />} />
                     <Route path="/profile/:username" element={<Profile />} />
                     <Route path="/profile/edit" element={<EditProfile />} />
+                    <Route path="/campaigns" element={<Campaigns />} />
+                    <Route path="/campaigns/create" element={<CampaignCreate />} />
                     <Route path="/my-store" element={<MyStore />} />
                     <Route path="/create-store" element={<CreateStore />} />
                     <Route path="/square" element={<Square />} />

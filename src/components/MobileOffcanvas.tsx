@@ -14,6 +14,7 @@ import {
   User,
   Wallet,
   Store,
+  Megaphone,
   Users,
   LogOut,
   ShoppingBag,
@@ -368,7 +369,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
 
             {/* Quick Links */}
             <div className="bg-white dark:bg-[#161616] rounded-lg p-4 shadow-sm border dark:border-gray-700">
-              <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-4 text-purple-600 dark:text-purple-400">Quick Links</h3>
+              <h3 className="font-semibold mb-4 text-purple-600 dark:text-purple-400">Quick Links</h3>
               <div className="space-y-2">
                 <Button
                   variant="ghost"
@@ -386,6 +387,15 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
                 >
                   <Wallet className="h-5 w-5 mr-3 text-yellow-600" />
                   <span className="text-gray-700 dark:text-gray-300">Wallet</span>
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start hover:bg-purple-50 dark:hover:bg-purple-900/20"
+                  onClick={() => handleNavigation('/campaigns')}
+                >
+                  <Megaphone className="h-5 w-5 mr-3 text-pink-600" />
+                  <span className="text-gray-700 dark:text-gray-300">Ad Center</span>
                 </Button>
 
                 <Button
@@ -453,7 +463,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
             {/* Groups Section (Feed sidebar pattern) */}
             <div>
               <div className="flex items-center justify-between mb-2 mt-6">
-                <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-lg">Groups</h3>
+                <h3 className="font-semibold text-lg">Groups</h3>
                 <Button size="icon" variant="outline" onClick={() => setShowCreateModal(true)} title="Create Group">
                   <Plus className="h-5 w-5" />
                 </Button>

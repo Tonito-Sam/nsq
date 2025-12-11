@@ -3,8 +3,10 @@ import { Card } from '@/components/ui/card';
 import { PostHeader } from './PostHeader';
 import { PostContent } from './PostContent';
 import { PostEngagement } from './PostEngagement';
+import { useNavigate } from 'react-router-dom';
 import { CommentForm } from './CommentForm';
 import { supabase } from '@/integrations/supabase/client';
+import apiUrl from '@/lib/api';
 import { toast } from '@/components/ui/use-toast';
 import { ShareModal } from './ShareModal';
 import { PollCard } from './PollCard';
@@ -247,58 +249,47 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
   useEffect(() => {
     if (!currentUser?.id) return;
     let timer: NodeJS.Timeout | null = null;
-    const handleVisibility = () => {
-      if (!viewRef.current) return;
-      const rect = viewRef.current.getBoundingClientRect();
-      const inView = rect.top >= 0 && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight);
-      if (inView && !timer) {
-  // Count a view after a threshold (ms). Change this value to 5000 to use 5s.
-  const VIEW_THRESHOLD_MS = 5000;
+    // Use IntersectionObserver for more reliable in-view detection
+    const VIEW_THRESHOLD_MS = 5000; // ms to consider a view
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const isVisible = entry.isIntersecting && entry.intersectionRatio >= 0.5;
+      if (isVisible && !timer) {
         timer = setTimeout(async () => {
-          // Record view via server endpoint to avoid client RLS/permission errors
           try {
-            const resp = await fetch('/api/post-views', {
+            const resp = await fetch(apiUrl('/api/post-views'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ post_id: post.id, user_id: currentUser.id })
             });
             if (resp && resp.ok) {
-              // notify other components (e.g., PostEngagement) to update counts
-              try {
-                const ev = new CustomEvent('post-viewed', { detail: { postId: post.id } });
-                window.dispatchEvent(ev);
-              } catch (e) {
-                // ignore event dispatch errors
-              }
+              try { window.dispatchEvent(new CustomEvent('post-viewed', { detail: { postId: post.id } })); } catch (e) {}
             } else {
-              try {
-                const txt = resp ? await resp.text() : 'no response';
-                console.warn('post-view POST returned non-ok:', resp ? resp.status : 'no-resp', txt);
-              } catch (e) {
-                console.warn('post-view POST returned non-ok and failed to read body');
-              }
+              try { const txt = resp ? await resp.text() : 'no response'; console.warn('post-view POST returned non-ok:', resp ? resp.status : 'no-resp', txt); } catch (e) {}
             }
           } catch (err) {
-            // Log but don't break the feed
             console.error('failed to report post view', err);
           }
+          timer = null;
         }, VIEW_THRESHOLD_MS);
-      } else if (!inView && timer) {
+      } else if (!isVisible && timer) {
         clearTimeout(timer);
         timer = null;
       }
-    };
-    window.addEventListener('scroll', handleVisibility);
-    window.addEventListener('resize', handleVisibility);
-    handleVisibility();
+    }, { threshold: [0, 0.5, 1] });
+
+    if (viewRef.current) observer.observe(viewRef.current);
+
     return () => {
-      window.removeEventListener('scroll', handleVisibility);
-      window.removeEventListener('resize', handleVisibility);
+      if (viewRef.current) observer.unobserve(viewRef.current);
       if (timer) clearTimeout(timer);
+      observer.disconnect();
     };
   }, [post.id, currentUser?.id]);
 
   // Post options menu
+  const navigate = useNavigate();
 
   return (
     <div ref={viewRef}>
@@ -427,6 +418,11 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
             onShare={() => {
               setShowShareModal(true);
               if (onShare) onShare(post.id);
+            }}
+            isOwner={currentUser?.id === post.user_id}
+            onBoost={() => {
+              // Navigate to campaigns page to start a boost flow for this post
+              navigate(`/campaigns?mode=boost&postId=${encodeURIComponent(post.id)}`);
             }}
           />
           {showComments && (

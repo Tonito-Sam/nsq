@@ -1,0 +1,1 @@
+patching WalletSidebar: add ArrowLeft import, MobileBottomNav import, restructure DialogContent to full-screen with header/back and include MobileBottomNav. Will commit and push.
