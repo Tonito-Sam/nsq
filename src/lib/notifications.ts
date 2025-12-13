@@ -9,9 +9,11 @@ export interface NotificationPayload {
   data?: Record<string, any> | null;
 }
 
+import apiUrl from '@/lib/api';
+
 export async function sendNotification(payload: NotificationPayload) {
   try {
-    const resp = await fetch('/api/notifications/create', {
+    const resp = await fetch(apiUrl('/api/notifications/create'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)

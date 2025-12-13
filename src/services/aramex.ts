@@ -1,4 +1,5 @@
 import axios from 'axios';
+import apiUrl from '@/lib/api';
 
 export interface RateRequest {
   OriginCountryCode: string;
@@ -26,6 +27,6 @@ export interface RateResponse {
 }
 
 export async function getAramexRate(request: RateRequest): Promise<RateResponse> {
-  const { data } = await axios.post('/api/rate/calculate', request);
+  const { data } = await axios.post(apiUrl('/api/rate/calculate'), request);
   return data;
 }

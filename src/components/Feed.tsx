@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import apiUrl from '@/lib/api';
 import { useInfiniteQuery, useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { CreatePost } from './CreatePost';
 import { PostCard } from './PostCard';
@@ -259,10 +260,10 @@ const Feed: React.FC = () => {
       try {
         console.log(`Fetching ad campaign for batch ${batchIndex}`);
         
-        // Fetch ad campaign from API
+        // Fetch ad campaign from API (use apiUrl helper so production can set VITE_API_BASE_URL)
         const uid = user?.id;
-        const apiUrl = `/api/ads/serve${uid ? `?user_id=${uid}` : ''}`;
-        const resp = await fetch(apiUrl);
+        const endpoint = apiUrl(`/api/ads/serve${uid ? `?user_id=${uid}` : ''}`);
+        const resp = await fetch(endpoint);
         
         if (!resp.ok) {
           console.warn(`Failed to fetch ad campaign for batch ${batchIndex}:`, resp.status);
@@ -582,7 +583,7 @@ const Feed: React.FC = () => {
   // Ad click handler
   const handleAdClick = (adCampaign: AdCampaign) => {
     // Track ad click
-    fetch(`/api/ads/click`, {
+    fetch(apiUrl('/api/ads/click'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

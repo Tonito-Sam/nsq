@@ -1,5 +1,6 @@
 // Centralized API base helper — read from Vite env in production
-export const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || '';
+// Support either VITE_API_BASE_URL (preferred) or the older VITE_API_URL for compatibility
+export const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || (import.meta as any).env?.VITE_API_URL || '';
 
 export function apiUrl(path: string) {
   if (!path) return API_BASE || '';

@@ -5,6 +5,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { Header } from '@/components/Header';
+import apiUrl from '@/lib/api';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 
 const Campaigns = () => {
@@ -71,7 +72,7 @@ const Campaigns = () => {
   const fetchCampaigns = async () => {
     if (!user) return;
     try {
-      const resp = await fetch(`/api/campaigns?user_id=${encodeURIComponent(user.id)}`);
+      const resp = await fetch(apiUrl(`/api/campaigns?user_id=${encodeURIComponent(user.id)}`));
       const j = await resp.json();
       setCampaigns(j.campaigns || []);
     } catch (e) {
@@ -83,7 +84,7 @@ const Campaigns = () => {
   const handleCancel = async (id: string) => {
     if (!confirm('Cancel this campaign and refund remaining budget (prorated)?')) return;
     try {
-      const resp = await fetch(`/api/campaigns/${id}?refund=true`, { method: 'DELETE' });
+      const resp = await fetch(apiUrl(`/api/campaigns/${id}?refund=true`), { method: 'DELETE' });
       const j = await resp.json();
       if (!resp.ok) throw new Error(j.error || JSON.stringify(j));
       await fetchCampaigns();

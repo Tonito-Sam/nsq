@@ -1,12 +1,14 @@
 // Utility for background removal — calls the server-side proxy at /api/removebg.
 // This keeps the remove.bg API key on the server and out of client bundles.
+import apiUrl from '@/lib/api';
+
 export async function removeBgUsingRemoveBgApi(file: File): Promise<File> {
   try {
     const form = new FormData();
     // Use the field name 'image' — the backend proxy expects this
     form.append('image', file, file.name);
 
-    const res = await fetch('/api/removebg', {
+    const res = await fetch(apiUrl('/api/removebg'), {
       method: 'POST',
       body: form,
     });

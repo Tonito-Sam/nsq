@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Header } from '@/components/Header';
+import apiUrl from '@/lib/api';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { useAuth } from '@/hooks/useAuth';
 import { uploadFile, getMediaUrl } from '@/utils/mediaUtils';
@@ -344,7 +345,7 @@ const CampaignCreate = () => {
         }
       };
 
-      const resp = await fetch('/api/campaigns', { 
+      const resp = await fetch(apiUrl('/api/campaigns'), { 
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' }, 
         body: JSON.stringify(payload) 

@@ -1,5 +1,6 @@
 import { shippingPartners } from './shippingPartners';
 import { supabase } from '@/integrations/supabase/client';
+import apiUrl from '@/lib/api';
 
 export interface Address {
   country: string;
@@ -177,7 +178,7 @@ const fetchLiveShippingRate = async (
     } else if (partner.code === 'aramex') {
       // Aramex API integration (call your backend proxy for security)
       try {
-        const response = await fetch('/api/aramex/rate', {
+        const response = await fetch(apiUrl('/api/aramex/rate'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
