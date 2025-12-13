@@ -130,9 +130,25 @@ try {
 
 // Ads serving route (minimal delivery API)
 try {
-  const ads = require('./routes/ads');
-  app.use('/api/ads', ads);
-  console.log('✅ Mounted /api/ads');
+  // Require ads route only if Supabase config is present. Ads depends on Supabase service role key.
+  const hasSupabase = !!(process.env.SUPABASE_URL && (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE));
+  if (hasSupabase) {
+    const ads = require('./routes/ads');
+    app.use('/api/ads', ads);
+    console.log('✅ Mounted /api/ads');
+  } else {
+    // Mount a stub that returns a clear JSON error so frontend can detect missing config
+    const expressStub = require('express');
+    const stub = expressStub.Router();
+    stub.get('/serve', (req, res) => {
+      res.status(503).json({ served: false, error: 'supabaseUrl is required' });
+    });
+    stub.post('/click', (req, res) => {
+      res.status(503).json({ success: false, error: 'supabaseUrl is required' });
+    });
+    app.use('/api/ads', stub);
+    console.warn('⚠️ ads route mounted as stub: SUPABASE_URL or service role key not set');
+  }
 } catch (e) {
   console.warn('⚠️ ads route not available:', e?.message || e);
 }
