@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Feed } from '../components/Feed';
+import Feed from '../components/Feed';
 import { Layout } from '../components/Layout';
 import { ShowProvider } from '../contexts/ShowContext';
 

@@ -67,6 +67,9 @@ interface PostCardProps {
     moment_special_name?: string | null;
     is_custom_special_day?: boolean | null;
     moment_special_id?: string | null;
+    // Sponsored flag added by ad-serving integration
+    isSponsored?: boolean;
+    sponsored_meta?: any;
   };
   currentUser: any;
   reactionCounts?: { [key: string]: number };
@@ -309,6 +312,14 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
             onHidePost={handleHidePost}
             onEditPost={handleEditPost}
           />
+          {post.isSponsored && (
+            <div className="mt-2">
+              <span className="inline-flex items-center gap-2 px-2 py-1 rounded-md text-xs bg-yellow-50 text-yellow-800">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor"><path d="M11 3a1 1 0 00-1 1v1H9a1 1 0 000 2h1v6H9a1 1 0 100 2h1v1a1 1 0 102 0v-1h1a1 1 0 100-2h-1V7h1a1 1 0 100-2h-1V4a1 1 0 00-1-1h-1z"/></svg>
+                Sponsored
+              </span>
+            </div>
+          )}
           {/* Repost logic */}
           {post.post_type === 'repost' && post.original_post ? (
             <div className="my-4">
@@ -421,8 +432,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
             }}
             isOwner={currentUser?.id === post.user_id}
             onBoost={() => {
-              // Navigate to campaigns page to start a boost flow for this post
-              navigate(`/campaigns?mode=boost&postId=${encodeURIComponent(post.id)}`);
+              // Navigate directly to the campaign create page with the postId prefilled
+              navigate(`/campaigns/create?postId=${encodeURIComponent(post.id)}`);
             }}
           />
           {showComments && (

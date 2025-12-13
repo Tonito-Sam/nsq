@@ -10,10 +10,13 @@ import { Slider } from '@/components/ui/slider';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Header } from '@/components/Header';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { useAuth } from '@/hooks/useAuth';
+import { uploadFile, getMediaUrl } from '@/utils/mediaUtils';
+import { DEFAULT_TARGET_COUNTRIES } from '@/utils/targetCountries';
+import ReactCountryFlag from 'react-country-flag';
 import { 
   Zap, 
   Target, 
@@ -34,6 +37,14 @@ const CampaignCreate = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [wallet, setWallet] = useState({ real_balance: 0, virtual_balance: 100, total_balance: 100 });
+  const location = useLocation();
+    const [postId, setPostId] = useState<string | null>(null);
+    const [postData, setPostData] = useState<any | null>(null);
+    const [messageOverride, setMessageOverride] = useState<string | null>(null);
+    const [attachedFile, setAttachedFile] = useState<File | null>(null);
+    const [attachedPreviewUrl, setAttachedPreviewUrl] = useState<string | null>(null);
+    const [destinationUrl, setDestinationUrl] = useState<string>('');
+    const [whatsappNumber, setWhatsappNumber] = useState<string>('');
 
   // form state
   const [name, setName] = useState('');
@@ -45,6 +56,28 @@ const CampaignCreate = () => {
     return tomorrow.toISOString().slice(0, 16);
   });
   const [targetJson, setTargetJson] = useState('{"countries": ["US"], "age_min": 18}');
+  const [selectedCountries, setSelectedCountries] = useState<string[]>(DEFAULT_TARGET_COUNTRIES.slice());
+  const [countrySearch, setCountrySearch] = useState('');
+  const [showAllCountries, setShowAllCountries] = useState(false);
+  const ageGroupOptions = ['13-17','18-24','25-34','35-44','45-54','55-64','65+'];
+  const [selectedAgeGroups, setSelectedAgeGroups] = useState<string[]>(['18-24','25-34']);
+  const [interestsInput, setInterestsInput] = useState('');
+  const [showAdvancedTarget, setShowAdvancedTarget] = useState(false);
+
+  const getCountryName = (iso?: string) => {
+    if (!iso) return iso || '';
+    try {
+      // Use Intl.DisplayNames when available
+      // Fallback to ISO code if not supported
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const dn = typeof Intl !== 'undefined' && (Intl as any).DisplayNames ? new (Intl as any).DisplayNames(['en'], { type: 'region' }) : null;
+      if (dn) return dn.of(iso.toUpperCase()) || iso.toUpperCase();
+    } catch (e) {
+      // ignore
+    }
+    return iso.toUpperCase();
+  };
   const [objective, setObjective] = useState('impressions');
   const [budgetModel, setBudgetModel] = useState<'fixed' | 'daily'>('daily');
   const [autoRenew, setAutoRenew] = useState(true);
@@ -54,6 +87,12 @@ const CampaignCreate = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [estimatedReach, setEstimatedReach] = useState(0);
   const [estimatedImpressions, setEstimatedImpressions] = useState(0);
+
+  // Pricing defaults
+  // Pricing defaults
+  // Boost per day is $0.75 (75 cents)
+  const BOOST_DAILY = 0.75; // boost per day
+  const AD_DAILY = 1.0; // ad campaign per day
 
   // Preset templates
   const campaignTemplates = [
@@ -79,6 +118,34 @@ const CampaignCreate = () => {
 
     return () => { if (channel) supabase.removeChannel(channel); };
   }, [user, budget, days, objective, audienceSize]);
+
+  // Read postId from query params for quick-boost flows
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const p = params.get('postId');
+    setPostId(p || null);
+    if (p) {
+      // If the user came from a boost CTA, switch objective to boost_post and adjust defaults
+      setObjective('boost_post');
+      setBudgetModel('daily');
+      setDays(1);
+      // fetch the post preview
+      (async () => {
+        try {
+          const { data, error } = await supabase.from('posts').select('*').eq('id', p).single();
+          if (!error && data) {
+            setPostData(data);
+            setMessageOverride(data.content || '');
+            // set media preview if present
+            const mediaUrl = data.image_url || data.video_url || (data.media_urls && data.media_urls[0]) || null;
+            if (mediaUrl) setAttachedPreviewUrl(getMediaUrl(mediaUrl));
+          }
+        } catch (e) {
+          console.error('fetch post preview failed', e);
+        }
+      })();
+    }
+  }, [location.search]);
 
   useEffect(() => {
     calculateEstimates();
@@ -123,15 +190,18 @@ const CampaignCreate = () => {
   };
 
   const calculateEstimates = () => {
-    const BOOST_DAILY = 0.0075;
-    const AD_DAILY = 1.0;
-    
     let dailyBudget = 0;
     if (budgetModel === 'fixed') {
       const totalBudget = Number(budget || 0);
       dailyBudget = totalBudget / Math.max(1, days);
     } else {
       dailyBudget = Number(budget || (objective === 'boost_post' ? BOOST_DAILY : AD_DAILY));
+      // enforce minimum daily rates: boosts have BOOST_DAILY min, ads have AD_DAILY min
+      if (objective === 'boost_post') {
+        dailyBudget = Math.max(dailyBudget, BOOST_DAILY);
+      } else {
+        dailyBudget = Math.max(dailyBudget, AD_DAILY);
+      }
     }
 
     const totalBudget = dailyBudget * days;
@@ -157,13 +227,15 @@ const CampaignCreate = () => {
 
   const previewCharge = () => {
     let totalBudget = 0;
-    
     if (budgetModel === 'fixed') {
       totalBudget = Number(budget || 0);
     } else {
-      const BOOST_DAILY = 0.0075;
-      const AD_DAILY = 1.0;
-      const dailyBudget = Number(budget || (objective === 'boost_post' ? BOOST_DAILY : AD_DAILY));
+      let dailyBudget = Number(budget || (objective === 'boost_post' ? BOOST_DAILY : AD_DAILY));
+      if (objective === 'boost_post') {
+        dailyBudget = Math.max(dailyBudget, BOOST_DAILY);
+      } else {
+        dailyBudget = Math.max(dailyBudget, AD_DAILY);
+      }
       totalBudget = dailyBudget * Math.max(1, days);
     }
 
@@ -192,11 +264,13 @@ const CampaignCreate = () => {
       return false;
     }
     
-    try { 
-      JSON.parse(targetJson); 
-    } catch (e) { 
-      setFormError('Target JSON is invalid'); 
-      return false; 
+    if (showAdvancedTarget) {
+      try {
+        JSON.parse(targetJson);
+      } catch (e) {
+        setFormError('Target JSON is invalid');
+        return false;
+      }
     }
     
     return true;
@@ -211,10 +285,18 @@ const CampaignCreate = () => {
     }
     setDays(template.days);
     if (template.audience === 'broad') {
-      setTargetJson('{"countries": ["US", "CA", "GB", "AU"], "age_min": 18, "age_max": 65}');
+      const t = { countries: ['US', 'CA', 'GB', 'AU'], age_min: 18, age_max: 65 };
+      setTargetJson(JSON.stringify(t));
+      setSelectedCountries(['US','CA','GB','AU']);
+      setSelectedAgeGroups(['18-24','25-34','35-44','45-54','55-64']);
+      setInterestsInput('');
       setAudienceSize(5000);
     } else if (template.audience === 'targeted') {
-      setTargetJson('{"countries": ["US"], "age_min": 25, "age_max": 44, "interests": ["technology", "business"]}');
+      const t = { countries: ['US'], age_min: 25, age_max: 44, interests: ['technology', 'business'] };
+      setTargetJson(JSON.stringify(t));
+      setSelectedCountries(['US']);
+      setSelectedAgeGroups(['25-34','35-44']);
+      setInterestsInput('technology,business');
       setAudienceSize(2000);
     }
   };
@@ -226,14 +308,28 @@ const CampaignCreate = () => {
     setCreating(true);
     try {
       const budgetNum = previewCharge().total;
-      const targetOptions = JSON.parse(targetJson);
+      let targetOptions: any = {};
+      if (showAdvancedTarget) {
+        targetOptions = JSON.parse(targetJson || '{}');
+      } else {
+        const interests = interestsInput.split(',').map(s => s.trim()).filter(Boolean);
+        if (showAllCountries) {
+          targetOptions.all_countries = true;
+        } else {
+          let countries = selectedCountries.slice();
+          if (!countries || countries.length === 0) countries = DEFAULT_TARGET_COUNTRIES.slice();
+          if (countries.length) targetOptions.countries = countries;
+        }
+        if (selectedAgeGroups && selectedAgeGroups.length) targetOptions.age_groups = selectedAgeGroups;
+        if (interests.length) targetOptions.interests = interests;
+      }
       targetOptions.auto_renew = !!autoRenew;
       targetOptions.audience_size = audienceSize;
       targetOptions.bid_strategy = bidStrategy;
 
       const payload: any = {
         user_id: user.id,
-        post_id: null,
+        post_id: postId || null,
         name: name || `Campaign ${new Date().toISOString().slice(0, 10)}`,
         objective: objective || 'impressions',
         budget_usd: budgetNum,
@@ -267,6 +363,20 @@ const CampaignCreate = () => {
   };
 
   const charges = previewCharge();
+
+  const getDailyBudgetDisplay = () => {
+    if (budgetModel === 'fixed') {
+      const total = Number(budget || 0);
+      return (total / Math.max(1, days)).toFixed(2);
+    }
+    let daily = Number(budget || (objective === 'boost_post' ? BOOST_DAILY : AD_DAILY));
+    if (objective === 'boost_post') {
+      daily = Math.max(daily, BOOST_DAILY);
+    } else {
+      daily = Math.max(daily, AD_DAILY);
+    }
+    return daily.toFixed(2);
+  };
 
   return (
     <>
@@ -334,6 +444,47 @@ const CampaignCreate = () => {
                         className="text-lg h-12"
                       />
                     </div>
+
+                      {/* If boosting a specific post, show a preview and editable creative fields */}
+                      {postData && (
+                        <Card className="mt-4">
+                          <CardContent>
+                            <div className="space-y-3">
+                              <div className="flex items-start gap-3">
+                                <img src={postData.user?.avatar_url || '/placeholder.svg'} alt="avatar" className="w-10 h-10 rounded-full object-cover" />
+                                <div className="flex-1">
+                                  <div className="font-medium">{postData.user?.full_name || postData.user?.username || 'User'}</div>
+                                  <div className="text-sm text-muted-foreground">Original post preview</div>
+                                  <div className="mt-2">
+                                    <Textarea value={messageOverride || ''} onChange={e => setMessageOverride(e.target.value)} rows={4} />
+                                  </div>
+                                  {attachedPreviewUrl && (
+                                    <div className="mt-3">
+                                      {attachedPreviewUrl.endsWith('.mp4') || attachedPreviewUrl.includes('video') ? (
+                                        <video src={attachedPreviewUrl} controls className="max-h-48 rounded-lg" />
+                                      ) : (
+                                        <img src={attachedPreviewUrl} alt="preview" className="max-h-48 rounded-lg object-contain" />
+                                      )}
+                                    </div>
+                                  )}
+                                  <div className="mt-2 flex items-center gap-2">
+                                    <input type="file" accept="image/*,video/*" onChange={e => {
+                                      const f = e.target.files && e.target.files[0];
+                                      if (!f) return;
+                                      setAttachedFile(f);
+                                      try { setAttachedPreviewUrl(URL.createObjectURL(f)); } catch(e){}
+                                    }} />
+                                  </div>
+                                  <div className="mt-3 grid grid-cols-1 gap-2">
+                                    <Input placeholder="Destination URL (optional)" value={destinationUrl} onChange={e => setDestinationUrl(e.target.value)} />
+                                    <Input placeholder="WhatsApp number (optional)" value={whatsappNumber} onChange={e => setWhatsappNumber(e.target.value)} />
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )}
 
                     <div className="grid md:grid-cols-2 gap-6">
                       <div className="space-y-3">
@@ -457,14 +608,99 @@ const CampaignCreate = () => {
                         </div>
                         
                         <div>
-                          <label className="text-sm font-medium block mb-2">Targeting Options (JSON)</label>
-                          <Textarea
-                            value={targetJson}
-                            onChange={e => setTargetJson(e.target.value)}
-                            placeholder='{"countries": ["US"], "age_min": 18, "interests": []}'
-                            rows={4}
-                            className="font-mono text-sm"
-                          />
+                          <label className="text-sm font-medium block mb-2">Audience Targeting (easy)</label>
+                          <div className="grid sm:grid-cols-1 gap-3">
+                            <div>
+                              <div className="flex items-center justify-between">
+                                <label className="text-xs text-muted-foreground">Countries</label>
+                                <label className="inline-flex items-center text-xs">
+                                  <input type="checkbox" checked={showAllCountries} onChange={e => setShowAllCountries(e.target.checked)} className="mr-2" />
+                                  <span>Show to all countries</span>
+                                </label>
+                              </div>
+
+                              {!showAllCountries && (
+                                <div className="mt-2 border rounded-md bg-muted/5">
+                                  <div className="p-2">
+                                    <input
+                                      type="text"
+                                      placeholder="Search country ISO (e.g. US, NG)..."
+                                      value={countrySearch}
+                                      onChange={e => setCountrySearch(e.target.value)}
+                                      className="w-full px-3 py-2 text-sm bg-transparent border rounded-md"
+                                    />
+                                  </div>
+                                  <div className="max-h-44 overflow-auto p-2">
+                                    {DEFAULT_TARGET_COUNTRIES.filter(c => c.toLowerCase().includes(countrySearch.toLowerCase())).map(code => {
+                                      const checked = selectedCountries.includes(code);
+                                      return (
+                                        <label key={code} className="flex items-center gap-2 px-2 py-1 hover:bg-muted/10 rounded">
+                                          <input type="checkbox" checked={checked} onChange={() => {
+                                            if (checked) setSelectedCountries(prev => prev.filter(x => x !== code));
+                                            else setSelectedCountries(prev => [...prev, code]);
+                                          }} />
+                                          <span className="text-sm font-medium flex items-center gap-2">
+                                            <ReactCountryFlag
+                                              countryCode={code}
+                                              svg
+                                              style={{ width: '1.4em', height: '1.4em' }}
+                                              title={getCountryName(code)}
+                                            />
+                                            <span className="truncate">{getCountryName(code)} <span className="text-xs text-muted-foreground">({code})</span></span>
+                                          </span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                  <div className="p-2 text-xs text-muted-foreground">
+                                    Selected: {selectedCountries.length} countries
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <div>
+                              <label className="text-xs text-muted-foreground">Age Groups</label>
+                              <div className="mt-2 border rounded-md p-2 bg-muted/5">
+                                {ageGroupOptions.map(group => {
+                                  const checked = selectedAgeGroups.includes(group);
+                                  return (
+                                    <label key={group} className="flex items-center gap-2 px-2 py-1 hover:bg-muted/10 rounded">
+                                      <input type="checkbox" checked={checked} onChange={() => {
+                                        if (checked) setSelectedAgeGroups(prev => prev.filter(x => x !== group));
+                                        else setSelectedAgeGroups(prev => [...prev, group]);
+                                      }} />
+                                      <span className="text-sm">{group}</span>
+                                    </label>
+                                  );
+                                })}
+                                <div className="text-xs text-muted-foreground mt-2">Selected: {selectedAgeGroups.length}</div>
+                              </div>
+                            </div>
+
+                            <div className="sm:col-span-1">
+                              <label className="text-xs text-muted-foreground">Interests (comma-separated)</label>
+                              <Input value={interestsInput} onChange={e => setInterestsInput(e.target.value)} placeholder="technology,business,food" />
+                            </div>
+                          </div>
+                          <div className="mt-2 text-sm">
+                            <label className="inline-flex items-center gap-2">
+                              <input type="checkbox" checked={showAdvancedTarget} onChange={e => setShowAdvancedTarget(e.target.checked)} />
+                              <span className="text-xs">Show advanced JSON</span>
+                            </label>
+                          </div>
+                          {showAdvancedTarget && (
+                            <div className="mt-2">
+                              <label className="text-sm font-medium block mb-2">Targeting Options (JSON)</label>
+                              <Textarea
+                                value={targetJson}
+                                onChange={e => setTargetJson(e.target.value)}
+                                placeholder='{"countries": ["US"], "age_min": 18, "interests": []}'
+                                rows={6}
+                                className="font-mono text-sm"
+                              />
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -539,7 +775,7 @@ const CampaignCreate = () => {
                   <div className="space-y-4">
                     <div className="flex justify-between">
                       <span>Daily Budget</span>
-                      <span className="font-medium">${(previewCharge().total / Math.max(1, days)).toFixed(2)}</span>
+                      <span className="font-medium">${getDailyBudgetDisplay()}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Total Budget</span>

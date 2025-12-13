@@ -14,6 +14,10 @@ function supabaseAuthHeaders() {
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 
+// Minimum daily pricing enforcement (server-side)
+const BOOST_DAILY = 0.75; // $0.75 per day for boosts
+const AD_DAILY = 1.0; // $1.00 per day for ad campaigns
+
 // Helper: get wallet for user
 async function getWallet(userId) {
   const url = `${SUPABASE_URL.replace(/\/+$/,'')}/rest/v1/wallets?user_id=eq.${userId}`;
@@ -33,6 +37,15 @@ router.post('/', async (req, res) => {
   }
 
   const budget = Number(budget_usd || 0);
+  const days = Number(body.days || 1);
+  const dailyBudget = budget / Math.max(1, days);
+  // server-side enforcement of minimum daily rates
+  const objectiveType = post_id ? 'boost_post' : (body.objective || 'general');
+  if (objectiveType === 'boost_post') {
+    if (dailyBudget < BOOST_DAILY) return res.status(400).json({ error: 'daily_budget_too_low', message: `Boost daily budget must be at least $${BOOST_DAILY.toFixed(2)} per day.` });
+  } else {
+    if (dailyBudget < AD_DAILY) return res.status(400).json({ error: 'daily_budget_too_low', message: `Ad campaign daily budget must be at least $${AD_DAILY.toFixed(2)} per day.` });
+  }
   if (!Number.isFinite(budget) || budget <= 0) return res.status(400).json({ error: 'invalid budget_usd' });
 
   try {
@@ -56,13 +69,13 @@ router.post('/', async (req, res) => {
 
     const walletsUrl = `${SUPABASE_URL.replace(/\/+$/,'')}/rest/v1/wallets`;
 
-    // PATCH wallet (by user_id)
+    // PATCH wallet (by user_id) - request representation back for verification
     const patchRes = await axios.patch(`${walletsUrl}?user_id=eq.${user_id}`, {
       virtual_balance: newVirtual,
       real_balance: newReal,
       total_balance: newTotal,
       updated_at: new Date().toISOString()
-    }, { headers: supabaseAuthHeaders() });
+    }, { headers: { ...supabaseAuthHeaders(), Prefer: 'return=representation' } });
 
     // If wallet update succeeded, create campaign and ad_transaction
     const campaignsUrl = `${SUPABASE_URL.replace(/\/+$/,'')}/rest/v1/campaigns`;
@@ -84,8 +97,15 @@ router.post('/', async (req, res) => {
       updated_at: new Date().toISOString()
     };
 
-    const createCampaignRes = await axios.post(campaignsUrl, campaignPayload, { headers: supabaseAuthHeaders() });
+    // Create campaign and request the created row back
+    const createCampaignRes = await axios.post(campaignsUrl, campaignPayload, { headers: { ...supabaseAuthHeaders(), Prefer: 'return=representation' } });
     const createdCampaign = Array.isArray(createCampaignRes.data) ? createCampaignRes.data[0] : createCampaignRes.data;
+
+    // Validate created campaign
+    if (!createdCampaign || !createdCampaign.id) {
+      console.error('campaign creation did not return a created row', createCampaignRes.data);
+      return res.status(500).json({ error: 'campaign creation failed - no created id returned', details: createCampaignRes.data });
+    }
 
     // Record ad transaction
     const txPayload = {
@@ -104,6 +124,13 @@ router.post('/', async (req, res) => {
     return res.json({ success: true, campaign: createdCampaign, charged: { virtual: chargeFromVirtual, real: remaining } });
   } catch (err) {
     console.error('campaign create error', err.response && err.response.data ? err.response.data : err.message || err);
+
+    // If the error indicates the `wallets` table is missing, return a clearer message
+    const pgErr = err.response && err.response.data ? err.response.data : err;
+    if (pgErr && (pgErr.code === '42P01' || (pgErr.message && pgErr.message.includes('relation "public.wallets" does not exist')))) {
+      console.error('Missing wallets table detected. Please run the migrations to create `wallets`.');
+      return res.status(500).json({ error: 'missing_table_wallets', message: 'The database table `wallets` does not exist. Run the migrations or create the table in Supabase.' , details: pgErr });
+    }
 
     // Attempt to rollback wallet patch if we partially updated
     try {

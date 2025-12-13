@@ -9,7 +9,7 @@ import { MobileBottomNav } from '@/components/MobileBottomNav';
 
 const Campaigns = () => {
   const { user } = useAuth();
-  const [wallet, setWallet] = useState({ real_balance: 0, virtual_balance: 0, total_balance: 0 });
+  const [wallet, setWallet] = useState({ real_balance: 0, virtual_balance: 100, total_balance: 100 });
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const navigate = useNavigate();
 
@@ -40,13 +40,26 @@ const Campaigns = () => {
         .single();
 
       if (!error && data) {
-        setWallet({ real_balance: data.real_balance || 0, virtual_balance: data.virtual_balance || 0, total_balance: data.total_balance || ((data.real_balance||0) + (data.virtual_balance||0)) });
+        setWallet({
+          real_balance: data.real_balance || 0,
+          virtual_balance: data.virtual_balance || 100,
+          total_balance: data.total_balance || ((data.real_balance || 0) + (data.virtual_balance || 100))
+        });
       } else if (error && error.code === 'PGRST116') {
         const initialVirtualBalance = 100;
         const { data: newWallet, error: insertError } = await supabase
           .from('wallets')
-          .insert({ user_id: user.id, real_balance: 0, virtual_balance: initialVirtualBalance, total_balance: initialVirtualBalance, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
-        if (!insertError && newWallet && newWallet[0]) {
+          .insert({
+            user_id: user.id,
+            real_balance: 0,
+            virtual_balance: initialVirtualBalance,
+            total_balance: initialVirtualBalance,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+        if (!insertError && newWallet) {
           setWallet({ real_balance: 0, virtual_balance: initialVirtualBalance, total_balance: initialVirtualBalance });
         }
       }

@@ -128,6 +128,15 @@ try {
   console.warn('⚠️ campaigns route not available:', e?.message || e);
 }
 
+// Ads serving route (minimal delivery API)
+try {
+  const ads = require('./routes/ads');
+  app.use('/api/ads', ads);
+  console.log('✅ Mounted /api/ads');
+} catch (e) {
+  console.warn('⚠️ ads route not available:', e?.message || e);
+}
+
 // Users search route (service-role search)
 try {
   const users = require('./routes/users');

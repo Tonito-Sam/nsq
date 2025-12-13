@@ -528,12 +528,13 @@ export const PostContent: React.FC<PostContentProps> = ({
                 webkit-playsinline="true"
                 x5-playsinline="true"
                 disablePictureInPicture
+                onLoadedData={handleVideoLoaded}
                 onError={e => {
                     console.error('Video failed to load:', url, e);
                     const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
                     if (fallback) fallback.style.display = 'flex';
                   }}
-                style={{ background: '#222' }}
+                style={{ background: '#222', visibility: 'hidden' }}
               >
                 <source src={url} type="video/mp4" />
                 <source src={url} type="video/webm" />
@@ -568,6 +569,8 @@ export const PostContent: React.FC<PostContentProps> = ({
                 const video = e.currentTarget;
                 setSingleMediaDims({ w: video.videoWidth, h: video.videoHeight });
               }}
+              onLoadedData={handleVideoLoaded}
+              style={{ visibility: 'hidden' }}
             >
               <source src={url} type="video/mp4" />
               <source src={url} type="video/webm" />
@@ -601,6 +604,8 @@ export const PostContent: React.FC<PostContentProps> = ({
                 const video = e.currentTarget;
                 setSingleMediaDims({ w: video.videoWidth, h: video.videoHeight });
               }}
+              onLoadedData={handleVideoLoaded}
+              style={{ maxHeight: '500px', aspectRatio: '4/5', visibility: 'hidden' }}
             >
               <source src={url} type="video/mp4" />
               <source src={url} type="video/webm" />
@@ -658,10 +663,12 @@ export const PostContent: React.FC<PostContentProps> = ({
               webkit-playsinline="true"
               x5-playsinline="true"
               disablePictureInPicture
-              onLoadedMetadata={e => {
-                const video = e.currentTarget;
-                setSingleMediaDims({ w: video.videoWidth, h: video.videoHeight });
-              }}
+                onLoadedMetadata={e => {
+                  const video = e.currentTarget;
+                  setSingleMediaDims({ w: video.videoWidth, h: video.videoHeight });
+                }}
+                onLoadedData={handleVideoLoaded}
+                style={{ visibility: 'hidden' }}
             >
               <source src={media_url} type="video/mp4" />
               <source src={media_url} type="video/webm" />
@@ -695,6 +702,8 @@ export const PostContent: React.FC<PostContentProps> = ({
                 const video = e.currentTarget;
                 setSingleMediaDims({ w: video.videoWidth, h: video.videoHeight });
               }}
+              onLoadedData={handleVideoLoaded}
+              style={{ maxHeight: '500px', aspectRatio: '4/5', visibility: 'hidden' }}
             >
               <source src={media_url} type="video/mp4" />
               <source src={media_url} type="video/webm" />
@@ -755,6 +764,21 @@ export const PostContent: React.FC<PostContentProps> = ({
       if (prev === null) return null;
       return (prev + 1) % imageUrls.length;
     });
+  };
+  
+  // Video load handler to ensure we reveal video only after frames are available
+  const handleVideoLoaded = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    try {
+      const v = e.currentTarget;
+      // Log for debugging
+      // eslint-disable-next-line no-console
+      console.debug('video loaded metadata', v.currentSrc, v.videoWidth, v.videoHeight);
+      // Ensure the element is visible (in case we hide until loaded)
+      v.style.visibility = 'visible';
+      v.style.background = 'none';
+    } catch (err) {
+      // ignore
+    }
   };
 
   const renderEventDetails = () => {

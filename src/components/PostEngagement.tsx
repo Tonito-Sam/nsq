@@ -136,8 +136,8 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
             <PostViewersModal open={viewersOpen} onOpenChange={setViewersOpen} postId={postId} />
           )}
         </div>
-        {/* Boost button for post owners */}
-        {isOwner && (
+        {/* Boost button (show when onBoost handler provided) */}
+        {onBoost && (
           <div className="ml-3">
             <Button
               variant="ghost"
