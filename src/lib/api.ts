@@ -10,7 +10,11 @@ export const API_BASE = (() => {
   // In development, do not use legacy VITE_API_URL so the Vite proxy handles /api
   if ((env?.MODE === 'development' || env?.VITE_DEV_SERVER === 'true')) return '';
   // In production, fall back to legacy VITE_API_URL if present
-  return legacyBase || '';
+  // If no env var is provided in production, default to the Render backend URL so
+  // the static site will call the correct backend until you set VITE_API_BASE_URL
+  // in your frontend deploy environment. Update this value if your backend URL changes.
+  const RENDER_BACKEND_FALLBACK = 'https://nsq-98et.onrender.com';
+  return legacyBase || RENDER_BACKEND_FALLBACK;
 })();
 
 export function apiUrl(path: string) {
