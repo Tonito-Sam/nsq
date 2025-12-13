@@ -1,6 +1,17 @@
 // Centralized API base helper — read from Vite env in production
-// Support either VITE_API_BASE_URL (preferred) or the older VITE_API_URL for compatibility
-export const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || (import.meta as any).env?.VITE_API_URL || '';
+// Support VITE_API_BASE_URL (preferred). In development, prefer relative paths so Vite's dev
+// server proxy ("/api" -> backend) continues to work even if an older VITE_API_URL exists
+const env = (import.meta as any).env || {};
+const explicitBase = env?.VITE_API_BASE_URL;
+const legacyBase = env?.VITE_API_URL;
+export const API_BASE = (() => {
+  // If an explicit new base is provided, use it always
+  if (explicitBase) return explicitBase;
+  // In development, do not use legacy VITE_API_URL so the Vite proxy handles /api
+  if ((env?.MODE === 'development' || env?.VITE_DEV_SERVER === 'true')) return '';
+  // In production, fall back to legacy VITE_API_URL if present
+  return legacyBase || '';
+})();
 
 export function apiUrl(path: string) {
   if (!path) return API_BASE || '';
