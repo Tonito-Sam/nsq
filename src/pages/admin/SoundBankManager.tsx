@@ -130,7 +130,7 @@ const SoundBankManager: React.FC = () => {
       const syncSecret = (import.meta.env as any)?.VITE_SYNC_SECRET || '';
       // Prefer an explicit API URL from env (useful in dev where frontend and backend use different ports)
   const apiBase = (import.meta.env as any)?.VITE_API_URL || '';
-  const defaultPort = (import.meta.env as any)?.VITE_BACKEND_PORT || 5000;
+  const defaultPort = (import.meta.env as any)?.VITE_BACKEND_PORT || 3001;
   // If running on localhost, prefer http to avoid https://localhost:PORT issues
   const isLocal = ['localhost', '127.0.0.1'].includes(window.location.hostname);
   const proto = isLocal ? 'http:' : window.location.protocol;

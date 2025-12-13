@@ -31,7 +31,7 @@ export default defineConfig(({ mode }) => ({
       },
       // Proxy remove.bg backend proxy to local backend so client can call /api/removebg
       '/api/removebg': {
-        target: 'http://localhost:5000',
+        target: 'http://localhost:3001',
         changeOrigin: true,
         secure: false,
       },
