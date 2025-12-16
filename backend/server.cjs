@@ -162,6 +162,15 @@ try {
   console.warn('⚠️ users route not available:', e?.message || e);
 }
 
+// Shows and episodes (studio_episodes + studio_shows)
+try {
+  const shows = require('./routes/shows');
+  app.use('/api/shows', shows);
+  console.log('✅ Mounted /api/shows');
+} catch (e) {
+  console.warn('⚠️ shows route not available:', e?.message || e);
+}
+
 // Payments (dev-safe webhooks for Flutterwave / Paystack)
 try {
   const payments = require('./routes/payments');
