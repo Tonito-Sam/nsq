@@ -93,7 +93,8 @@ router.get('/past/all', async (req, res) => {
     let showsMap = {};
     if (showIds.length > 0) {
       const ids = showIds.map(id => encodeURIComponent(id)).join(',');
-      const showsUrl = `${SUPABASE_URL}/rest/v1/studio_shows?id=in.(${ids})&select=id,title,thumbnail_url`;
+      // Include video_url so we can fall back to the show's video when episode has none
+      const showsUrl = `${SUPABASE_URL}/rest/v1/studio_shows?id=in.(${ids})&select=id,title,thumbnail_url,video_url,category`;
       const sresp = await fetchFn(showsUrl, {
         method: 'GET',
         headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` }
@@ -115,7 +116,8 @@ router.get('/past/all', async (req, res) => {
       description: ep.description || null,
       duration: ep.duration || null,
       thumbnail_url: ep.thumbnail_url || ep.cover || null,
-      video_url: ep.video_url || ep.source_url || null,
+      // Prefer episode.video_url, then episode.source_url, then fall back to the show's video_url
+      video_url: ep.video_url || ep.source_url || showsMap[ep.show_id]?.video_url || null,
       views: ep.views || 0,
       scheduled_time: ep.scheduled_time || null,
       air_time: ep.air_time || null,
@@ -174,7 +176,8 @@ router.get('/:showId/episodes', async (req, res) => {
 
     // Also fetch show metadata for this show id
     let showMeta = null;
-    const showUrl = `${SUPABASE_URL}/rest/v1/studio_shows?id=eq.${encodeURIComponent(showId)}&select=id,title,thumbnail_url,category`;
+    // Include video_url in show metadata so episodes can inherit it when needed
+    const showUrl = `${SUPABASE_URL}/rest/v1/studio_shows?id=eq.${encodeURIComponent(showId)}&select=id,title,thumbnail_url,category,video_url`;
     const sresp = await fetchFn(showUrl, { method: 'GET', headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` } });
     if (sresp.ok) {
       const stext = await sresp.text();
@@ -191,7 +194,8 @@ router.get('/:showId/episodes', async (req, res) => {
       description: ep.description || null,
       duration: ep.duration || null,
       thumbnail_url: ep.thumbnail_url || ep.cover || null,
-      video_url: ep.video_url || ep.source_url || null,
+      // Use episode video_url first, then source_url, then show's video_url
+      video_url: ep.video_url || ep.source_url || showMeta?.video_url || null,
       views: ep.views || 0,
       scheduled_time: ep.scheduled_time || null,
       air_time: ep.air_time || null,
