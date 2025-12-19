@@ -217,3 +217,104 @@ router.get('/:showId/episodes', async (req, res) => {
 });
 
 module.exports = router;
+
+// Server-side episode management endpoints
+// POST /api/shows/episodes  -> create episode
+router.post('/episodes', async (req, res) => {
+  try {
+    const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/,'');
+    if (!SERVICE_ROLE) return res.status(500).json({ error: 'missing SUPABASE_SERVICE_ROLE_KEY on server' });
+    if (!SUPABASE_URL) return res.status(500).json({ error: 'missing SUPABASE_URL on server' });
+
+    const body = req.body || {};
+    // Basic validation
+    if (!body.title || String(body.title).trim() === '') return res.status(400).json({ error: 'title is required' });
+    if (!body.show_id) return res.status(400).json({ error: 'show_id is required' });
+    if (body.scheduled_time && isNaN(new Date(body.scheduled_time).getTime())) return res.status(400).json({ error: 'scheduled_time is invalid' });
+
+    // Sanitize input: only allow known episode columns to avoid Supabase schema errors
+    const allowed = ['title','description','video_url','thumbnail_url','duration','scheduled_time','end_time','is_active','show_id','tags','category','recurring','is_live'];
+    const insertObj = {};
+    allowed.forEach(k => { if (body[k] !== undefined) insertObj[k] = body[k]; });
+    insertObj.created_at = new Date().toISOString();
+    insertObj.updated_at = new Date().toISOString();
+
+    const url = `${SUPABASE_URL}/rest/v1/studio_episodes`;
+    const resp = await fetchFn(url, {
+      method: 'POST',
+      headers: {
+        apikey: SERVICE_ROLE,
+        Authorization: `Bearer ${SERVICE_ROLE}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(insertObj),
+    });
+    const text = await resp.text();
+    if (!resp.ok) return res.status(502).json({ error: 'supabase insert failed', status: resp.status, body: text });
+    const created = JSON.parse(text || '[]');
+    return res.json({ created });
+  } catch (err) {
+    console.error('create episode error', err);
+    return res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// PUT /api/shows/episodes/:id -> update episode
+router.put('/episodes/:id', async (req, res) => {
+  try {
+    const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/,'');
+    if (!SERVICE_ROLE) return res.status(500).json({ error: 'missing SUPABASE_SERVICE_ROLE_KEY on server' });
+    if (!SUPABASE_URL) return res.status(500).json({ error: 'missing SUPABASE_URL on server' });
+
+    const id = req.params.id;
+    const body = req.body || {};
+    if (body.scheduled_time && isNaN(new Date(body.scheduled_time).getTime())) return res.status(400).json({ error: 'scheduled_time is invalid' });
+      // Sanitize update payload similarly to POST
+      const allowed = ['title','description','video_url','thumbnail_url','duration','scheduled_time','end_time','is_active','show_id','tags','category','recurring','is_live'];
+      const patchObj = {};
+      allowed.forEach(k => { if (body[k] !== undefined) patchObj[k] = body[k]; });
+      patchObj.updated_at = new Date().toISOString();
+
+      const url = `${SUPABASE_URL}/rest/v1/studio_episodes?id=eq.${encodeURIComponent(id)}`;
+      const resp = await fetchFn(url, {
+        method: 'PATCH',
+        headers: {
+          apikey: SERVICE_ROLE,
+          Authorization: `Bearer ${SERVICE_ROLE}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(patchObj),
+      });
+    const text = await resp.text();
+    if (!resp.ok) return res.status(502).json({ error: 'supabase update failed', status: resp.status, body: text });
+    return res.json({ updated: JSON.parse(text || '[]') });
+  } catch (err) {
+    console.error('update episode error', err);
+    return res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// DELETE /api/shows/episodes/:id -> delete episode
+router.delete('/episodes/:id', async (req, res) => {
+  try {
+    const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/,'');
+    if (!SERVICE_ROLE) return res.status(500).json({ error: 'missing SUPABASE_SERVICE_ROLE_KEY on server' });
+    if (!SUPABASE_URL) return res.status(500).json({ error: 'missing SUPABASE_URL on server' });
+
+    const id = req.params.id;
+    const url = `${SUPABASE_URL}/rest/v1/studio_episodes?id=eq.${encodeURIComponent(id)}`;
+    const resp = await fetchFn(url, {
+      method: 'DELETE',
+      headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` }
+    });
+    const text = await resp.text();
+    if (!resp.ok) return res.status(502).json({ error: 'supabase delete failed', status: resp.status, body: text });
+    return res.json({ deleted: true });
+  } catch (err) {
+    console.error('delete episode error', err);
+    return res.status(500).json({ error: err?.message || String(err) });
+  }
+});
