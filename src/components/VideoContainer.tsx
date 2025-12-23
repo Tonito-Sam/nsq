@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { X } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { X, Play, Pause, Clock, Eye, Volume2, VolumeX, Heart, MessageCircle, Users, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Play, Pause, Clock, Eye, Volume2, VolumeX, Heart, MessageCircle, Users } from 'lucide-react';
 import { useShowContext } from '@/contexts/ShowContext';
 import { useViewTracking } from '@/hooks/useViewTracking';
 import { useLiveChatMessages } from '@/hooks/useLiveChatMessages';
+import VODLibrary, { VODEpisode } from '@/components/VODLibrary';
+import apiUrl from '@/lib/api';
 
 interface StudioShow {
   id: string;
@@ -30,6 +32,15 @@ interface VideoContainerProps {
   onCurrentShowChange?: (index: number) => void;
 }
 
+interface MediaItem {
+  id: string;
+  type: 'show' | 'episode';
+  title?: string;
+  video_url?: string | null;
+  thumbnail_url?: string | null;
+  duration?: number;
+  raw?: any;
+}
 declare global {
   interface Window {
     YT: any;
@@ -52,7 +63,34 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const [ytReady, setYtReady] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [showOverlay, setShowOverlay] = useState(true);
+  const [catchUpOpen, setCatchUpOpen] = useState(false);
+  const [portalMounted, setPortalMounted] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  // Playback queue for current show: includes the show main media and its episodes
+  const [episodesForCurrentShow, setEpisodesForCurrentShow] = useState<VODEpisode[]>([]);
+  const [mediaQueue, setMediaQueue] = useState<MediaItem[]>([]);
+  const [queueIndex, setQueueIndex] = useState<number>(0);
+  const [currentMedia, setCurrentMedia] = useState<MediaItem | null>(null);
+  // NEW STATES FOR MODAL PLAYER
+  const [playingEpisode, setPlayingEpisode] = useState<VODEpisode | null>(null);
+  const [modalPlayerPlaying, setModalPlayerPlaying] = useState(false);
+  const [modalPlayerMuted, setModalPlayerMuted] = useState(true);
+  const [modalPlayerProgress, setModalPlayerProgress] = useState(0);
+  const [modalPlayerDuration, setModalPlayerDuration] = useState(0);
+  const [modalAwaitingUserPlay, setModalAwaitingUserPlay] = useState(false);
+  const [modalPlayerError, setModalPlayerError] = useState<string | null>(null);
+  const [isMobile, setIsMobile] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
+  const computeItemsPerView = () => {
+    if (typeof window === 'undefined') return 2;
+    const w = window.innerWidth;
+    if (w < 360) return 1;
+    if (w >= 360 && w < 768) return 2; // phones
+    if (w >= 768 && w < 1024) return 3; // tablets
+    return 4; // desktop-ish (fallback)
+  };
+  const [mobileItemsPerView, setMobileItemsPerView] = useState<number>(computeItemsPerView());
+  
   // keep a ref for the latest time to avoid stale closures when seeking on remount
   const videoCurrentTimeRef = useRef<number>(0);
   const youtubeTimePollRef = useRef<number | null>(null);
@@ -63,8 +101,194 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const youtubePlayerRef = useRef<any>(null);
   const vimeoRef = useRef<HTMLIFrameElement>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
+  // NEW REFS FOR MODAL PLAYER
+  const modalVideoRef = useRef<HTMLVideoElement>(null);
+  const modalYoutubePlayerRef = useRef<any>(null);
+  const modalPlayerContainerRef = useRef<HTMLDivElement>(null);
+  const mobileListRef = useRef<HTMLDivElement>(null);
 
-  // Enhanced fullscreen handling with seamless video continuation
+  // Mobile VOD state
+  const [vodEpisodes, setVodEpisodes] = useState<VODEpisode[]>([]);
+  const [currentScrollIndex, setCurrentScrollIndex] = useState(0);
+  const [isLoadingVOD, setIsLoadingVOD] = useState(false);
+
+  // Mobile catch-up grid renderer and data loader
+  const renderMobileCatchUpGrid = () => {
+    if (!isMobile) return null;
+    const itemsPerView = mobileItemsPerView; // responsive items per view
+    const horizontalPadding = 48; // account for modal padding
+    const cardWidth = Math.min((window.innerWidth - horizontalPadding) / itemsPerView, 420);
+
+    // Group episodes by show id to avoid title mismatches. Initialize keys
+    // from the parent `shows` prop so empty shows are included.
+    const grouped: Record<string, VODEpisode[]> = {};
+    if (Array.isArray(shows) && shows.length) {
+      shows.forEach(s => { if (s && s.id) grouped[s.id] = []; });
+    }
+
+    vodEpisodes.forEach(ep => {
+      const sid = (ep.show_id as any) || ep.show_title || 'other';
+      if (!grouped[sid]) grouped[sid] = [];
+      grouped[sid].push(ep);
+    });
+
+    const groups = Object.entries(grouped).sort((a, b) => {
+      // Attempt to sort by show title if available via shows prop
+      const aTitle = (Array.isArray(shows) && shows.find(s => s.id === a[0])?.title) || (a[1][0]?.show_title) || a[0];
+      const bTitle = (Array.isArray(shows) && shows.find(s => s.id === b[0])?.title) || (b[1][0]?.show_title) || b[0];
+      return String(aTitle).localeCompare(String(bTitle));
+    });
+
+    return (
+      <div className="mb-8 space-y-6">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xl font-semibold text-white">Past Shows</h3>
+          <div className="flex items-center space-x-2 text-sm text-gray-400">
+            <span>Swipe horizontally within each show</span>
+            <ChevronRight size={16} />
+          </div>
+        </div>
+
+        {isLoadingVOD ? (
+          <div className="flex items-center justify-center w-full py-8">
+            <div className="text-gray-400">Loading...</div>
+          </div>
+        ) : (
+          groups.map(([showId, eps]) => {
+            const displayName = (Array.isArray(shows) && shows.find(s => s.id === showId)?.title) || (eps[0]?.show_title) || (showId === 'other' ? 'Other' : String(showId));
+            return (
+              <div key={showId} className="">
+                <div className="flex items-center justify-between mb-2 px-2">
+                  <h4 className="text-lg font-semibold text-white">{displayName}</h4>
+                  <span className="text-sm text-gray-400">{eps.length} episode{eps.length !== 1 ? 's' : ''}</span>
+                </div>
+
+                <div className="flex overflow-x-auto pb-4 -mx-4 px-4 mobile-snap-scroll scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch', scrollSnapType: 'x mandatory' }}>
+                  {eps.map((episode) => (
+                    <div
+                      key={episode.id}
+                      className="flex-shrink-0 mr-4 rounded-xl overflow-hidden bg-gray-800 border border-gray-700 transition-transform duration-200 hover:scale-[1.02] active:scale-[0.98] mobile-snap-item"
+                      style={{ width: cardWidth, scrollSnapAlign: 'start', maxWidth: 'calc(100vw - 3rem)' }}
+                      onClick={() => playEpisode(episode)}
+                    >
+                      <div className="relative aspect-video">
+                        <img src={episode.thumbnail_url || episode.show_thumbnail || '/placeholder.svg'} alt={episode.title} className="w-full h-full object-cover" loading="lazy" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+                        <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">{episode.duration ? formatDuration(episode.duration) : 'N/A'}</div>
+                        <div className="absolute top-2 left-2">
+                          <Badge className="bg-purple-600 text-white text-xs">{displayName}</Badge>
+                        </div>
+                      </div>
+                      <div className="p-3">
+                        <h4 className="text-sm font-semibold text-white mb-1 line-clamp-1">{episode.title}</h4>
+                        {episode.description && <p className="text-xs text-gray-300 line-clamp-2 mb-2">{episode.description}</p>}
+                        <div className="flex items-center justify-between text-xs text-gray-400">
+                          <span>{new Date(episode.created_at).toLocaleDateString()}</span>
+                          <button className="flex items-center space-x-1 text-purple-400 hover:text-purple-300">
+                            <Play size={12} />
+                            <span>Play</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    );
+  };
+
+  // Fetch mobile VOD episodes when modal opens or on mount
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+
+    const load = async () => {
+      try {
+        setIsLoadingVOD(true);
+        const url = apiUrl('/api/shows/past/all?page=1&limit=24');
+        try { console.debug('Mobile VOD fetch url:', { url }); } catch {}
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) {
+          const txt = await res.text().catch(() => null);
+          console.warn('Mobile VOD fetch failed', res.status, txt, 'url=', url);
+          return;
+        }
+
+        let data: any = null;
+        try {
+          data = await res.json();
+        } catch (err) {
+          const txt = await res.text().catch(() => null);
+          console.warn('Mobile VOD fetch returned non-JSON response', txt, 'url=', url);
+          return;
+        }
+
+        if (!mounted) return;
+        setVodEpisodes(data.episodes || []);
+      } catch (err) {
+        console.warn('Failed to load mobile VOD list', err);
+      } finally {
+        if (mounted) setIsLoadingVOD(false);
+      }
+    };
+
+    if (isMobile && catchUpOpen) load();
+
+    return () => { mounted = false; controller.abort(); };
+  }, [isMobile, catchUpOpen]);
+
+  // Track horizontal scroll index for indicators
+  useEffect(() => {
+    const el = mobileListRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const scrollLeft = el.scrollLeft || 0;
+      const gap = 16; // matches card margin-right used in render
+      const childWidth = el.firstElementChild ? (el.firstElementChild as HTMLElement).getBoundingClientRect().width + gap : window.innerWidth / 2;
+      const itemsPerView = mobileItemsPerView;
+      const pageIndex = Math.round(scrollLeft / (childWidth * itemsPerView));
+      const pages = Math.max(1, Math.ceil((vodEpisodes.length || 1) / itemsPerView));
+      setCurrentScrollIndex(Math.min(Math.max(0, pageIndex), pages - 1));
+    };
+    el.addEventListener('scroll', onScroll, { passive: true } as any);
+    return () => el.removeEventListener('scroll', onScroll as any);
+  }, [vodEpisodes.length, mobileItemsPerView]);
+
+  // Manage body scroll and portal mount/animation for Catch Up modal
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+      setMobileItemsPerView(computeItemsPerView());
+    };
+    // keep `isMobile` and itemsPerView in sync when the viewport changes
+    window.addEventListener('resize', handleResize);
+
+    if (catchUpOpen) {
+      setPortalMounted(true);
+      // small delay to trigger CSS transition after mount
+      setTimeout(() => setModalVisible(true), 20);
+      document.body.style.overflow = 'hidden';
+    } else {
+      // start closing animation if open
+      setModalVisible(false);
+      setTimeout(() => setPortalMounted(false), 220);
+      document.body.style.overflow = 'auto';
+      // Reset modal player when closing
+      setPlayingEpisode(null);
+    }
+
+    return () => {
+      document.body.style.overflow = 'auto';
+      setPortalMounted(false);
+      setModalVisible(false);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [catchUpOpen]);
+
   useEffect(() => {
     const handleOrientationChange = () => {
       const isMobile = window.innerWidth < 768;
@@ -266,6 +490,59 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
+  // Try common fallback fields for media URL if `video_url` is missing
+  const resolveMediaUrl = (ep: VODEpisode) => {
+    const candidates = [
+      ep.video_url,
+      // common alt fields
+      (ep as any).source_url,
+      (ep as any).source,
+      (ep as any).file_url,
+      (ep as any).media_url,
+      (ep as any).url,
+    ];
+
+    for (const c of candidates) {
+      if (!c) continue;
+      if (typeof c === 'string' && c.trim().length > 0) {
+        try { console.debug('resolveMediaUrl: found direct candidate', { episodeId: ep.id, candidate: c }); } catch {}
+        return c.trim();
+      }
+    }
+
+    // Fallback: accept multiple possible show id keys and also nested show object
+    try {
+      const possibleShowIdKeys = ['show_id', 'showId', 'studio_show_id', 'studioShowId', 'show'];
+      let sid: any = null;
+      for (const k of possibleShowIdKeys) {
+        if ((ep as any)[k]) {
+          sid = (ep as any)[k];
+          break;
+        }
+      }
+
+      // If `show` is an object, try its video_url directly
+      if (sid && typeof sid === 'object' && sid.video_url) {
+        try { console.debug('resolveMediaUrl: using nested show.video_url', { episodeId: ep.id, video_url: sid.video_url }); } catch {}
+        return sid.video_url;
+      }
+
+      // Normalize id when `show` may be an object or id string
+      const showIdVal = sid && typeof sid === 'string' ? sid : ((ep as any).show_id || (ep as any).showId || (ep as any).studio_show_id || (ep as any).studioShowId || null);
+      if (showIdVal && Array.isArray(shows)) {
+        const parent = (shows as StudioShow[]).find(s => s.id === showIdVal || String(s.id) === String(showIdVal));
+        if (parent && parent.video_url && typeof parent.video_url === 'string' && parent.video_url.trim().length > 0) {
+          try { console.debug('resolveMediaUrl: falling back to parent show.video_url', { episodeId: ep.id, parentId: parent.id, video_url: parent.video_url }); } catch {}
+          return parent.video_url.trim();
+        }
+      }
+    } catch (err) {
+      try { console.warn('resolveMediaUrl: error during parent lookup', err); } catch {}
+    }
+
+    return null;
+  };
+
   const getTimeStatus = (show: StudioShow) => {
     if (show.is_live) return { text: 'LIVE', className: 'bg-red-500 text-white' };
     
@@ -318,6 +595,83 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     }
   }, [currentShow, viewCount, setCurrentShow, setViewerCount, setLikeCount]);
 
+  // When currentShow changes, fetch its episodes and build the playback queue
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+
+    const loadEpisodes = async () => {
+      setEpisodesForCurrentShow([]);
+      setMediaQueue([]);
+      setQueueIndex(0);
+      setCurrentMedia(null);
+
+      if (!currentShow) return;
+
+      try {
+        // try preferred API route
+        const url = apiUrl(`/api/shows/${currentShow.id}/episodes?limit=200`);
+        const res = await fetch(url, { signal: controller.signal });
+        let data: any = null;
+        if (res.ok) {
+          try { data = await res.json(); } catch (err) { data = null; }
+        }
+
+        // Expect backend to return { episodes: [...] }. As a safe fallback accept a raw array.
+        if (!data) {
+          const url2 = apiUrl(`/api/studio_episodes?show_id=${currentShow.id}&limit=200`);
+          const res2 = await fetch(url2, { signal: controller.signal });
+          if (res2.ok) {
+            try { data = await res2.json(); } catch (err) { data = null; }
+          }
+        }
+
+        const epsRaw = (data && Array.isArray(data.episodes)) ? data.episodes : (Array.isArray(data) ? data : []);
+        const eps: VODEpisode[] = epsRaw.map((e: any) => ({ ...e } as VODEpisode));
+        if (!mounted) return;
+        setEpisodesForCurrentShow(eps);
+
+        // build queue: include show main media first (if present), then episodes
+        const queue: MediaItem[] = [];
+        if (currentShow.video_url) {
+          queue.push({ id: `show-${currentShow.id}`, type: 'show', title: currentShow.title, video_url: currentShow.video_url || null, thumbnail_url: currentShow.thumbnail_url || null, duration: currentShow.duration, raw: currentShow });
+        }
+
+        // sort episodes by episode_number if available
+        const sortedEps = eps.slice().sort((a: any, b: any) => {
+          const na = Number(a.episode_number ?? a.episodeNumber ?? 0) || 0;
+          const nb = Number(b.episode_number ?? b.episodeNumber ?? 0) || 0;
+          return na - nb;
+        });
+
+        for (const ep of sortedEps) {
+          const resolved = resolveMediaUrl(ep) || (ep.video_url || null);
+          queue.push({ id: `ep-${ep.id}`, type: 'episode', title: ep.title, video_url: resolved, thumbnail_url: ep.thumbnail_url || ep.show_thumbnail || null, duration: ep.duration, raw: ep });
+        }
+
+        setMediaQueue(queue);
+        setQueueIndex(0);
+        setCurrentMedia(queue[0] || null);
+      } catch (err) {
+        console.warn('Failed to load episodes for show', currentShow?.id, err);
+      }
+    };
+
+    loadEpisodes();
+
+    return () => { mounted = false; controller.abort(); };
+  }, [currentShow]);
+
+  // Keep currentMedia in sync with queueIndex/mediaQueue
+  useEffect(() => {
+    if (!mediaQueue || mediaQueue.length === 0) {
+      setCurrentMedia(null);
+      return;
+    }
+    const idx = Math.min(Math.max(0, queueIndex), mediaQueue.length - 1);
+    setCurrentMedia(mediaQueue[idx] || null);
+  }, [mediaQueue, queueIndex]);
+
   useEffect(() => {
     if (window.YT && window.YT.Player) {
       setYtReady(true);
@@ -344,10 +698,46 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     if (typeof onCurrentShowChange === 'function') onCurrentShowChange(nextIndex);
   };
 
-  useEffect(() => {
-    if (!currentShow || !ytReady || !isYouTubeUrl(currentShow.video_url || '')) return;
+  const advanceQueueOrNextShow = () => {
+    // If there is a queue for this show, advance within it.
+    // If the show's scheduled `end_time` hasn't passed, loop within the queue.
+    try {
+      const now = Date.now();
+      const endTime = currentShow && currentShow.end_time ? new Date(currentShow.end_time).getTime() : null;
 
-    const videoId = extractYouTubeID(currentShow.video_url || '');
+      if (mediaQueue && mediaQueue.length > 0) {
+        // If we're not at the last item, just advance
+        if (queueIndex < mediaQueue.length - 1) {
+          const next = queueIndex + 1;
+          setQueueIndex(next);
+          setCurrentMedia(mediaQueue[next] || null);
+          return;
+        }
+
+        // At last item of this show's queue. If end_time is in the future, loop back to start.
+        if (endTime && now <= endTime) {
+          setQueueIndex(0);
+          setCurrentMedia(mediaQueue[0] || null);
+          return;
+        }
+
+        // If no end_time or it's passed, move to next show
+        moveToNextShow();
+        return;
+      }
+
+      // No media in queue -> advance to next show
+      moveToNextShow();
+    } catch (err) {
+      console.warn('advanceQueueOrNextShow error', err);
+      moveToNextShow();
+    }
+  };
+
+  useEffect(() => {
+    if (!currentMedia || !ytReady || !isYouTubeUrl(currentMedia.video_url || '')) return;
+
+    const videoId = extractYouTubeID(currentMedia.video_url || '');
     if (!videoId) return;
 
     if (youtubePlayerRef.current) {
@@ -359,7 +749,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       youtubePlayerRef.current = null;
     }
 
-    const playerId = `youtube-player-${currentShow.id}`;
+    const playerId = `youtube-player-${currentMedia.id}`;
     const playerElement = document.getElementById(playerId);
     
     if (playerElement) {
@@ -413,8 +803,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             }
 
             if (event.data === 0) {
-              console.log('Video ended, moving to next show');
-              moveToNextShow();
+              console.log('YouTube media ended, advancing queue');
+              advanceQueueOrNextShow();
             }
           },
           onReady: (event: any) => {
@@ -468,7 +858,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         youtubeTimePollRef.current = null;
       }
     };
-  }, [currentShow, ytReady, muted]);
+  }, [currentMedia, ytReady, muted]);
 
   // When the currentShow changes, try to load any persisted time for native videos as well
   useEffect(() => {
@@ -496,9 +886,9 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   }, [currentShow]);
 
   const handleVideoEnded = () => {
-    console.log('Regular video ended, moving to next show');
+    console.log('Regular video ended, advancing media queue or moving to next show');
     setIsVideoPlaying(false);
-    moveToNextShow();
+    advanceQueueOrNextShow();
   };
 
   const handleVideoPlay = () => {
@@ -696,8 +1086,263 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     }
   }, [currentShowIndex, sortedShows.length]);
 
+  // MODAL PLAYER FUNCTIONS
+  const playEpisode = useCallback((episode: VODEpisode) => {
+    console.log('playEpisode selected:', episode.id, episode.title, 'video_url=', episode.video_url);
+    setModalPlayerError(null);
+    // Resolve a usable media URL (fallbacks) and attach it to the episode we store
+    const resolved = resolveMediaUrl(episode);
+    try { console.debug('Resolved episode media URL:', { episodeId: episode.id, resolved }); } catch {}
+    if (!resolved) {
+      console.warn('No media URL available for episode', episode.id, episode);
+      setPlayingEpisode({ ...episode, video_url: '' });
+      setCatchUpOpen(true);
+      setModalPlayerError('No media URL found for this episode.');
+      return;
+    }
+
+    const epWithUrl = { ...episode, video_url: resolved } as VODEpisode;
+    // Ensure modal is open so DOM nodes mount
+    setCatchUpOpen(true);
+
+    setPlayingEpisode(epWithUrl);
+    setModalPlayerPlaying(false);
+    setModalPlayerProgress(0);
+
+    // Force-muted autoplay to comply with browser policies
+    const shouldMute = true;
+    setModalPlayerMuted(shouldMute);
+
+    // Initialize YouTube player for modal with retries until DOM + YT API are ready
+    const initModalYouTube = (videoId: string) => {
+      let attempts = 0;
+      const maxAttempts = 20;
+
+      const tryCreate = () => {
+        attempts += 1;
+        const el = document.getElementById('modal-youtube-player');
+        if (!el || !(window as any).YT || !(window as any).YT.Player) {
+          if (attempts < maxAttempts) {
+            setTimeout(tryCreate, 250);
+          } else {
+            console.warn('YT player element or API never became available for modal');
+          }
+          return;
+        }
+
+        if (modalYoutubePlayerRef.current) {
+          try { modalYoutubePlayerRef.current.destroy(); } catch (err) { /* ignore */ }
+          modalYoutubePlayerRef.current = null;
+        }
+
+        try {
+          modalYoutubePlayerRef.current = new window.YT.Player('modal-youtube-player', {
+            videoId,
+            playerVars: {
+              autoplay: 1,
+              mute: shouldMute ? 1 : 0,
+              controls: 1,
+              rel: 0,
+              modestbranding: 1,
+              playsinline: 1,
+            },
+            events: {
+              onStateChange: (event: any) => {
+                setModalPlayerPlaying(event.data === 1);
+                if (event.data === 0) setModalPlayerPlaying(false);
+              },
+              onReady: (event: any) => {
+                try { event.target.mute(); } catch (err) { /* ignore */ }
+                try { setModalPlayerDuration(event.target.getDuration()); } catch (err) { /* ignore */ }
+                try { event.target.playVideo(); } catch (err) { /* ignore */ }
+                setModalPlayerPlaying(true);
+
+                const poll = () => {
+                  if (modalYoutubePlayerRef.current) {
+                    try {
+                      const t = modalYoutubePlayerRef.current.getCurrentTime();
+                      if (typeof t === 'number') setModalPlayerProgress(t);
+                    } catch (err) { /* ignore */ }
+                    setTimeout(poll, 500);
+                  }
+                };
+                poll();
+              }
+            }
+          });
+        } catch (err) {
+          console.warn('Failed to create modal YouTube player', err);
+        }
+      };
+
+      tryCreate();
+    };
+
+    const isYouTube = epWithUrl.video_url && isYouTubeUrl(epWithUrl.video_url);
+    const isVimeo = epWithUrl.video_url && isVimeoUrl(epWithUrl.video_url);
+
+    // For mobile behave like desktop: attempt muted autoplay/init when possible.
+    // If autoplay is blocked or the DOM node isn't yet mounted, fall back to
+    // showing the user-play overlay (`modalAwaitingUserPlay`) so the user can
+    // explicitly start playback.
+
+    if (epWithUrl.video_url && isYouTubeUrl(epWithUrl.video_url)) {
+      const videoId = extractYouTubeID(epWithUrl.video_url);
+      if (videoId) initModalYouTube(videoId);
+    } else if (epWithUrl.video_url && isVimeoUrl(epWithUrl.video_url)) {
+      // vimeo iframe includes autoplay params in renderModalPlayer
+    } else if (epWithUrl.video_url) {
+      // Native video: try to set src and start playback (muted) immediately.
+      // If the modal video element isn't mounted yet, retry until it becomes available
+      // and then attempt playback. If play is blocked, show the user-play overlay.
+      const trySetAndPlay = () => {
+        try {
+          if (!modalVideoRef.current) throw new Error('modal video element not mounted');
+
+          modalVideoRef.current.pause();
+          modalVideoRef.current.src = epWithUrl.video_url || '';
+          modalVideoRef.current.load();
+          console.log('Modal native video src set to', epWithUrl.video_url);
+          modalVideoRef.current.muted = shouldMute;
+          const p = modalVideoRef.current.play();
+          if (p && typeof (p as any).then === 'function') {
+            (p as any).then(() => {
+              setModalPlayerPlaying(true);
+              setModalAwaitingUserPlay(false);
+            }).catch((err: any) => {
+              console.warn('Modal native video play rejected:', err);
+              setModalPlayerError('Playback was blocked by the browser or the media failed to start.');
+              setModalPlayerPlaying(false);
+              setModalAwaitingUserPlay(true);
+            });
+          } else {
+            setModalPlayerPlaying(!modalVideoRef.current.paused);
+            setModalAwaitingUserPlay(false);
+          }
+        } catch (err) {
+          // Retry until element mounts, but don't loop forever
+          console.warn('Mobile modal: retrying set/play, reason:', err);
+          setTimeout(() => {
+            // If still no element after a short while, show user-play overlay
+            if (!modalVideoRef.current) {
+              setModalAwaitingUserPlay(true);
+            } else {
+              trySetAndPlay();
+            }
+          }, 200);
+        }
+      };
+
+      trySetAndPlay();
+    }
+  }, [modalPlayerMuted, modalPlayerPlaying]);
+
+  // When a native modal video is selected, attempt to autoplay it once the DOM node is mounted
+  useEffect(() => {
+    if (!playingEpisode) return;
+
+    const isYouTube = playingEpisode.video_url && isYouTubeUrl(playingEpisode.video_url);
+    const isVimeo = playingEpisode.video_url && isVimeoUrl(playingEpisode.video_url);
+
+    if (!isYouTube && modalVideoRef.current) {
+      try {
+        modalVideoRef.current.muted = modalPlayerMuted;
+        const p = modalVideoRef.current.play();
+        if (p && typeof (p as any).then === 'function') {
+          (p as any).then(() => setModalPlayerPlaying(true)).catch(() => setModalPlayerPlaying(false));
+        } else {
+          setModalPlayerPlaying(!modalVideoRef.current.paused);
+        }
+      } catch (err) {
+        console.warn('Failed to autoplay modal native video', err);
+      }
+    }
+  }, [playingEpisode, modalPlayerMuted]);
+
+  // Ensure native modal video `src` is set when modal mounts on mobile (deferred until DOM available)
+  useEffect(() => {
+    if (!playingEpisode) return;
+    if (!isMobile) return;
+    const isYouTube = playingEpisode.video_url && isYouTubeUrl(playingEpisode.video_url);
+
+    if (isYouTube) return; // YouTube handled separately
+
+    let mounted = true;
+    const trySet = () => {
+      if (!mounted) return;
+      if (modalVideoRef.current) {
+        try {
+          if (modalVideoRef.current.src !== (playingEpisode.video_url || '')) {
+            modalVideoRef.current.src = playingEpisode.video_url || '';
+            modalVideoRef.current.load();
+            console.log('Mobile modal: set native video src to', playingEpisode.video_url);
+          }
+        } catch (err) {
+          console.warn('Mobile modal: failed to set video src', err);
+        }
+      } else {
+        // retry shortly until the element mounts (DOM may not be ready yet)
+        setTimeout(trySet, 200);
+      }
+    };
+
+    // Only set src if we're awaiting a user play (deferred flow)
+    if (modalAwaitingUserPlay) trySet();
+
+    return () => { mounted = false; };
+  }, [playingEpisode, isMobile, modalAwaitingUserPlay]);
+
+  const handleModalPlayerPlayPause = useCallback(() => {
+    if (modalYoutubePlayerRef.current) {
+      if (modalPlayerPlaying) {
+        modalYoutubePlayerRef.current.pauseVideo();
+      } else {
+        modalYoutubePlayerRef.current.playVideo();
+      }
+    } else if (modalVideoRef.current) {
+      if (modalVideoRef.current.paused) {
+        modalVideoRef.current.play();
+      } else {
+        modalVideoRef.current.pause();
+      }
+    }
+    setModalPlayerPlaying(!modalPlayerPlaying);
+  }, [modalPlayerPlaying]);
+
+  const handleModalPlayerMuteToggle = useCallback(() => {
+    const newMuted = !modalPlayerMuted;
+    setModalPlayerMuted(newMuted);
+    
+    if (modalYoutubePlayerRef.current) {
+      if (newMuted) {
+        modalYoutubePlayerRef.current.mute();
+      } else {
+        modalYoutubePlayerRef.current.unMute();
+      }
+    } else if (modalVideoRef.current) {
+      modalVideoRef.current.muted = newMuted;
+    }
+  }, [modalPlayerMuted]);
+
+  const handleModalPlayerProgress = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseFloat(e.target.value);
+    setModalPlayerProgress(value);
+    
+    if (modalYoutubePlayerRef.current) {
+      modalYoutubePlayerRef.current.seekTo(value, true);
+    } else if (modalVideoRef.current) {
+      modalVideoRef.current.currentTime = value;
+    }
+  }, []);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const renderVideoPlayer = (isFullscreenMode: boolean = false) => {
-    if (!currentShow?.video_url) {
+    if (!currentMedia || !currentMedia.video_url) {
       return (
         <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
           <Play className="h-16 w-16 text-gray-400" />
@@ -705,10 +1350,10 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       );
     }
 
-    if (isYouTubeUrl(currentShow.video_url)) {
+    if (isYouTubeUrl(currentMedia.video_url)) {
       return (
         <div
-          id={`youtube-player-${currentShow.id}`}
+          id={`youtube-player-${currentMedia.id}`}
           className="w-full h-full"
           style={{
             position: isFullscreenMode ? 'absolute' : 'relative',
@@ -721,13 +1366,13 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       );
     }
 
-    if (isVimeoUrl(currentShow.video_url)) {
+    if (isVimeoUrl(currentMedia.video_url)) {
       return (
         <iframe
           ref={vimeoRef}
           className="w-full h-full"
-          src={`https://player.vimeo.com/video/${extractVimeoID(currentShow.video_url)}?autoplay=1&muted=${muted ? 1 : 0}&controls=1&api=1&player_id=vimeoPlayer&playsinline=1`}
-          title={currentShow.title}
+          src={`https://player.vimeo.com/video/${extractVimeoID(currentMedia.video_url)}?autoplay=1&muted=${muted ? 1 : 0}&controls=1&api=1&player_id=vimeoPlayer&playsinline=1`}
+          title={currentMedia.title}
           allow="autoplay; fullscreen; picture-in-picture"
           allowFullScreen
           style={{
@@ -744,15 +1389,15 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     return (
       <div className="relative w-full h-full">
         <video
-          key={`${currentShow.id}-${isFullscreenMode ? 'fullscreen' : 'normal'}`}
+          key={`${currentMedia.id}-${isFullscreenMode ? 'fullscreen' : 'normal'}`}
           ref={videoRef}
           className="w-full h-full object-cover"
-          poster={currentShow.thumbnail_url || '/placeholder.svg'}
+          poster={currentMedia.thumbnail_url || '/placeholder.svg'}
           controls
           muted={muted}
           playsInline
           preload="metadata"
-          onEnded={handleVideoEnded}
+          onEnded={() => { setIsVideoPlaying(false); advanceQueueOrNextShow(); }}
           onPlay={handleVideoPlay}
           onPause={handleVideoPause}
           onTimeUpdate={handleVideoTimeUpdate}
@@ -777,11 +1422,11 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             'x-webkit-airplay': 'allow',
           })}
         >
-          <source src={currentShow.video_url} type="video/mp4" />
-          <source src={currentShow.video_url} type="video/webm" />
+          <source src={currentMedia.video_url || ''} type="video/mp4" />
+          <source src={currentMedia.video_url || ''} type="video/webm" />
           Your browser does not support the video tag.
         </video>
-        {!isYouTubeUrl(currentShow.video_url) && (
+        {!isYouTubeUrl(currentMedia.video_url) && (
           <button
             onClick={handleMuteToggle}
             className={`absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full transition-colors ${isFullscreenMode ? 'z-20' : 'z-10'}`}
@@ -789,6 +1434,195 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
           </button>
         )}
+      </div>
+    );
+  };
+
+  const renderModalPlayer = () => {
+    if (!playingEpisode) return null;
+
+    const isYouTube = playingEpisode.video_url && isYouTubeUrl(playingEpisode.video_url);
+    const isVimeo = playingEpisode.video_url && isVimeoUrl(playingEpisode.video_url);
+
+    return (
+      <div className="mb-8 rounded-xl overflow-hidden bg-gray-900 border border-gray-800">
+        <div className="relative aspect-video" ref={modalPlayerContainerRef}>
+          {isYouTube ? (
+            // On mobile we wait for an explicit user tap before creating the YouTube iframe/player
+            isMobile && modalAwaitingUserPlay ? (
+              <div className="w-full h-full flex items-center justify-center bg-black/60">
+                <button
+                  onClick={() => {
+                    setModalAwaitingUserPlay(false);
+                    const videoId = extractYouTubeID(playingEpisode.video_url || '');
+                    if (videoId) {
+                      // create player now that user gesture occurred
+                      try {
+                        if (modalYoutubePlayerRef.current) {
+                          try { modalYoutubePlayerRef.current.destroy(); } catch (e) {}
+                          modalYoutubePlayerRef.current = null;
+                        }
+                        modalYoutubePlayerRef.current = new window.YT.Player('modal-youtube-player', {
+                          videoId,
+                          playerVars: { autoplay: 1, mute: modalPlayerMuted ? 1 : 0, playsinline: 1 },
+                          events: {
+                            onReady: (ev: any) => { try { ev.target.playVideo(); } catch (e){}; setModalPlayerPlaying(true); },
+                            onStateChange: (ev: any) => setModalPlayerPlaying(ev.data === 1)
+                          }
+                        });
+                      } catch (err) {
+                        console.warn('YT init after user gesture failed', err);
+                      }
+                    }
+                  }}
+                  className="bg-white/10 hover:bg-white/20 text-white rounded-full p-6"
+                >
+                  <Play size={36} />
+                </button>
+              </div>
+            ) : (
+              <div id="modal-youtube-player" className="w-full h-full" />
+            )
+          ) : isVimeo ? (
+            <iframe
+              className="w-full h-full"
+              src={`https://player.vimeo.com/video/${extractVimeoID(playingEpisode.video_url!)}?autoplay=1&muted=${modalPlayerMuted ? 1 : 0}&controls=0`}
+              title={playingEpisode.title}
+              allow="autoplay; fullscreen"
+              allowFullScreen
+            />
+          ) : (
+            <video
+              ref={modalVideoRef}
+              className="w-full h-full"
+              src={playingEpisode.video_url}
+              poster={playingEpisode.thumbnail_url}
+              muted={modalPlayerMuted}
+              playsInline
+              onPlay={() => setModalPlayerPlaying(true)}
+              onPause={() => setModalPlayerPlaying(false)}
+              onTimeUpdate={(e) => {
+                const video = e.currentTarget;
+                setModalPlayerProgress(video.currentTime);
+                setModalPlayerDuration(video.duration);
+              }}
+              onLoadedMetadata={(e) => {
+                setModalPlayerDuration(e.currentTarget.duration);
+                setModalPlayerError(null);
+              }}
+              onError={async (e) => {
+                console.warn('Modal video element error event', e);
+                const url = playingEpisode.video_url || '';
+                try {
+                  const head = await fetch(url, { method: 'HEAD' });
+                  if (!head.ok) {
+                    const txt = await head.text().catch(() => null);
+                    setModalPlayerError(`Media HEAD failed: ${head.status} ${head.statusText} - ${txt}`);
+                    console.warn('Media HEAD response', head.status, head.statusText, txt);
+                  } else {
+                    setModalPlayerError('Media failed to load (unknown reason).');
+                  }
+                } catch (err) {
+                  console.warn('Error while HEADing media URL', err);
+                  setModalPlayerError(String(err));
+                }
+              }}
+              autoPlay={!isMobile}
+            />
+          )}
+
+          {/* Mobile: user-play overlay for native videos when awaiting gesture */}
+          {modalAwaitingUserPlay && !isYouTube && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <button
+                onClick={() => {
+                  setModalAwaitingUserPlay(false);
+                  try {
+                    if (modalVideoRef.current) {
+                      modalVideoRef.current.muted = modalPlayerMuted;
+                      const p = modalVideoRef.current.play();
+                      if (p && typeof (p as any).then === 'function') {
+                        (p as any).then(() => setModalPlayerPlaying(true)).catch(() => setModalPlayerPlaying(false));
+                      }
+                    }
+                  } catch (err) {
+                    console.warn('Mobile manual play failed', err);
+                  }
+                }}
+                className="bg-white/10 hover:bg-white/20 text-white rounded-full p-6"
+              >
+                <Play size={36} />
+              </button>
+            </div>
+          )}
+
+          {/* Modal player controls */}
+            {modalPlayerError && (
+              <div className="absolute top-4 left-4 right-4 p-3 bg-red-900/80 text-red-100 rounded-md z-30">
+                <strong className="font-semibold">Playback Error:</strong>
+                <div className="text-sm mt-1">{modalPlayerError}</div>
+              </div>
+            )}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 hover:opacity-100 transition-opacity duration-300">
+            <div className="absolute bottom-0 left-0 right-0 p-4">
+              {/* Progress bar */}
+              <input
+                type="range"
+                min="0"
+                max={modalPlayerDuration || 100}
+                value={modalPlayerProgress}
+                onChange={handleModalPlayerProgress}
+                className="w-full h-1.5 mb-4 rounded-lg appearance-none cursor-pointer bg-gray-700 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-purple-500"
+              />
+              
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <button
+                    onClick={handleModalPlayerPlayPause}
+                    className="text-white hover:text-purple-300 transition-colors p-2 hover:bg-white/10 rounded-full"
+                  >
+                    {modalPlayerPlaying ? <Pause size={20} /> : <Play size={20} />}
+                  </button>
+                  <button
+                    onClick={handleModalPlayerMuteToggle}
+                    className="text-white hover:text-purple-300 transition-colors p-2 hover:bg-white/10 rounded-full"
+                  >
+                    {modalPlayerMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                  </button>
+                  <span className="text-sm text-gray-300 font-mono">
+                    {formatTime(modalPlayerProgress)} / {formatTime(modalPlayerDuration)}
+                  </span>
+                </div>
+                
+                <div className="text-sm text-gray-300">
+                  {playingEpisode.title}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        {/* Episode info */}
+        <div className="p-4">
+          <h3 className="text-lg font-semibold text-white mb-2">{playingEpisode.title}</h3>
+          {playingEpisode.description && (
+            <p className="text-sm text-gray-300 mb-3">{playingEpisode.description}</p>
+          )}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <Clock size={14} className="text-gray-400" />
+              <span className="text-xs text-gray-400">
+                {playingEpisode.duration ? formatTime(playingEpisode.duration) : 'N/A'}
+              </span>
+            </div>
+            <button
+              onClick={() => setPlayingEpisode(null)}
+              className="text-sm text-gray-400 hover:text-white transition-colors px-3 py-1 hover:bg-gray-800 rounded-lg"
+            >
+              Close Player
+            </button>
+          </div>
+        </div>
       </div>
     );
   };
@@ -941,7 +1775,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                   </span>
                 </div>
                 {currentShow.description && (
-                  <div className="relative overflow-hidden bg-gradient-to-br from-slate-800 to-gray-900 text-white px-6 py-2 rounded-lg font-medium text-sm shadow w-full h-full flex items-center">
+                  <div className="relative overflow-hidden bg-gradient-to-br from-slate-800 to-gray-900 text-white px-6 py-2 rounded-lg font-medium text-sm shadow w-full h-full flex items-center min-h-[3.5rem]">
                     <div
                       className="marquee-text whitespace-nowrap animate-marquee"
                       style={{ animationDuration: '18s' }}
@@ -950,7 +1784,24 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                     </div>
                   </div>
                 )}
+                {/* IMPROVED CATCH UP BUTTON - matches description badge height */}
+                <div className="flex items-center">
+                  <button
+                    onClick={() => setCatchUpOpen(true)}
+                    className="inline-flex items-center gap-2 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow h-full min-h-[3.5rem] transition-all hover:scale-[1.02] active:scale-[0.98]"
+                    style={{
+                      backgroundImage: 'linear-gradient(to right, #8B5CF6, #EC4899)',
+                      height: '100%',
+                      minHeight: '3.5rem'
+                    }}
+                    aria-label="Open Catch Up"
+                  >
+                    <Clock className="w-4 h-4" />
+                    <span>Catch Up</span>
+                  </button>
+                </div>
               </div>
+              
               <style>{`
                 @keyframes marquee {
                   0% { transform: translateX(100%); }
@@ -963,6 +1814,94 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                 }
               `}</style>
             </div>
+          )}
+          {/* Enhanced Modal */}
+          {portalMounted && currentShow && createPortal(
+            <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 pointer-events-auto"> 
+              {/* Backdrop */}
+              <div 
+                className={`absolute inset-0 bg-black/90 backdrop-blur-md transition-opacity duration-300 ${modalVisible ? 'opacity-100' : 'opacity-0'}`}
+                onClick={() => setCatchUpOpen(false)}
+              />
+              
+              {/* Modal Content */}
+              <div 
+                className={`relative bg-gray-900 dark:bg-gray-950 border border-gray-800 rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden transform transition-all duration-300 ${modalVisible ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-4'}`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div className="sticky top-0 z-10 bg-gray-900/95 backdrop-blur-sm border-b border-gray-800 px-6 py-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold text-white">Catch Up</h2>
+                      <p className="text-sm text-gray-400 mt-1">Watch all past shows you've missed</p>
+                    </div>
+                    <button
+                      onClick={() => setCatchUpOpen(false)}
+                      className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded-lg"
+                      aria-label="Close modal"
+                    >
+                      <X size={24} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Content Area */}
+                <div className="overflow-y-auto max-h-[calc(90vh-80px)]">
+                  <div className="p-6">
+                    {/* Inline Player */}
+                    {renderModalPlayer()}
+
+                    {/* VOD Library - show all past shows across all series */}
+                    <div className="mb-8">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-xl font-semibold text-white"></h3>
+                        <div className="flex items-center space-x-2 text-sm text-gray-400">
+                          <span>Scroll for more</span>
+                          <ChevronRight size={16} />
+                        </div>
+                      </div>
+                      
+                      {isMobile ? (
+                        renderMobileCatchUpGrid()
+                      ) : (
+                        <VODLibrary 
+                          showId={""}
+                          showAllPastShows={true}
+                          defaultViewMode="by-category"
+                          shows={shows}
+                          onEpisodeSelect={playEpisode}
+                          playingEpisodeId={playingEpisode?.id}
+                        />
+                      )}
+                    </div>
+
+                    {/* Pagination Controls */}
+                    <div className="flex items-center justify-between pt-6 border-t border-gray-800">
+                      <button className="flex items-center space-x-2 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed px-3 py-2 rounded-lg hover:bg-gray-800">
+                        <ChevronLeft size={20} />
+                        <span>Previous</span>
+                      </button>
+                      <div className="flex items-center space-x-2">
+                        {[1, 2, 3, 4, 5].map((num) => (
+                          <button
+                            key={num}
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm transition-colors ${num === 1 ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'}`}
+                          >
+                            {num}
+                          </button>
+                        ))}
+                      </div>
+                      <button className="flex items-center space-x-2 text-gray-400 hover:text-white transition-colors px-3 py-2 rounded-lg hover:bg-gray-800">
+                        <span>Next</span>
+                        <ChevronRight size={20} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>, 
+            document.body
           )}
         </CardContent>
       </Card>
