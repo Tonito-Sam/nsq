@@ -38,7 +38,36 @@ async function initTransporter() {
     return;
   } catch (err) {
     console.error('SMTP verification failed:', err && err.message ? err.message : err);
-    console.warn('Falling back to Ethereal test account (no real emails will be sent).');
+    if (err && err.response) console.error('SMTP response:', err.response);
+    if (err && err.code) console.error('SMTP code:', err.code);
+
+    console.warn('Attempting alternate SMTP configuration (port 587, STARTTLS).');
+    // Try an alternate config: common case where provider expects STARTTLS on port 587
+    try {
+      transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT_ALT || '587', 10),
+        secure: false, // use STARTTLS
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS
+        },
+        authMethod: 'LOGIN',
+        tls: {
+          rejectUnauthorized: (process.env.SMTP_REJECT_UNAUTHORIZED || 'true').toLowerCase() === 'true'
+        }
+      });
+      await transporter.verify();
+      console.log('Alternate SMTP connection verified (STARTTLS).');
+      return;
+    } catch (err2) {
+      console.error('Alternate SMTP verification failed:', err2 && err2.message ? err2.message : err2);
+      if (err2 && err2.response) console.error('SMTP alt response:', err2.response);
+      if (err2 && err2.code) console.error('SMTP alt code:', err2.code);
+      console.error('SMTP initialization failed - no fallback to Ethereal will be attempted. Mail endpoints will return errors until SMTP is fixed.');
+      transporter = null;
+      return;
+    }
   }
 
   // Fallback: create Ethereal test account so we can test functionality
@@ -65,16 +94,20 @@ async function initTransporter() {
 initTransporter().catch(err => console.error('initTransporter failed', err));
 
 // Init Supabase admin client (requires SERVICE_ROLE_KEY in env)
+// Initialize Supabase admin client (requires service role key)
 let supabaseAdmin = null;
-if (process.env.SUPABASE_URL && process.env.SERVICE_ROLE_KEY) {
-  supabaseAdmin = createClient(process.env.SUPABASE_URL, process.env.SERVICE_ROLE_KEY);
+// Support multiple env var names for the service role key to avoid misconfiguration
+const serviceRoleKey = process.env.SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE;
+if (process.env.SUPABASE_URL && serviceRoleKey) {
+  supabaseAdmin = createClient(process.env.SUPABASE_URL, serviceRoleKey);
 } else {
-  console.warn('SUPABASE_URL or SERVICE_ROLE_KEY not set; /resend-verification endpoint will be unavailable');
+  console.warn('SUPABASE_URL or service role key not set; /resend-verification endpoint will be unavailable');
 }
 
 // Send OTP email
 app.post('/send-otp', async (req, res) => {
   const { email, otp } = req.body;
+  if (!transporter) return res.status(500).json({ success: false, error: 'SMTP transporter not configured' });
   try {
     const info = await transporter.sendMail({
       from: `"${process.env.SENDER_NAME}" <${process.env.SENDER_EMAIL}>`,
@@ -83,8 +116,7 @@ app.post('/send-otp', async (req, res) => {
       text: `Your OTP code is: ${otp}`,
       html: `<p>Your OTP code is: <b>${otp}</b></p>`
     });
-    const preview = usingEthereal ? nodemailer.getTestMessageUrl(info) : null;
-    res.json({ success: true, preview });
+    res.json({ success: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Failed to send OTP email.' });
@@ -94,6 +126,7 @@ app.post('/send-otp', async (req, res) => {
 // Send single notification email
 app.post('/send-notification', async (req, res) => {
   const { email, subject, message, attachments } = req.body;
+  if (!transporter) return res.status(500).json({ success: false, error: 'SMTP transporter not configured' });
   try {
     const mailOptions = {
       from: `"${process.env.SENDER_NAME}" <${process.env.SENDER_EMAIL}>`,
@@ -113,9 +146,8 @@ app.post('/send-notification', async (req, res) => {
       });
     }
 
-    const info = await transporter.sendMail(mailOptions);
-    const preview = usingEthereal ? nodemailer.getTestMessageUrl(info) : null;
-    res.json({ success: true, preview });
+    await transporter.sendMail(mailOptions);
+    res.json({ success: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: 'Failed to send notification email.' });
@@ -125,6 +157,7 @@ app.post('/send-notification', async (req, res) => {
 // Send bulk email (admin)
 app.post('/send-bulk', async (req, res) => {
   const { emails, subject, message, attachments } = req.body;
+  if (!transporter) return res.status(500).json({ success: false, error: 'SMTP transporter not configured' });
   try {
     const infos = await Promise.all(emails.map(email => {
       const mailOptions = {
@@ -142,8 +175,7 @@ app.post('/send-bulk', async (req, res) => {
       }
       return transporter.sendMail(mailOptions);
     }));
-    const previews = usingEthereal ? infos.map(info => nodemailer.getTestMessageUrl(info)) : null;
-    res.json({ success: true, previews });
+    res.json({ success: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, error: err && err.message ? err.message : 'Failed to send bulk email.' });
@@ -153,6 +185,7 @@ app.post('/send-bulk', async (req, res) => {
 // Test single email endpoint to validate SMTP in deployed environment
 app.post('/test-email', async (req, res) => {
   const to = req.body?.to || process.env.SENDER_EMAIL;
+  if (!transporter) return res.status(500).json({ success: false, error: 'SMTP transporter not configured' });
   try {
     const info = await transporter.sendMail({
       from: `"${process.env.SENDER_NAME}" <${process.env.SENDER_EMAIL}>`,
@@ -161,8 +194,7 @@ app.post('/test-email', async (req, res) => {
       text: req.body?.message || 'This is a test email to verify SMTP settings.',
       html: `<p>${req.body?.message || 'This is a test email to verify SMTP settings.'}</p>`
     });
-    const preview = usingEthereal ? nodemailer.getTestMessageUrl(info) : null;
-    res.json({ success: true, message: `Test email sent to ${to}`, preview });
+    res.json({ success: true, message: `Test email sent to ${to}` });
   } catch (err) {
     console.error('Test-email error', err && err.stack ? err.stack : err);
     res.status(500).json({ success: false, error: err && err.message ? err.message : 'Failed to send test email.' });
@@ -196,6 +228,7 @@ app.post('/send-notification-multipart', upload.array('attachments'), async (req
   const email = req.body.email || req.body.to;
   const subject = req.body.subject;
   const message = req.body.message;
+  if (!transporter) return res.status(500).json({ success: false, error: 'SMTP transporter not configured' });
   try {
     const mailOptions = {
       from: `"${process.env.SENDER_NAME}" <${process.env.SENDER_EMAIL}>`,
@@ -210,8 +243,7 @@ app.post('/send-notification-multipart', upload.array('attachments'), async (req
     }
 
     const info = await transporter.sendMail(mailOptions);
-    const preview = usingEthereal ? nodemailer.getTestMessageUrl(info) : null;
-    res.json({ success: true, preview });
+    res.json({ success: true });
   } catch (err) {
     console.error('Multipart send-notification error', err);
     res.status(500).json({ success: false, error: err && err.message ? err.message : 'Failed to send multipart notification email.' });
@@ -232,6 +264,7 @@ app.post('/send-bulk-multipart', upload.array('attachments'), async (req, res) =
   const message = req.body.message;
   try {
     const attachments = (req.files && Array.isArray(req.files)) ? req.files.map(f => ({ filename: f.originalname, content: f.buffer })) : [];
+    if (!transporter) return res.status(500).json({ success: false, error: 'SMTP transporter not configured' });
     const infos = await Promise.all(emails.map(email => transporter.sendMail({
       from: `"${process.env.SENDER_NAME}" <${process.env.SENDER_EMAIL}>`,
       to: email,
@@ -240,8 +273,7 @@ app.post('/send-bulk-multipart', upload.array('attachments'), async (req, res) =
       html: `<p>${message}</p>`,
       attachments
     })));
-    const previews = usingEthereal ? infos.map(info => nodemailer.getTestMessageUrl(info)) : null;
-    res.json({ success: true, previews });
+    res.json({ success: true });
   } catch (err) {
     console.error('Multipart send-bulk error', err);
     res.status(500).json({ success: false, error: err && err.message ? err.message : 'Failed to send multipart bulk email.' });
@@ -268,4 +300,66 @@ app.post('/resend-verification', async (req, res) => {
     console.error('resend-verification error', err);
     return res.status(500).json({ success: false, error: err && err.message ? err.message : String(err) });
   }
+});
+
+// Resend verification emails in bulk (server-side batching to avoid client rate limits)
+app.post('/resend-verification-bulk', async (req, res) => {
+  const emails = req.body?.emails || req.body?.users;
+  if (!emails || !Array.isArray(emails) || emails.length === 0) return res.status(400).json({ success: false, error: 'emails array is required' });
+  if (!supabaseAdmin) return res.status(500).json({ success: false, error: 'supabase admin client not configured' });
+
+  const delayMs = parseInt(process.env.RESEND_BULK_DELAY_MS || '500', 10);
+  const maxAttempts = parseInt(process.env.RESEND_BULK_MAX_ATTEMPTS || '3', 10);
+
+  const results = [];
+  for (const e of emails) {
+    const email = typeof e === 'string' ? e : (e.email || e.email_address || e?.email_address || null);
+    if (!email) {
+      results.push({ email: null, success: false, error: 'invalid email' });
+      continue;
+    }
+
+    let attempts = 0;
+    let sent = false;
+    let lastErr = null;
+
+    while (attempts < maxAttempts && !sent) {
+      attempts++;
+      try {
+        const { error } = await supabaseAdmin.auth.resend({
+          type: 'signup',
+          email,
+          options: { emailRedirectTo: process.env.EMAIL_VERIFICATION_REDIRECT || 'https://nexsq.com' }
+        });
+        if (!error) {
+          sent = true;
+          results.push({ email, success: true });
+          break;
+        }
+        lastErr = error.message || String(error);
+        // If error message indicates rate limiting, wait and retry
+        if (/rate limit|too many requests|429/i.test(lastErr)) {
+          const backoff = delayMs * attempts * 2;
+          await new Promise(r => setTimeout(r, backoff));
+          continue;
+        }
+        break;
+      } catch (err) {
+        lastErr = err && err.message ? err.message : String(err);
+        const backoff = delayMs * attempts * 2;
+        await new Promise(r => setTimeout(r, backoff));
+      }
+    }
+
+    if (!sent) {
+      results.push({ email, success: false, error: lastErr || 'failed' });
+    }
+
+    // Wait between emails to avoid hitting provider limits
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+
+  const successCount = results.filter(r => r.success).length;
+  const failCount = results.length - successCount;
+  return res.json({ success: true, results, successCount, failCount });
 });
