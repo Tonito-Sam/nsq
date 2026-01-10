@@ -180,6 +180,15 @@ try {
   console.warn('⚠️ payments route not available:', e?.message || e);
 }
 
+// Link preview proxy (fetches OG metadata and favicon)
+try {
+  const linkPreview = require('./routes/link-preview');
+  app.use('/api/link-preview', linkPreview);
+  console.log('✅ Mounted /api/link-preview');
+} catch (e) {
+  console.warn('⚠️ link-preview route not available:', e?.message || e);
+}
+
 // WebRTC -> RTMP bridge route
 const webrtcBridgeRoutes = require('./routes/webrtc-bridge.cjs');
 app.use('/api/webrtc-bridge', webrtcBridgeRoutes);
