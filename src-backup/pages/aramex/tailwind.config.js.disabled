@@ -1,0 +1,14 @@
+// Disabled copy of src/pages/aramex/tailwind.config.js
+// Renamed to avoid Tailwind picking this config in the workspace
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: [
+    "./src/app/**/*.{js,ts,jsx,tsx}",
+    "./src/pages/**/*.{js,ts,jsx,tsx}",
+    "./src/components/**/*.{js,ts,jsx,tsx}"
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+};

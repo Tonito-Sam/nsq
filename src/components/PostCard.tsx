@@ -82,6 +82,8 @@ interface PostCardProps {
   onHidePost?: (postId: string) => void;
   onShare?: (postId: string) => void;
   showComments?: boolean;
+  showVerifiedBadge?: boolean;
+  verifiedBadgeType?: string;
 }
 
 export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionCounts = {}, userReaction = null, onReact, onLike, onComment, onRepost, onDeletePost, onHidePost, onShare, showComments }) => {

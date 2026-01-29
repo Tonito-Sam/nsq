@@ -401,7 +401,7 @@ export const Moments = () => {
 
   return (
     <>
-      <div className="bg-card rounded-xl border border-border p-4 mb-6 shadow-sm">
+      <div className="bg-card rounded-xl border border-gray-200 dark:border-gray-800 p-4 mb-6 shadow-sm">
         {!isCreating ? (
           <div className="flex items-start space-x-4 overflow-x-auto pb-2">
             <div

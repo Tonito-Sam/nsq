@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import apiUrl from '@/lib/api';
 import { useInfiniteQuery, useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { CreatePost } from './CreatePost';
@@ -9,8 +10,9 @@ import { RepostModal } from './RepostModal';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/hooks/use-toast';
-import { ArrowDown, Loader2, ArrowUp, ExternalLink, Info } from 'lucide-react';
+import { ArrowDown, Loader2, ArrowUp, ExternalLink, Info, Video, Play, Pause, Volume2, VolumeX, MoreVertical, ShoppingBag, Star } from 'lucide-react';
 import { LiveChat } from './LiveChat';
+import { Skeleton } from '@/components/ui/skeleton';
 
 interface Post {
   id: string;
@@ -54,14 +56,92 @@ interface AdCampaign {
   };
 }
 
+interface Reel {
+  id: string;
+  video_url?: string;
+  caption?: string;
+  likes: number;
+  views: number;
+  created_at: string;
+  duration?: number;
+  user?: {
+    first_name?: string;
+    last_name?: string;
+    username?: string;
+    avatar_url?: string;
+    verified?: boolean;
+  } | null;
+}
+
+interface StoreProduct {
+  id: string;
+  title: string;
+  description?: string;
+  price: number;
+  original_price?: number;
+  sale_price?: number;
+  is_on_sale?: boolean;
+  sale_percentage?: number;
+  is_deals_of_day?: boolean;
+  product_type?: string;
+  category?: string;
+  images?: string[];
+  tags?: string[];
+  is_active?: boolean;
+  views?: number;
+  store_id: string;
+  store?: {
+    store_name?: string;
+    base_currency?: string;
+  };
+  created_at: string;
+}
+
+// Format a numeric amount using a store's base currency (fallback to ZAR)
+const formatCurrency = (amount: number, currency?: string) => {
+  const curr = currency || 'ZAR';
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: curr }).format(amount);
+  } catch (e) {
+    // Fallback: show currency code then amount
+    return `${curr} ${amount.toFixed(2)}`;
+  }
+};
+
 const Feed: React.FC = () => {
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const desktopReelsRef = useRef<HTMLDivElement>(null);
+  const mobileReelsRef = useRef<HTMLDivElement>(null);
+  const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const loadMoreObserverRef = useRef<IntersectionObserver | null>(null);
+  const desktopAutoplayRef = useRef<number | null>(null);
+  const mobileAutoplayRef = useRef<number | null>(null);
+  const feedContainerRef = useRef<HTMLDivElement>(null);
+  
+  const PAGE_SIZE = 10;
   
   const [pullToRefresh, setPullToRefresh] = useState({
     active: false,
     startY: 0,
     distance: 0
   });
+  
+  const [reels, setReels] = useState<Reel[]>([]);
+  const [fullscreenIndex, setFullscreenIndex] = useState<number | null>(null);
+  const [reelsLoading, setReelsLoading] = useState(false);
+  const [playingReelId, setPlayingReelId] = useState<string | null>(null);
+  const [mutedStates, setMutedStates] = useState<Record<string, boolean>>({});
+  const [activeReelIndex, setActiveReelIndex] = useState<number | null>(null);
+  const [desktopPlayingIndex, setDesktopPlayingIndex] = useState<number>(0);
+  const [mobilePlayingIndex, setMobilePlayingIndex] = useState<number>(0);
+  const [desktopVisibleReels, setDesktopVisibleReels] = useState<Reel[]>([]);
+  const [mobileVisibleReels, setMobileVisibleReels] = useState<Reel[]>([]);
+  const [storeProducts, setStoreProducts] = useState<StoreProduct[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasLoadedInitial, setHasLoadedInitial] = useState(false);
   
   const queryClient = useQueryClient();
   const { user } = useAuth() as any;
@@ -72,13 +152,481 @@ const Feed: React.FC = () => {
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [currentShowIndex, setCurrentShowIndex] = useState(0);
   const [showCommentsOverlay, setShowCommentsOverlay] = useState(false);
+  const [showReelsOverlay, setShowReelsOverlay] = useState(false);
+  const [selectedReel, setSelectedReel] = useState<Reel | null>(null);
   
   const QUERY_KEYS = {
     posts: ['posts'],
     studioShows: ['studioShows'],
     reactions: (ids: string[]) => ['reactions', ids],
-    comments: (postId: string) => ['comments', postId]
+    comments: (postId: string) => ['comments', postId],
+    reels: ['reels'],
+    storeProducts: ['storeProducts']
   } as const;
+
+  // Fetch reels data
+  useEffect(() => {
+    let mounted = true;
+    const fetchReels = async () => {
+      setReelsLoading(true);
+      try {
+        const selectCols = `
+            id,
+            video_url,
+            caption,
+            likes,
+            views,
+            duration,
+            created_at,
+            user:users!studio_videos_user_id_fkey(
+              first_name,
+              last_name,
+              username,
+              avatar_url,
+              verified
+            )
+          `;
+
+        let data: any = null;
+        let error: any = null;
+
+        let res = await supabase
+          .from('studio_videos')
+          .select(selectCols)
+          .eq('share_to_feeds', true)
+          .not('video_url', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(12);
+        data = res.data; error = res.error;
+
+        if (error && String(error.code) === '42703') {
+          console.warn('share_to_feeds column not found, retrying with share_to_feed');
+          res = await supabase
+            .from('studio_videos')
+            .select(selectCols)
+            .eq('share_to_feed', true)
+            .not('video_url', 'is', null)
+            .order('created_at', { ascending: false })
+            .limit(12);
+          data = res.data; error = res.error;
+        }
+
+        if (error && String(error.code) === '42703') {
+          console.warn('Neither share_to_feeds nor share_to_feed exist; fetching all videos with video_url');
+          res = await supabase
+            .from('studio_videos')
+            .select(selectCols)
+            .not('video_url', 'is', null)
+            .order('created_at', { ascending: false })
+            .limit(12);
+          data = res.data; error = res.error;
+        }
+
+        if (error) {
+          console.error('Supabase error fetching studio_videos:', error);
+          throw error;
+        }
+        
+        const rawReels = (data || []) as any[];
+        const validReels: any[] = [];
+        for (const r of rawReels) {
+          if (!r || !r.video_url) continue;
+          validReels.push({
+            ...r,
+            duration: r.duration || 30
+          });
+        }
+
+        const mapped: Reel[] = validReels.map((r: any) => ({
+          id: r.id,
+          video_url: r.video_url || r.media_url,
+          caption: r.caption,
+          likes: r.likes || 0,
+          views: r.views || 0,
+          created_at: r.created_at,
+          duration: r.duration || undefined,
+          user: Array.isArray(r.user) ? (r.user[0] || null) : (r.user || null),
+        }));
+
+        const shuffled = [...mapped].sort(() => Math.random() - 0.5);
+
+        if (mounted) {
+          setReels(shuffled);
+          setDesktopVisibleReels(shuffled);
+          setMobileVisibleReels(shuffled.slice(0, 12));
+        }
+
+        const initialMuted: Record<string, boolean> = {};
+        shuffled.forEach(reel => {
+          initialMuted[reel.id] = true;
+        });
+        setMutedStates(initialMuted);
+      } catch (error) {
+        console.error('Error fetching reels:', error);
+        toast({ description: 'Failed to load reels', variant: 'destructive' });
+      } finally {
+        setReelsLoading(false);
+      }
+    };
+
+    fetchReels();
+    return () => { 
+      mounted = false;
+      if (desktopAutoplayRef.current) {
+        clearInterval(desktopAutoplayRef.current);
+        desktopAutoplayRef.current = null;
+      }
+      if (mobileAutoplayRef.current) {
+        clearInterval(mobileAutoplayRef.current);
+        mobileAutoplayRef.current = null;
+      }
+    };
+  }, []);
+
+  // Fetch products from store_products table
+  useEffect(() => {
+    let mounted = true;
+    const fetchStoreProducts = async () => {
+      setProductsLoading(true);
+      try {
+        console.log('Fetching store products with seller info...');
+
+        const { data: productsData, error: productsError } = await supabase
+          .from('store_products')
+          .select(`
+            id,
+            title,
+            description,
+            price,
+            original_price,
+            sale_price,
+            is_on_sale,
+            sale_percentage,
+            is_deals_of_day,
+            product_type,
+            category,
+            images,
+            tags,
+            is_active,
+            views,
+            store_id,
+            created_at,
+            store:user_stores!inner(
+              store_name,
+              base_currency
+            )
+          `)
+          .eq('is_active', true)
+          .eq('store.is_active', true)
+          .order('created_at', { ascending: false })
+          .limit(12);
+
+        if (productsError) {
+          console.error('Error fetching store products:', productsError);
+          throw productsError;
+        }
+
+        const rawProducts = productsData || [];
+
+        if (mounted) {
+          const formattedProducts: StoreProduct[] = rawProducts.map((product: any) => ({
+            id: product.id,
+            title: product.title,
+            description: product.description,
+            price: product.price,
+            original_price: product.original_price,
+            sale_price: product.sale_price,
+            is_on_sale: product.is_on_sale || false,
+            sale_percentage: product.sale_percentage,
+            is_deals_of_day: product.is_deals_of_day || false,
+            product_type: product.product_type,
+            category: product.category,
+            images: product.images || [],
+            tags: product.tags || [],
+            is_active: product.is_active,
+            views: product.views || 0,
+            store_id: product.store_id,
+            store: {
+              store_name: product.store?.store_name || 'Seller',
+              base_currency: product.store?.base_currency || 'ZAR'
+            },
+            created_at: product.created_at
+          }));
+
+          const shuffledProducts = [...formattedProducts].sort(() => Math.random() - 0.5);
+          setStoreProducts(shuffledProducts);
+          console.log('Set products with seller info:', shuffledProducts.length);
+        }
+      } catch (error) {
+        console.error('Error in fetchStoreProducts:', error);
+        if (mounted) {
+          console.log('Using fallback demo products');
+          setStoreProducts(getDemoStoreProducts());
+        }
+      } finally {
+        if (mounted) {
+          setProductsLoading(false);
+        }
+      }
+    };
+
+    fetchStoreProducts();
+    return () => { mounted = false; };
+  }, []);
+
+  // Generate demo store products as fallback
+  const getDemoStoreProducts = (): StoreProduct[] => {
+    return [
+      {
+        id: '1',
+        title: 'Wireless Earbuds Pro',
+        description: 'Premium noise-cancelling wireless earbuds with 30hr battery',
+        price: 129.99,
+        original_price: 149.99,
+        sale_price: 99.99,
+        is_on_sale: true,
+        sale_percentage: 33,
+        is_deals_of_day: true,
+        product_type: 'electronics',
+        category: 'Audio',
+        images: ['https://images.unsplash.com/photo-1590658165737-15a047b8b5e9?w=400&h=400&fit=crop'],
+        tags: ['wireless', 'audio', 'tech'],
+        is_active: true,
+        views: 128,
+        store_id: 'store-1',
+        store: {
+          store_name: 'Tech Haven',
+          base_currency: 'ZAR'
+        },
+        created_at: new Date().toISOString()
+      },
+      {
+        id: '2',
+        title: 'Organic Cotton T-Shirt',
+        description: 'Sustainable organic cotton t-shirt in various colors',
+        price: 29.99,
+        product_type: 'clothing',
+        category: 'Fashion',
+        images: ['https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=400&h=400&fit=crop'],
+        tags: ['organic', 'cotton', 'sustainable'],
+        is_active: true,
+        views: 56,
+        store_id: 'store-2',
+        store: {
+          store_name: 'Eco Wear',
+          base_currency: 'ZAR'
+        },
+        created_at: new Date().toISOString()
+      },
+      {
+        id: '3',
+        title: 'Smart Fitness Watch',
+        description: 'Track your workouts, heart rate, and sleep patterns',
+        price: 199.99,
+        original_price: 249.99,
+        sale_price: 149.99,
+        is_on_sale: true,
+        sale_percentage: 40,
+        is_deals_of_day: true,
+        product_type: 'electronics',
+        category: 'Fitness',
+        images: ['https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400&h=400&fit=crop'],
+        tags: ['fitness', 'smartwatch', 'health'],
+        is_active: true,
+        views: 89,
+        store_id: 'store-3',
+        store: {
+          store_name: 'Fit Tech',
+          base_currency: 'ZAR'
+        },
+        created_at: new Date().toISOString()
+      }
+    ];
+  };
+
+  // Helper function to play a single video with proper autoplay handling
+  const playOnlyVideo = (reelId: string, videoElement: HTMLVideoElement) => {
+    videoRefs.current.forEach((video, id) => {
+      if (id !== reelId && video) {
+        try { 
+          video.pause(); 
+          video.currentTime = 0; 
+        } catch (e) {}
+      }
+    });
+
+    setPlayingReelId(reelId);
+    
+    videoElement.muted = true;
+    videoElement.autoplay = true;
+    videoElement.playsInline = true;
+    
+    const playImmediately = () => {
+      videoElement.play().catch(error => {
+        console.warn(`Immediate autoplay failed for ${reelId}:`, error);
+        
+        const onCanPlay = () => {
+          videoElement.removeEventListener('canplay', onCanPlay);
+          videoElement.play().catch(err => {
+            console.warn(`Retry autoplay failed for ${reelId}:`, err);
+          });
+        };
+        
+        videoElement.addEventListener('canplay', onCanPlay);
+        videoElement.load();
+      });
+    };
+    
+    playImmediately();
+  };
+
+  // Desktop autoplay sequence for first 4 videos
+  useEffect(() => {
+    if (!desktopVisibleReels.length || desktopVisibleReels.length === 0) return;
+
+    if (desktopAutoplayRef.current) {
+      clearInterval(desktopAutoplayRef.current);
+      desktopAutoplayRef.current = null;
+    }
+
+    const startAutoplaySequence = () => {
+      let currentIndex = 0;
+      
+      const playVideo = (index: number) => {
+        const reel = desktopVisibleReels[index];
+        if (!reel) return;
+
+        const videoElement = videoRefs.current.get(reel.id);
+        if (!videoElement) return;
+
+        playOnlyVideo(reel.id, videoElement);
+        setDesktopPlayingIndex(index);
+
+        const duration = reel.duration || 30;
+        desktopAutoplayRef.current = window.setTimeout(() => {
+          const nextIndex = (index + 1) % Math.min(desktopVisibleReels.length, 4);
+          playVideo(nextIndex);
+        }, duration * 1000);
+      };
+
+      if (desktopVisibleReels.length > 0) {
+        playVideo(0);
+      }
+    };
+
+    const timer = setTimeout(startAutoplaySequence, 500);
+
+    return () => {
+      clearTimeout(timer);
+      if (desktopAutoplayRef.current) {
+        clearTimeout(desktopAutoplayRef.current);
+        desktopAutoplayRef.current = null;
+      }
+    };
+  }, [desktopVisibleReels]);
+
+  // Mobile autoplay for first visible video
+  useEffect(() => {
+    if (!mobileVisibleReels.length || mobileVisibleReels.length === 0) return;
+
+    if (mobileAutoplayRef.current) {
+      clearTimeout(mobileAutoplayRef.current);
+      mobileAutoplayRef.current = null;
+    }
+
+    const playMobileVideo = (index: number) => {
+      const reel = mobileVisibleReels[index];
+      if (!reel) return;
+
+      const videoElement = videoRefs.current.get(reel.id);
+      if (!videoElement) return;
+
+      playOnlyVideo(reel.id, videoElement);
+      setMobilePlayingIndex(index);
+
+      const duration = reel.duration || 30;
+      mobileAutoplayRef.current = window.setTimeout(() => {
+        const nextIndex = (index + 1) % Math.min(mobileVisibleReels.length, 3);
+        playMobileVideo(nextIndex);
+      }, duration * 1000);
+    };
+
+    const timer = setTimeout(() => {
+      playMobileVideo(0);
+    }, 500);
+
+    return () => {
+      clearTimeout(timer);
+      if (mobileAutoplayRef.current) {
+        clearTimeout(mobileAutoplayRef.current);
+        mobileAutoplayRef.current = null;
+      }
+    };
+  }, [mobileVisibleReels]);
+
+  // Ensure videos actually play when playingReelId changes
+  useEffect(() => {
+    if (playingReelId) {
+      const videoElement = videoRefs.current.get(playingReelId);
+      if (videoElement && videoElement.paused) {
+        videoElement.muted = true;
+        videoElement.play().catch(error => {
+          console.warn('Failed to play video:', error);
+        });
+      }
+    }
+  }, [playingReelId]);
+
+  // Intersection Observer for additional videos
+  useEffect(() => {
+    if (!reels.length) return;
+
+    observerRef.current = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(entry => {
+          const videoElement = videoRefs.current.get(entry.target.id);
+          if (!videoElement) return;
+
+          const reelId = entry.target.id;
+          const isFirstFourDesktop = desktopVisibleReels.slice(0, 4).some(r => r.id === reelId);
+          const isFirstThreeMobile = mobileVisibleReels.slice(0, 3).some(r => r.id === reelId);
+
+          if (entry.isIntersecting && !isFirstFourDesktop && !isFirstThreeMobile) {
+            playOnlyVideo(reelId, videoElement);
+          } else if (!entry.isIntersecting && playingReelId === reelId) {
+            try { 
+              videoElement.pause(); 
+              videoElement.currentTime = 0; 
+              if (playingReelId === reelId) {
+                setPlayingReelId(null);
+              }
+            } catch (e) {}
+          }
+        });
+      },
+      {
+        threshold: 0.7,
+        rootMargin: '0px'
+      }
+    );
+
+    videoRefs.current.forEach((video, id) => {
+      if (video && observerRef.current) {
+        const isFirstFourDesktop = desktopVisibleReels.slice(0, 4).some(r => r.id === id);
+        const isFirstThreeMobile = mobileVisibleReels.slice(0, 3).some(r => r.id === id);
+        
+        if (!isFirstFourDesktop && !isFirstThreeMobile) {
+          observerRef.current.observe(video);
+        }
+      }
+    });
+
+    return () => {
+      if (observerRef.current) {
+        observerRef.current.disconnect();
+      }
+    };
+  }, [reels, desktopVisibleReels, mobileVisibleReels, playingReelId]);
 
   // Helper function to process media URLs
   const processPostMediaUrls = (post: any): any => {
@@ -102,7 +650,16 @@ const Feed: React.FC = () => {
     return { ...post, media_urls, media_url: (media_urls && media_urls.length > 0) ? media_urls[0] : post.media_url };
   };
 
-  // Infinite query for posts with optimal caching
+  // DEBOUNCE FUNCTION for smooth infinite scroll
+  const debounce = (func: Function, wait: number) => {
+    let timeout: NodeJS.Timeout;
+    return (...args: any[]) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func(...args), wait);
+    };
+  };
+
+  // Optimized infinite query for posts
   const {
     data: postsData,
     fetchNextPage,
@@ -111,118 +668,138 @@ const Feed: React.FC = () => {
     isLoading: postsLoading,
     error: postsError,
     refetch: refetchPosts,
+    isRefetching,
   } = useInfiniteQuery({
     queryKey: QUERY_KEYS.posts,
     queryFn: async ({ pageParam = 0 }) => {
-      const { data, error, count } = await supabase
-        .from('posts')
-        .select(`
-          id,
-          content,
-          created_at,
-          likes_count,
-          comments_count,
-          shares_count,
-          reposts_count,
-          post_type,
-          moment_bg,
-          moment_font,
-          moment_font_size,
-          moment_type,
-          moment_special_message,
-          moment_special_icon,
-          moment_special_name,
-          is_custom_special_day,
-          moment_special_id,
-          share_to_feed,
-          media_url,
-          media_urls,
-          voice_note_url,
-          voice_duration,
-          poll_options,
-          event_date,
-          event_location,
-          location,
-          feeling,
-          user_id,
-          user:users!posts_user_id_fkey(
-            first_name,
-            last_name,
-            username,
-            avatar_url,
-            verified,
-            heading,
-            bio
-          )
-        `, { count: 'exact' })
-        .is('group_id', null)
-        .or('post_type.neq.moment,share_to_feed.eq.true')
-        .order('created_at', { ascending: false })
-        .range(pageParam * 10, (pageParam + 1) * 10 - 1);
+      console.debug('[Feed] fetching posts page:', pageParam);
+      setIsLoadingMore(true);
+      
+      try {
+        const from = pageParam * PAGE_SIZE;
+        const to = (pageParam + 1) * PAGE_SIZE - 1;
+        
+        const { data, error, count } = await supabase
+          .from('posts')
+          .select(`
+            id,
+            content,
+            created_at,
+            likes_count,
+            comments_count,
+            shares_count,
+            reposts_count,
+            post_type,
+            moment_bg,
+            moment_font,
+            moment_font_size,
+            moment_type,
+            moment_special_message,
+            moment_special_icon,
+            moment_special_name,
+            is_custom_special_day,
+            moment_special_id,
+            share_to_feed,
+            media_url,
+            media_urls,
+            voice_note_url,
+            voice_duration,
+            poll_options,
+            event_date,
+            event_location,
+            location,
+            feeling,
+            user_id,
+            user:users!posts_user_id_fkey(
+              first_name,
+              last_name,
+              username,
+              avatar_url,
+              verified,
+              heading,
+              bio
+            )
+          `, { count: 'exact' })
+          .is('group_id', null)
+          .or('post_type.neq.moment,share_to_feed.eq.true')
+          .order('created_at', { ascending: false })
+          .range(from, to);
 
-      if (error) throw error;
+        if (error) {
+          console.error('[Feed] error fetching posts page', pageParam, error);
+          throw error;
+        }
 
-      // Process posts with comment counts and original posts
-      const processedPosts = await Promise.all(
-        (data || []).map(async (post) => {
-          // Get actual comment count
-          const { count: commentCount } = await supabase
-            .from('comments')
-            .select('*', { count: 'exact', head: true })
-            .eq('post_id', post.id);
-          
-          const processedPost = { 
-            ...processPostMediaUrls(post), 
-            comments_count: commentCount || 0 
-          };
-          
-          // Handle reposts
-          if (post.post_type === 'repost' && post.media_url) {
-            const { data: originalPost } = await supabase
-              .from('posts')
-              .select(`
-                id,
-                content,
-                media_url,
-                media_urls,
-                created_at,
-                post_type,
-                user:users!posts_user_id_fkey(
-                  first_name,
-                  last_name,
-                  username,
-                  avatar_url
-                )
-              `)
-              .eq('id', post.media_url)
-              .single();
+        console.debug(`[Feed] fetched ${Array.isArray(data) ? data.length : 0} posts for page ${pageParam}`);
+
+        const processedPosts = await Promise.all(
+          (data || []).map(async (post) => {
+            const { count: commentCount } = await supabase
+              .from('comments')
+              .select('*', { count: 'exact', head: true })
+              .eq('post_id', post.id);
             
-            const processedOriginalPost = originalPost ? processPostMediaUrls(originalPost) : null;
-            
-            return {
-              ...processedPost,
-              original_post: processedOriginalPost,
-              media_url: null,
-              media_urls: undefined,
+            const processedPost = { 
+              ...processPostMediaUrls(post), 
+              comments_count: commentCount || 0 
             };
-          }
-          
-          return processedPost;
-        })
-      );
+            
+            if (post.post_type === 'repost' && post.media_url) {
+              const { data: originalPost } = await supabase
+                .from('posts')
+                .select(`
+                  id,
+                  content,
+                  media_url,
+                  media_urls,
+                  created_at,
+                  post_type,
+                  user:users!posts_user_id_fkey(
+                    first_name,
+                    last_name,
+                    username,
+                    avatar_url
+                  )
+                `)
+                .eq('id', post.media_url)
+                .single();
+              
+              const processedOriginalPost = originalPost ? processPostMediaUrls(originalPost) : null;
+              
+              return {
+                ...processedPost,
+                original_post: processedOriginalPost,
+                media_url: null,
+                media_urls: undefined,
+              };
+            }
+            
+            return processedPost;
+          })
+        );
 
-      return {
-        posts: processedPosts,
-        nextPage: data && data.length === 10 ? pageParam + 1 : undefined,
-        totalCount: count || 0,
-      };
+        return {
+          posts: processedPosts,
+          nextPage: data && data.length === PAGE_SIZE ? pageParam + 1 : undefined,
+          totalCount: count || 0,
+        };
+      } catch (error) {
+        console.error('Failed to fetch posts:', error);
+        throw error;
+      } finally {
+        setIsLoadingMore(false);
+        if (!hasLoadedInitial) {
+          setHasLoadedInitial(true);
+        }
+      }
     },
     initialPageParam: 0,
     getNextPageParam: (lastPage) => lastPage.nextPage,
     staleTime: 30 * 1000,
     gcTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
-    refetchOnMount: true,
+    refetchOnMount: false,
+    retry: 1,
   });
 
   // Query for studio shows with caching
@@ -244,23 +821,27 @@ const Feed: React.FC = () => {
   });
 
   // Get all posts from pages
-  const posts: Post[] = postsData?.pages.flatMap(page => page.posts) || [];
+  const posts: Post[] = (postsData as any)?.pages?.flatMap((page: any) => page.posts) || [];
+
+  // Mark initial loading as done when we have data
+  useEffect(() => {
+    if ((postsData as any)?.pages && (postsData as any).pages.length > 0) {
+      setIsInitialLoading(false);
+    }
+  }, [postsData]);
 
   // Fetch ad campaigns from campaigns table
   useEffect(() => {
     let mounted = true;
     
-    // Calculate how many batches we need (every 6 posts)
     const requiredBatches = Math.max(0, Math.floor(posts.length / 6));
     
     const fetchForBatch = async (batchIndex: number) => {
-      // Don't fetch if we already have an ad campaign for this batch
       if (adCampaigns[batchIndex]) return;
       
       try {
         console.log(`Fetching ad campaign for batch ${batchIndex}`);
         
-        // Fetch ad campaign from API (use apiUrl helper so production can set VITE_API_BASE_URL)
         const uid = user?.id;
         const endpoint = apiUrl(`/api/ads/serve${uid ? `?user_id=${uid}` : ''}`);
         const resp = await fetch(endpoint);
@@ -270,7 +851,6 @@ const Feed: React.FC = () => {
           return;
         }
         
-        // Check if response is empty
         const text = await resp.text();
         if (!text || text.trim() === '') {
           console.warn(`Empty response for batch ${batchIndex}`);
@@ -280,7 +860,6 @@ const Feed: React.FC = () => {
         const j = JSON.parse(text);
         console.log('Ad API response for batch', batchIndex, ':', j);
         
-        // Check if response has the expected structure
         if (!j || !j.served || !j.campaign) {
           console.warn('No ad campaign available for batch:', batchIndex);
           return;
@@ -296,11 +875,9 @@ const Feed: React.FC = () => {
         
       } catch (e) {
         console.error('Error in ad campaign fetch for batch', batchIndex, ':', e);
-        // Don't throw, just log the error
       }
     };
 
-    // Fetch ads for all required batches
     for (let i = 0; i < requiredBatches; i++) {
       if (!adCampaigns[i]) {
         fetchForBatch(i);
@@ -309,23 +886,6 @@ const Feed: React.FC = () => {
 
     return () => { mounted = false; };
   }, [posts.length, user?.id, adCampaigns]);
-
-  // Debug logging for ads
-  useEffect(() => {
-    console.log('=== AD SYSTEM DEBUG ===');
-    console.log('Total organic posts:', posts.length);
-    console.log('Ad campaigns in state:', Object.keys(adCampaigns).length);
-    console.log('Batches needed:', Math.floor(posts.length / 6));
-    
-    // Check each batch
-    const totalBatches = Math.floor(posts.length / 6);
-    for (let i = 0; i < totalBatches; i++) {
-      const ad = adCampaigns[i];
-      console.log(`Batch ${i}:`, ad ? `Has ad (${ad.advertiser_name})` : 'No ad');
-    }
-    
-    console.log('=== END DEBUG ===');
-  }, [adCampaigns, posts.length]);
 
   // Query for reactions with caching
   const { data: postReactions = {} } = useQuery({
@@ -458,29 +1018,142 @@ const Feed: React.FC = () => {
     },
   });
 
-  // Infinite scroll implementation with Intersection Observer
+  // SMOOTH INFINITE SCROLL IMPLEMENTATION
   useEffect(() => {
+    if (!loadMoreRef.current || !hasNextPage || isFetchingNextPage) return;
+
+    const debouncedFetchNextPage = debounce(() => {
+      if (hasNextPage && !isFetchingNextPage) {
+        console.debug('[Feed] Triggering fetchNextPage via intersection');
+        fetchNextPage();
+      }
+    }, 200);
+
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
-          fetchNextPage();
+        const [entry] = entries;
+        if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          debouncedFetchNextPage();
         }
       },
-      { threshold: 0.1 }
+      {
+        root: null,
+        rootMargin: '200px 0px',
+        threshold: 0.1,
+      }
     );
 
-    if (loadMoreRef.current) {
-      observer.observe(loadMoreRef.current);
+    const currentRef = loadMoreRef.current;
+    if (currentRef) {
+      observer.observe(currentRef);
     }
 
     return () => {
-      if (loadMoreRef.current) {
-        observer.unobserve(loadMoreRef.current);
+      if (currentRef) {
+        observer.unobserve(currentRef);
       }
     };
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  // Event handlers
+  // Reset scroll position when leaving and returning
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        if (posts.length < PAGE_SIZE) {
+          queryClient.invalidateQueries({ queryKey: QUERY_KEYS.posts });
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [posts.length, queryClient]);
+
+  // Event handlers for reels
+  const navigate = useNavigate();
+
+  const handleReelClick = (reel: Reel, index: number) => {
+    navigate(`/studio?video=${reel.id}&autoplay=true`);
+  };
+
+  const handleReelClose = () => {
+    setShowReelsOverlay(false);
+    setSelectedReel(null);
+    setActiveReelIndex(null);
+  };
+
+  const handleReelPlay = (reelId: string) => {
+    const videoElement = videoRefs.current.get(reelId);
+    if (videoElement) {
+      if (videoElement.paused) {
+        playOnlyVideo(reelId, videoElement);
+      } else {
+        videoElement.pause();
+        setPlayingReelId(null);
+      }
+    }
+  };
+
+  const handleReelMute = (reelId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMutedStates(prev => ({
+      ...prev,
+      [reelId]: !prev[reelId]
+    }));
+    const videoElement = videoRefs.current.get(reelId);
+    if (videoElement) {
+      videoElement.muted = !mutedStates[reelId];
+    }
+  };
+
+  const handleReelLike = async (reelId: string) => {
+    if (!user?.id) {
+      toast({ description: 'Please login to like reels', variant: 'destructive' });
+      return;
+    }
+
+    try {
+      const { error } = await supabase.rpc('increment_likes', { reel_id: reelId });
+      if (error) throw error;
+      
+      setReels(prev => prev.map(reel => 
+        reel.id === reelId ? { ...reel, likes: reel.likes + 1 } : reel
+      ));
+    } catch (error) {
+      console.error('Error liking reel:', error);
+      toast({ description: 'Failed to like reel', variant: 'destructive' });
+    }
+  };
+
+  const handleReelShare = (reelId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const url = `${window.location.origin}/reel/${reelId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      toast({ title: 'Copied!', description: 'Reel URL copied to clipboard.' });
+    });
+  };
+
+  // Handle product click
+  const handleProductClick = (product: StoreProduct) => {
+    navigate(`/product/${product.id}`);
+  };
+
+  // Handle video time updates
+  const handleTimeUpdate = (reelId: string, e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = e.currentTarget;
+    const reel = reels.find(r => r.id === reelId);
+    const duration = reel?.duration || 30;
+    
+    if (video.currentTime >= duration) {
+      video.pause();
+      video.currentTime = 0;
+      setPlayingReelId(null);
+    }
+  };
+
+  // Add this to your existing event handlers
   const handleReact = (postId: string, reactionType: string) => {
     reactMutation.mutate({ postId, reactionType });
   };
@@ -582,7 +1255,6 @@ const Feed: React.FC = () => {
 
   // Ad click handler
   const handleAdClick = (adCampaign: AdCampaign) => {
-    // Track ad click
     fetch(apiUrl('/api/ads/click'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -592,7 +1264,6 @@ const Feed: React.FC = () => {
       })
     }).catch(console.error);
 
-    // Open ad URL in new tab
     if (adCampaign.creative?.cta_url && adCampaign.creative.cta_url !== '#') {
       window.open(adCampaign.creative.cta_url, '_blank', 'noopener,noreferrer');
     } else {
@@ -622,10 +1293,76 @@ const Feed: React.FC = () => {
   };
 
   // Loading state
-  if (postsLoading && posts.length === 0) {
+  const renderVideoContainerSkeleton = () => (
+    <div className="p-4">
+      <Skeleton className="h-56 md:h-72 w-full rounded-lg" />
+    </div>
+  );
+
+  const renderMomentsSkeleton = () => (
+    <div className="p-4">
+      <Skeleton className="h-12 w-full rounded-md" />
+    </div>
+  );
+
+  const renderCreatePostSkeleton = () => (
+    <div className="p-4">
+      <Skeleton className="h-12 w-full rounded-full" />
+    </div>
+  );
+
+  const renderPostCardSkeleton = () => (
+    <div className="p-4 border-b">
+      <div className="flex items-start gap-3">
+        <Skeleton className="h-10 w-10 rounded-full" />
+        <div className="flex-1">
+          <Skeleton className="h-4 w-1/3 mb-2" />
+          <Skeleton className="h-3 w-full mb-2" />
+          <Skeleton className="h-3 w-3/4" />
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderReelsSkeleton = () => (
+    <div className="p-4">
+      <div className="grid grid-cols-3 gap-2">
+        <Skeleton className="h-24 w-full rounded-md" />
+        <Skeleton className="h-24 w-full rounded-md" />
+        <Skeleton className="h-24 w-full rounded-md" />
+      </div>
+    </div>
+  );
+
+  const renderProductsSkeleton = () => (
+    <div className="p-4">
+      <div className="grid grid-cols-2 gap-3">
+        <Skeleton className="h-28 w-full rounded-md" />
+        <Skeleton className="h-28 w-full rounded-md" />
+      </div>
+    </div>
+  );
+
+  const renderAdSkeleton = () => (
+    <div className="p-4">
+      <Skeleton className="h-12 w-full rounded-md" />
+    </div>
+  );
+
+  if ((isInitialLoading || (postsLoading && posts.length === 0))) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
+      <div className="space-y-4">
+        {renderVideoContainerSkeleton()}
+        {renderMomentsSkeleton()}
+        {renderCreatePostSkeleton()}
+        <div>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i}>{renderPostCardSkeleton()}</div>
+          ))}
+        </div>
+        {renderReelsSkeleton()}
+        {renderProductsSkeleton()}
+        {renderAdSkeleton()}
       </div>
     );
   }
@@ -645,29 +1382,42 @@ const Feed: React.FC = () => {
     }
   });
 
+  // Render loading skeletons for reels
+  const renderReelSkeleton = () => (
+    <Skeleton className="aspect-[9/16] rounded-md" />
+  );
+
+  // Render loading skeletons for products
+  const renderProductSkeleton = () => (
+    <Skeleton className="w-[calc(33.333%-0.5rem)] min-w-[calc(33.333%-0.5rem)] flex-shrink-0 aspect-square rounded-lg" />
+  );
+
   return (
     <div 
       ref={feedRef}
-      className="w-full max-w-2xl mx-auto px-2 sm:px-0"
+      className="w-full max-w-2xl mx-auto px-2 sm:px-0 overflow-x-hidden custom-scrollbar pb-28 md:pb-0"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Pull to refresh indicator */}
+      {/* MOBILE APP STYLE: Pull to refresh indicator */}
       <div 
-        className={`fixed top-0 left-0 right-0 flex justify-center pt-2 transition-opacity duration-300 ${
-          pullToRefresh.active ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        className={`fixed top-0 left-0 right-0 flex justify-center pt-2 transition-all duration-300 ease-out ${
+          pullToRefresh.active ? 'opacity-100' : 'opacity-0 pointer-events-none -translate-y-4'
         }`}
       >
         <div 
-          className={`w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center transition-transform ${
-            pullToRefresh.distance > 50 ? 'rotate-180' : ''
-          }`}
+          className="flex items-center justify-center gap-2 bg-white dark:bg-gray-900 px-4 py-2 rounded-full shadow-lg"
           style={{
-            transform: `translateY(${pullToRefresh.distance}px) rotate(${pullToRefresh.distance > 50 ? 180 : 0}deg)`
+            transform: `translateY(${Math.min(pullToRefresh.distance, 100)}px)`,
           }}
         >
-          <ArrowDown className="h-5 w-5" />
+          <div className={`transition-transform duration-300 ${pullToRefresh.distance > 50 ? 'rotate-180' : ''}`}>
+            <ArrowDown className="h-5 w-5 text-gray-600" />
+          </div>
+          <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            {pullToRefresh.distance > 50 ? 'Release to refresh' : 'Pull to refresh'}
+          </span>
         </div>
       </div>
 
@@ -685,7 +1435,7 @@ const Feed: React.FC = () => {
       {/* Comments overlay */}
       {showCommentsOverlay && (
         <div
-          className="fixed inset-0 bg-black/40 z-40"
+          className="fixed inset-0 bg-black z-40"
           onClick={() => setShowCommentsOverlay(false)}
         />
       )}
@@ -695,12 +1445,18 @@ const Feed: React.FC = () => {
         className={`
           fixed bottom-0 left-0 right-0 z-50 transition-transform duration-300 ease-in-out
           ${showCommentsOverlay ? 'translate-y-0' : 'translate-y-full'}
-          bg-black/90 backdrop-blur-lg rounded-t-xl
+          bg-black/95 backdrop-blur-xl rounded-t-2xl
         `}
         style={{ height: '70vh' }}
       >
         <LiveChat />
       </div>
+
+      {reelsLoading && (
+        <div className="grid grid-cols-3 sm:grid-cols-4 gap-1 sm:gap-2 mb-6">
+          {[...Array(12)].map((_, i) => renderReelSkeleton())}
+        </div>
+      )}
 
       <div className="mb-4" />
       <Moments />
@@ -708,30 +1464,51 @@ const Feed: React.FC = () => {
       <CreatePost onPostCreated={handleNewPost} />
       
       {postsError && (
-        <div className="p-4 mb-4 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg">
-          Failed to load posts. Please try again.
+        <div className="mx-4 my-3 p-3 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl text-sm">
+          Failed to load posts. Pull down to refresh.
         </div>
       )}
 
       <div className="space-y-4">
         {posts.length === 0 ? (
-          <div className="text-center py-8">
-            <div className="text-gray-500 dark:text-gray-400">No posts yet. Be the first to share something!</div>
+          <div className="text-center py-10">
+            <div className="text-gray-500 dark:text-gray-400 text-sm">No posts yet. Be the first to share something!</div>
           </div>
         ) : (
           <>
+            {/* Fullscreen overlay for reels */}
+            {fullscreenIndex !== null && reels[fullscreenIndex] && (
+              <div className="fixed inset-0 z-50 bg-black flex items-center justify-center">
+                <div className="relative w-full max-w-3xl h-[90vh]">
+                  <button className="absolute top-4 right-4 text-white p-2" onClick={() => setFullscreenIndex(null)}>Close</button>
+                  <video
+                    src={reels[fullscreenIndex].video_url}
+                    controls
+                    autoPlay
+                    muted={false}
+                    className="w-full h-full object-contain"
+                  />
+                  <div className="absolute left-4 bottom-4 text-white">
+                    <div className="font-semibold">{reels[fullscreenIndex].user?.username || reels[fullscreenIndex].user?.first_name}</div>
+                    <div className="text-sm">{reels[fullscreenIndex].caption}</div>
+                  </div>
+                </div>
+              </div>
+            )}
             {posts.map((post, idx) => (
               <React.Fragment key={post.id}>
                 {/* Render the organic post */}
                 <PostCard
                   post={{
                     ...post,
-                    image_url: post.post_type !== 'repost' ? 
+                    post_type: post.post_type || 'post',
+                    user_id: post.user_id || '',
+                    image_url: (post.post_type || 'post') !== 'repost' ? 
                       (post.media_urls && post.media_urls.length > 0 ? post.media_urls[0] : post.media_url) : 
                       undefined,
-                    video_url: post.post_type !== 'repost' ? post.media_url : undefined,
+                    video_url: (post.post_type || 'post') !== 'repost' ? post.media_url : undefined,
                     media_urls: post.media_urls
-                  }}
+                  } as any}
                   currentUser={user}
                   reactionCounts={postReactions[post.id]?.counts || {}}
                   userReaction={postReactions[post.id]?.userReaction || null}
@@ -744,89 +1521,374 @@ const Feed: React.FC = () => {
                   showComments={!!openComments[post.id]}
                 />
 
-                {/* After every 6 organic posts insert an AD */}
+                {/* After every 6 organic posts insert Reels then an AD */}
                 {(idx + 1) % 6 === 0 && (() => {
                   const batchIndex = Math.floor(idx / 6);
                   const adCampaign = adCampaigns[batchIndex] || getFallbackAd(batchIndex);
-                  
-                  // Render the AD component
-                  return (
-                    <div key={`ad-${adCampaign.id}-${batchIndex}`} className="border rounded-lg overflow-hidden bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 shadow-lg">
-                      {/* Ad header */}
-                      <div className="p-4 border-b">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center">
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 flex items-center justify-center text-white font-bold mr-3">
-                              {adCampaign.advertiser_name.charAt(0)}
-                            </div>
-                            <div>
-                              <div className="font-semibold">{adCampaign.advertiser_name}</div>
-                              <div className="text-xs text-gray-500 dark:text-gray-400">Sponsored • {adCampaign.campaign_type.toUpperCase()}</div>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button 
-                              onClick={() => handleAdInfo(adCampaign)}
-                              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full"
-                              title="Ad info"
-                            >
-                              <Info className="h-4 w-4 text-gray-500" />
-                            </button>
-                            <div className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded">
-                              Ad
-                            </div>
-                          </div>
+
+                  // Reels block
+                  const reelsBlock = reels.length > 0 ? (
+                    <div key={`reels-${batchIndex}`} className="mb-4">
+                      <div className="flex items-center justify-between mb-2 px-2">
+                        <div className="flex items-center gap-2">
+                          <Video className="h-5 w-5 text-red-500" />
+                          <span className="font-bold text-base">Shorts</span>
+                          <span className="text-xs px-2 py-0.5 bg-red-100 text-red-700 rounded-full">One-Studio</span>
                         </div>
+                        <button onClick={() => navigate('/studio')} className="text-sm text-blue-500 font-medium">View All</button>
                       </div>
 
-                      {/* Ad content */}
-                      <div className="p-4">
-                        <h3 className="font-bold text-lg mb-2">{adCampaign.creative?.title || adCampaign.name}</h3>
-                        <p className="text-gray-700 dark:text-gray-300 mb-4">{adCampaign.creative?.description || `Sponsored by ${adCampaign.advertiser_name}`}</p>
-                        
-                        {adCampaign.creative?.image_url && (
-                          <div className="mb-4 rounded-lg overflow-hidden cursor-pointer" onClick={() => handleAdClick(adCampaign)}>
-                            <img 
-                              src={adCampaign.creative.image_url} 
-                              alt={adCampaign.creative.title}
-                              className="w-full h-auto max-h-96 object-cover hover:scale-105 transition-transform duration-300"
-                            />
-                          </div>
-                        )}
-                        
-                        {adCampaign.creative?.video_url && (
-                          <div className="mb-4 rounded-lg overflow-hidden">
+                      {/* Mobile: horizontal scroll */}
+                      <div className="sm:hidden flex space-x-2 overflow-x-auto pb-2 px-2" ref={mobileReelsRef}>
+                        {mobileVisibleReels.map((reel, i) => (
+                          <div key={`m-${reel.id}-${i}`} className="w-28 flex-shrink-0 aspect-[9/16] rounded-lg overflow-hidden relative cursor-pointer active:scale-95 transition-transform" onClick={() => handleReelClick(reel, i)}>
                             <video 
-                              src={adCampaign.creative.video_url}
-                              className="w-full rounded-lg"
-                              controls
-                              playsInline
+                              id={reel.id} 
+                              ref={(el) => { 
+                                if (el) {
+                                  videoRefs.current.set(reel.id, el);
+                                  el.muted = true;
+                                  el.autoplay = false;
+                                  el.playsInline = true;
+                                  el.addEventListener('canplay', () => {});
+                                } else {
+                                  videoRefs.current.delete(reel.id);
+                                }
+                              }} 
+                              src={reel.video_url} 
+                              muted={true}
+                              playsInline={true}
+                              className="w-full h-full object-cover" 
+                              onTimeUpdate={(e) => handleTimeUpdate(reel.id, e)}
+                              onLoadedData={() => {
+                                const video = videoRefs.current.get(reel.id);
+                                if (video && playingReelId === reel.id) {
+                                  video.play().catch(console.warn);
+                                }
+                              }}
                             />
+                            <div className="absolute top-2 right-2 bg-black/50 rounded-full p-1">
+                              {playingReelId === reel.id ? (
+                                <Pause className="h-3 w-3 text-white" />
+                              ) : (
+                                <Play className="h-3 w-3 text-white" />
+                              )}
+                            </div>
+                            <div className="absolute bottom-2 left-2 right-2 text-white text-xs">
+                              <div className="flex items-center justify-between">
+                                <span>{reel.user?.username || 'User'}</span>
+                                <span>{reel.duration || 30}s</span>
+                              </div>
+                            </div>
                           </div>
-                        )}
-                        
-                        {/* Call to Action button */}
-                        <button
-                          onClick={() => handleAdClick(adCampaign)}
-                          className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold py-3 px-6 rounded-lg hover:opacity-90 transition-opacity"
-                        >
-                          {adCampaign.creative?.cta_text || 'Learn More'}
-                          <ExternalLink className="h-4 w-4" />
+                        ))}
+                      </div>
+
+                      {/* Desktop: horizontal scroll */}
+                      <div className="hidden sm:block">
+                        <div className="flex space-x-2 overflow-x-auto pb-2 px-2" ref={desktopReelsRef}>
+                          {desktopVisibleReels.map((reel, i) => (
+                            <div key={`d-${reel.id}-${i}`} className="w-48 flex-shrink-0 aspect-[9/16] rounded-lg overflow-hidden relative cursor-pointer active:scale-95 transition-transform group" onClick={() => handleReelClick(reel, i)}>
+                              <video 
+                                id={reel.id} 
+                                ref={(el) => { 
+                                  if (el) {
+                                    videoRefs.current.set(reel.id, el);
+                                    el.muted = true;
+                                    el.autoplay = false;
+                                    el.playsInline = true;
+                                    el.loop = true;
+                                  } else {
+                                    videoRefs.current.delete(reel.id);
+                                  }
+                                }} 
+                                src={reel.video_url} 
+                                muted={true}
+                                playsInline={true}
+                                loop={true}
+                                className="w-full h-full object-cover" 
+                                onTimeUpdate={(e) => handleTimeUpdate(reel.id, e)}
+                                onLoadedData={() => {
+                                  const video = videoRefs.current.get(reel.id);
+                                  if (video && playingReelId === reel.id) {
+                                    video.play().catch(console.warn);
+                                  }
+                                }}
+                                onMouseEnter={() => {
+                                  if (i >= 4) {
+                                    const video = videoRefs.current.get(reel.id);
+                                    if (video && video.paused) {
+                                      playOnlyVideo(reel.id, video);
+                                    }
+                                  }
+                                }}
+                                onMouseLeave={() => {
+                                  if (i >= 4) {
+                                    const video = videoRefs.current.get(reel.id);
+                                    if (video) {
+                                      video.pause();
+                                      video.currentTime = 0;
+                                      if (playingReelId === reel.id) {
+                                        setPlayingReelId(null);
+                                      }
+                                    }
+                                  }
+                                }}
+                              />
+                              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                              <div className="absolute top-2 right-2 bg-black/60 rounded-full p-1.5">
+                                {playingReelId === reel.id ? (
+                                  <Pause className="h-3 w-3 text-white" />
+                                ) : (
+                                  <Play className="h-3 w-3 text-white" />
+                                )}
+                              </div>
+                              <div className="absolute bottom-2 left-2 right-2 text-white text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-semibold truncate">{reel.user?.username || 'User'}</span>
+                                  <span>{reel.duration || 30}s</span>
+                                </div>
+                                {reel.caption && (
+                                  <p className="truncate text-xs mt-1">{reel.caption}</p>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null;
+
+                  // Products block after AD
+                  const productsBlock = storeProducts.length > 0 ? (
+                    <div key={`products-${batchIndex}`} className="mb-6">
+                      <div className="flex items-center justify-between mb-3 px-2">
+                        <div className="flex items-center gap-2">
+                          <ShoppingBag className="h-5 w-5 text-blue-600" />
+                          <span className="font-bold text-base">Products</span>
+                          <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded-full">The Square</span>
+                        </div>
+                        <button onClick={() => navigate('/square')} className="text-sm text-blue-500 font-medium">
+                          Browse All
                         </button>
                       </div>
 
-                      {/* Ad footer */}
-                      <div className="px-4 py-3 border-t text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/50">
-                        <div className="flex justify-between items-center">
-                          <span>Advertisement</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs">💰 Bid: ${adCampaign.bid_amount.toFixed(2)}</span>
+                      {/* Products horizontal scroll */}
+                      {productsLoading ? (
+                        <div className="flex space-x-3 overflow-x-auto pb-4 px-2">
+                          {[...Array(6)].map((_, i) => renderProductSkeleton())}
+                        </div>
+                      ) : (
+                        <>
+                          {/* Mobile: Show 3 products per row */}
+                          <div className="sm:hidden flex space-x-3 overflow-x-auto pb-4 px-2">
+                            {storeProducts.slice(0, 6).map((product) => (
+                              <div
+                                key={product.id}
+                                className="w-[calc(33.333%-0.5rem)] min-w-[calc(33.333%-0.5rem)] flex-shrink-0 rounded-xl overflow-hidden bg-white dark:bg-gray-800 shadow-sm hover:shadow-md transition-shadow cursor-pointer active:scale-95 active:opacity-90 transition-all border border-gray-100 dark:border-gray-700"
+                                onClick={() => handleProductClick(product)}
+                              >
+                                {/* Product Image */}
+                                <div className="relative aspect-square overflow-hidden">
+                                  <img
+                                    src={product.images && product.images.length > 0 
+                                      ? product.images[0] 
+                                      : 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400&h=400&fit=crop'
+                                    }
+                                    alt={product.title}
+                                    className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
+                                  />
+                                  {product.is_deals_of_day && (
+                                    <div className="absolute top-2 left-2 bg-yellow-500 text-white text-xs px-2 py-1 rounded-full">
+                                      Deal of Day
+                                    </div>
+                                  )}
+                                  {product.is_on_sale && (
+                                    <div className="absolute top-2 right-2 bg-red-600 text-white text-xs px-2 py-1 rounded-full">
+                                      {product.sale_percentage ? `${product.sale_percentage}% OFF` : 'Sale'}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Product Info */}
+                                <div className="p-3">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                                      {product.store?.store_name || 'Seller'}
+                                    </span>
+                                    {product.views && product.views > 0 && (
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-xs font-medium">{product.views}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                  
+                                  <h3 className="font-semibold text-sm mb-1 truncate">{product.title}</h3>
+                                  
+                                  <div className="flex items-center gap-2">
+                                    {product.is_on_sale && product.sale_price ? (
+                                      <>
+                                        <span className="font-bold text-red-600">{formatCurrency(product.sale_price, product.store?.base_currency)}</span>
+                                        {product.original_price && (
+                                          <span className="text-xs text-gray-500 line-through">{formatCurrency(product.original_price, product.store?.base_currency)}</span>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <span className="font-bold">{formatCurrency(product.price, product.store?.base_currency)}</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Desktop: Show all products */}
+                          <div className="hidden sm:flex space-x-4 overflow-x-auto pb-4 px-2">
+                            {storeProducts.map((product) => (
+                              <div
+                                key={product.id}
+                                className="w-44 flex-shrink-0 rounded-xl overflow-hidden bg-white dark:bg-gray-800 shadow-sm hover:shadow-md transition-shadow cursor-pointer active:scale-95 active:opacity-90 transition-all border border-gray-100 dark:border-gray-700"
+                                onClick={() => handleProductClick(product)}
+                              >
+                                {/* Product Image */}
+                                <div className="relative aspect-square overflow-hidden">
+                                  <img
+                                    src={product.images && product.images.length > 0 
+                                      ? product.images[0] 
+                                      : 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400&h=400&fit=crop'
+                                    }
+                                    alt={product.title}
+                                    className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
+                                  />
+                                  {product.is_deals_of_day && (
+                                    <div className="absolute top-2 left-2 bg-yellow-500 text-white text-xs px-2 py-1 rounded-full">
+                                      Deal of Day
+                                    </div>
+                                  )}
+                                  {product.is_on_sale && (
+                                    <div className="absolute top-2 right-2 bg-red-600 text-white text-xs px-2 py-1 rounded-full">
+                                      {product.sale_percentage ? `${product.sale_percentage}% OFF` : 'Sale'}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Product Info */}
+                                <div className="p-3">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                                      {product.store?.store_name || 'Seller'}
+                                    </span>
+                                    {product.views && product.views > 0 && (
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-xs font-medium">{product.views} views</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                  
+                                  <h3 className="font-semibold text-sm mb-1 truncate">{product.title}</h3>
+                                  
+                                  <div className="flex items-center gap-2">
+                                    {product.is_on_sale && product.sale_price ? (
+                                      <>
+                                        <span className="font-bold text-red-600">{formatCurrency(product.sale_price, product.store?.base_currency)}</span>
+                                        {product.original_price && (
+                                          <span className="text-xs text-gray-500 line-through">{formatCurrency(product.original_price, product.store?.base_currency)}</span>
+                                        )}
+                                      </>
+                                    ) : (
+                                      <span className="font-bold">{formatCurrency(product.price, product.store?.base_currency)}</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : null;
+
+                  // Render reels -> AD -> products
+                  return (
+                    <div key={`slot-${batchIndex}`} className="space-y-4">
+                      {reelsBlock}
+                      
+                      {/* AD Section - Mobile App Style */}
+                      <div className="border-0 rounded-2xl overflow-hidden bg-gradient-to-br from-blue-50 to-white dark:from-gray-800 dark:to-gray-900 shadow-sm mx-2" key={`ad-${adCampaign.id}-${batchIndex}`}>
+                        {/* Ad header */}
+                        <div className="p-4 border-b border-gray-100 dark:border-gray-700">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center">
+                              <div className="w-9 h-9 rounded-full bg-gradient-to-r from-blue-400 to-purple-500 flex items-center justify-center text-white font-bold mr-3">
+                                {adCampaign.advertiser_name.charAt(0)}
+                              </div>
+                              <div>
+                                <div className="font-semibold text-sm">{adCampaign.advertiser_name}</div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400">Sponsored</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => handleAdInfo(adCampaign)} className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" title="Ad info">
+                                <Info className="h-4 w-4 text-gray-500" />
+                              </button>
+                              <div className="text-xs px-2.5 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full font-medium">
+                                Ad
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Ad content */}
+                        <div className="p-4">
+                          <h3 className="font-bold text-base mb-2">{adCampaign.creative?.title || adCampaign.name}</h3>
+                          <p className="text-gray-700 dark:text-gray-300 text-sm mb-4">{adCampaign.creative?.description || `Sponsored by ${adCampaign.advertiser_name}`}</p>
+                          
+                          {adCampaign.creative?.image_url && (
+                            <div 
+                              className="mb-4 rounded-xl overflow-hidden cursor-pointer active:opacity-90 transition-opacity"
+                              onClick={() => handleAdClick(adCampaign)}
+                            >
+                              <img 
+                                src={adCampaign.creative.image_url} 
+                                alt={adCampaign.creative.title} 
+                                className="w-full h-auto object-cover"
+                              />
+                            </div>
+                          )}
+                          
+                          {adCampaign.creative?.video_url && (
+                            <div className="mb-4 rounded-xl overflow-hidden">
+                              <video 
+                                src={adCampaign.creative.video_url} 
+                                className="w-full rounded-lg" 
+                                controls 
+                                playsInline
+                              />
+                            </div>
+                          )}
+                          
+                          <button 
+                            onClick={() => handleAdClick(adCampaign)} 
+                            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold py-3.5 px-6 rounded-xl active:opacity-90 active:scale-95 transition-all text-sm"
+                          >
+                            {adCampaign.creative?.cta_text || 'Learn More'} 
+                            <ExternalLink className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        {/* Ad footer */}
+                        <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400 bg-gray-50/50 dark:bg-gray-800/30">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs">Advertisement</span>
                             {adCampaign.id.includes('fallback') && (
-                              <span className="text-xs text-orange-600">Demo Ad</span>
+                              <span className="text-xs text-orange-600 bg-orange-50 dark:bg-orange-900/20 px-2 py-1 rounded-full">Demo Ad</span>
                             )}
                           </div>
                         </div>
                       </div>
+
+                      {/* Products Section */}
+                      {productsBlock}
                     </div>
                   );
                 })()}
@@ -836,31 +1898,193 @@ const Feed: React.FC = () => {
         )}
       </div>
 
-      {/* Infinite scroll trigger element */}
-      <div ref={loadMoreRef} className="h-2 w-full" />
+      {/* MOBILE APP STYLE: Infinite scroll loading indicator */}
+    
 
-      {isFetchingNextPage && (
-        <div className="flex justify-center py-4">
-          <Loader2 className="h-6 w-6 animate-spin text-gray-500" />
+      {/* Smooth infinite scroll trigger */}
+      <div ref={loadMoreRef} className="h-16 w-full flex items-center justify-center pointer-events-none">
+   
+      </div>
+
+      {/* Desktop-only loading pill (kept for larger viewports if needed) */}
+    
+
+      {/* MOBILE APP STYLE: End of feed indicator (Instagram/TikTok style) */}
+      {!hasNextPage && posts.length > 0 && (
+        <div className="py-8 flex flex-col items-center justify-center">
+          {/* Instagram-style indicator */}
+          <div className="relative w-full max-w-xs">
+            {/* Dashed line */}
+            <div className="flex items-center justify-center">
+              <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 dark:via-gray-600 to-transparent"></div>
+              <div className="px-4">
+                <div className="relative">
+                  {/* Outer circle */}
+                  <div className="w-12 h-12 border-2 border-gray-300 dark:border-gray-600 rounded-full flex items-center justify-center">
+                    {/* Inner checkmark */}
+                    <div className="w-7 h-7 relative">
+                      <div className="absolute top-1/2 left-0 w-1.5 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full transform -translate-y-1/2"></div>
+                      <div className="absolute top-1/2 left-1/3 w-1.5 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full transform -translate-y-1/2"></div>
+                      <div className="absolute top-1/2 left-2/3 w-1.5 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full transform -translate-y-1/2"></div>
+                      <div className="absolute top-1/2 right-0 w-1.5 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full transform -translate-y-1/2"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 dark:via-gray-600 to-transparent"></div>
+            </div>
+            
+            {/* Text */}
+            <div className="text-center mt-5">
+              <p className="text-sm text-gray-600 dark:text-gray-400 font-medium">
+                You're all caught up
+              </p>
+           
+            </div>
+            
+            {/* Back to top button (Instagram-style) */}
+           
+          </div>
         </div>
       )}
 
-      {!hasNextPage && posts.length > 0 && (
-        <div className="flex flex-col items-center gap-2 py-4 text-gray-500 dark:text-gray-400">
-          <span>You're all squared up...</span>
-          <button
-            className="flex items-center gap-1 text-xs text-blue-600 hover:underline focus:outline-none"
-            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            aria-label="Back to top"
-          >
-            <ArrowUp className="h-4 w-4" />
-          </button>
+      {/* Alternative: TikTok-style loading indicator (desktop only) */}
+      {(isFetchingNextPage || isLoadingMore) && (
+        <div className="hidden sm:block py-5">
+          {/* TikTok-style dancing dots */}
+          <div className="flex justify-center items-center gap-2">
+            <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+            <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '100ms' }}></div>
+            <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '200ms' }}></div>
+            <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+          </div>
+          <div className="text-center mt-3">
+            <span className="text-sm text-gray-700 dark:text-gray-200">Loading more</span>
+          </div>
         </div>
+      )}
+
+      {/* Reels Fullscreen Overlay */}
+      {showReelsOverlay && selectedReel && (
+        <>
+          <div className="fixed inset-0 bg-black z-50">
+            {/* Mobile app style top bar */}
+            <div className="absolute top-0 left-0 right-0 z-10 p-4 bg-gradient-to-b from-black/90 to-transparent">
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={handleReelClose}
+                  className="text-white bg-black/60 rounded-full p-2.5 active:scale-95 transition-transform"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                <div className="text-white text-center">
+                  <h2 className="font-bold text-base">Reels</h2>
+                  <p className="text-xs opacity-80">@{selectedReel.user?.username}</p>
+                </div>
+                <button className="text-white bg-black/60 rounded-full p-2.5 active:scale-95 transition-transform">
+                  <MoreVertical className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Video container */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <video
+                src={selectedReel.video_url}
+                autoPlay
+                muted={mutedStates[selectedReel.id]}
+                loop
+                playsInline
+                controls
+                className="max-w-full max-h-full"
+              />
+            </div>
+
+            {/* Mobile app style side controls */}
+            <div className="absolute right-4 top-1/2 transform -translate-y-1/2 z-10 flex flex-col gap-5">
+              <button
+                onClick={() => handleReelLike(selectedReel.id)}
+                className="flex flex-col items-center text-white"
+              >
+                <div className="w-10 h-10 rounded-full bg-black/60 flex items-center justify-center active:scale-95 transition-transform">
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                  </svg>
+                </div>
+                <span className="text-xs mt-1 font-medium">{selectedReel.likes.toLocaleString()}</span>
+              </button>
+
+              <button
+                onClick={(e) => handleReelShare(selectedReel.id, e)}
+                className="flex flex-col items-center text-white"
+              >
+                <div className="w-10 h-10 rounded-full bg-black/60 flex items-center justify-center active:scale-95 transition-transform">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                  </svg>
+                </div>
+                <span className="text-xs mt-1 font-medium">Share</span>
+              </button>
+
+              <button
+                onClick={(e) => handleReelMute(selectedReel.id, e)}
+                className="flex flex-col items-center text-white"
+              >
+                <div className="w-10 h-10 rounded-full bg-black/60 flex items-center justify-center active:scale-95 transition-transform">
+                  {mutedStates[selectedReel.id] ? (
+                    <VolumeX className="w-5 h-5" />
+                  ) : (
+                    <Volume2 className="w-5 h-5" />
+                  )}
+                </div>
+                <span className="text-xs mt-1 font-medium">Sound</span>
+              </button>
+            </div>
+
+            {/* Mobile app style caption area */}
+            <div className="absolute bottom-0 left-0 right-0 z-10 p-5 bg-gradient-to-t from-black/90 to-transparent">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="relative">
+                  <img
+                    src={selectedReel.user?.avatar_url || '/default-avatar.png'}
+                    alt={selectedReel.user?.username}
+                    className="w-9 h-9 rounded-full border-2 border-white"
+                  />
+                  {selectedReel.user?.verified && (
+                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center">
+                      <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-1">
+                    <span className="font-bold text-white text-sm">@{selectedReel.user?.username}</span>
+                  </div>
+                  <p className="text-xs text-gray-300">
+                    {selectedReel.user?.first_name} {selectedReel.user?.last_name}
+                  </p>
+                </div>
+              </div>
+              {selectedReel.caption && (
+                <p className="text-white text-sm mb-2 leading-relaxed">{selectedReel.caption}</p>
+              )}
+              <div className="flex items-center gap-3 text-xs text-gray-300">
+                <span>{selectedReel.views.toLocaleString()} views</span>
+                <span>•</span>
+                <span>{selectedReel.duration}s</span>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {showRepostModal && selectedPost && (
         <RepostModal
-          post={selectedPost}
+          post={selectedPost as any}
           onClose={() => setShowRepostModal(false)}
           onRepost={handleRepostComplete}
         />

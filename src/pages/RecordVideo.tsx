@@ -3,7 +3,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
-import { Camera, CameraOff, Play, X, Maximize2, Minimize2 } from 'lucide-react';
+import { Camera, CameraOff, Play, X, Maximize2, Minimize2, FlipHorizontal2, Share2, Upload } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowLeft } from 'lucide-react';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { supabase } from '@/integrations/supabase/client';
@@ -18,7 +19,7 @@ import {
   isSafariOrIOS 
 } from '@/utils/safariVideoUtils';
 
-const RecordReel = () => {
+const RecordVideo = () => {
   // Category list from Studio.tsx header
   const CATEGORY_OPTIONS = [
     'All',
@@ -46,6 +47,8 @@ const RecordReel = () => {
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
+  const [shareToFeed, setShareToFeed] = useState(false);
+  const [showShareSettings, setShowShareSettings] = useState(false);
   const [timer, setTimer] = useState(90);
   const [isUploading, setIsUploading] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -147,15 +150,21 @@ const RecordReel = () => {
     
     // Use smaller time slices for better Safari compatibility
     const recorder = new MediaRecorder(mediaStream, options);
-    
+
+    // collect chunks locally to avoid stale state in callbacks
+    const localChunks: Blob[] = [];
+
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) setRecordedChunks(prev => [...prev, e.data]);
+      if (e.data && e.data.size > 0) {
+        localChunks.push(e.data);
+      }
     };
-    
+
     recorder.onstop = () => {
       const finalMimeType = mimeType || 'video/mp4';
-      const blob = createSafariCompatibleVideoBlob(recordedChunks, finalMimeType);
+      const blob = createSafariCompatibleVideoBlob(localChunks.length ? localChunks : recordedChunks, finalMimeType);
       const optimizedUrl = createOptimizedVideoURL(blob);
+      setRecordedChunks(localChunks);
       setVideoUrl(optimizedUrl);
       setIsPreviewing(false);
       setIsRecording(false);
@@ -165,7 +174,7 @@ const RecordReel = () => {
         setIsFullscreen(false);
       }
     };
-    
+
     // Start recording with smaller time slices for Safari
     recorder.start(isSafariOrIOS() ? 100 : 250); // Even smaller chunks for Safari
     setMediaRecorder(recorder);
@@ -188,7 +197,23 @@ const RecordReel = () => {
   };
 
   const handleSwitchCamera = () => {
-    setFacingMode(facingMode === 'user' ? 'environment' : 'user');
+    // Toggle facing mode and reinitialize camera stream
+    const next = facingMode === 'user' ? 'environment' : 'user';
+    (async () => {
+      try {
+        // Stop existing tracks
+        if (mediaStream) {
+          mediaStream.getTracks().forEach(t => t.stop());
+        }
+        // Request new stream with desired facingMode
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: next }, audio: true });
+        setMediaStream(stream);
+        if (videoRef.current) videoRef.current.srcObject = stream;
+        setFacingMode(next);
+      } catch (err) {
+        console.error('Failed to switch camera:', err);
+      }
+    })();
   };
 
   const handleCancel = () => {
@@ -298,13 +323,14 @@ const RecordReel = () => {
           channel_id: channel.id,
           video_url: urlData.publicUrl,
           caption: caption.trim(),
+          share_to_feeds: shareToFeed,
           categories: selectedCategories,
           likes: 0,
           views: 0,
           shares: 0,
-          video_hash: videoHash, // FIXED: Now includes video_hash
-          badge_type, // FIXED: Now includes badge_type
-          ...(original_creator_id ? { original_creator_id } : {}), // FIXED: Include original creator if remixed
+          video_hash: videoHash,
+          badge_type,
+          ...(original_creator_id ? { original_creator_id } : {}),
           created_at: new Date().toISOString()
         });
       if (dbError) {
@@ -433,11 +459,11 @@ const RecordReel = () => {
             {countdown === null && (
               <div className="fixed bottom-24 left-0 right-0 flex justify-between items-center px-6 z-50">
                 <button
-                  onClick={handleCancel}
-                  className="bg-white text-red-600 p-4 rounded-full shadow-lg focus:outline-none border-2 border-red-200"
-                  title="Cancel"
+                  onClick={handleSwitchCamera}
+                  className="bg-white text-gray-700 p-4 rounded-full shadow-lg focus:outline-none border-2 border-gray-200"
+                  title="Switch Camera"
                 >
-                  <X className="w-6 h-6" />
+                  <FlipHorizontal2 className="w-6 h-6" />
                 </button>
                 {!isRecording ? (
                   <button
@@ -516,16 +542,90 @@ const RecordReel = () => {
               </div>
               <div className="text-xs text-gray-500 mt-1">Choose up to 3 categories. These determine where your reel appears in Studio.</div>
             </div>
-            <Button
-              onClick={handleUpload}
-              disabled={!caption || !recordedChunks.length || isUploading || selectedCategories.length === 0}
-              className="w-full"
-            >
-              {isUploading ? 'Uploading...' : 'Upload Recording'}
-            </Button>
-            <Button variant="ghost" className="mt-4 w-full" onClick={handleCancel} disabled={isUploading}>
-              Cancel
-            </Button>
+
+            <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
+              {/* Share to Feeds Toggle */}
+              <div className="flex items-center gap-2 bg-accent/50 rounded-lg px-4 py-2 w-full sm:w-auto justify-center sm:justify-start">
+                <Share2 className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Share to Feeds</span>
+                <div className="relative inline-block w-10 h-5 ml-2">
+                  <input
+                    type="checkbox"
+                    checked={shareToFeed}
+                    onChange={e => setShareToFeed(e.target.checked)}
+                    className="sr-only peer"
+                    id="share-toggle-record-video"
+                  />
+                  <label
+                    htmlFor="share-toggle-record-video"
+                    className="absolute cursor-pointer top-0 left-0 right-0 bottom-0 bg-gray-300 dark:bg-gray-700 rounded-full transition-colors peer-checked:bg-primary before:absolute before:content-[''] before:h-3.5 before:w-3.5 before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full before:transition-transform peer-checked:before:translate-x-5"
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-3 w-full sm:w-auto justify-center sm:justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (videoUrl) cleanupVideoURL(videoUrl);
+                    setVideoUrl(null);
+                    setRecordedChunks([]);
+                  }}
+                  className="rounded-full w-full sm:w-auto"
+                >
+                  Discard
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (shareToFeed) {
+                      setShowShareSettings(true);
+                    } else {
+                      handleUpload();
+                    }
+                  }}
+                  disabled={!caption || selectedCategories.length === 0 || isUploading}
+                  className="rounded-full px-8 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg w-full sm:w-auto"
+                  size="lg"
+                >
+                  {isUploading ? (
+                    <span className="flex items-center gap-2">
+                      <Skeleton className="h-4 w-4 rounded-full" />
+                      Uploading...
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-2">
+                      <Upload className="h-4 w-4" />
+                      Upload Reel
+                    </span>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {showShareSettings && (
+              <div className="fixed inset-0 z-[10000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-2xl border border-gray-800 w-full max-w-md max-h-[80vh] overflow-y-auto p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 flex items-center justify-center">
+                        <Upload className="w-5 h-5 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-semibold text-white">Share to Feed</h3>
+                        <p className="text-sm text-gray-400">Customize your feed post</p>
+                      </div>
+                    </div>
+                    <button onClick={() => setShowShareSettings(false)} className="text-gray-400">Close</button>
+                  </div>
+                  <div className="text-sm text-white mb-4">Preview of feed post will appear here.</div>
+                  <div className="flex gap-3 mt-4">
+                    <button onClick={() => { setShowShareSettings(false); setShareToFeed(false); }} className="flex-1 py-3 rounded-xl bg-gray-800 text-white">Skip Feed</button>
+                    <button onClick={() => { setShowShareSettings(false); handleUpload(); }} className="flex-1 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 text-white">Share to Feed</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -537,4 +637,4 @@ const RecordReel = () => {
   );
 }
 
-export default RecordReel;
+export default RecordVideo;

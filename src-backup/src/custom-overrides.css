@@ -1,0 +1,8 @@
+.text-gray-900 {
+    --tw-text-opacity: 1;
+    color: rgb(48 48 49) !important;
+}
+
+.dark .text-gray-900 {
+    color: #e5e7eb !important;
+}

@@ -21,6 +21,8 @@ interface StudioShow {
   is_live: boolean;
   is_active: boolean;
   created_at: string;
+  live_url?: string;
+  show_type?: string;
 }
 
 interface VideoContainerProps {
@@ -80,7 +82,25 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const [modalPlayerDuration, setModalPlayerDuration] = useState(0);
   const [modalAwaitingUserPlay, setModalAwaitingUserPlay] = useState(false);
   const [modalPlayerError, setModalPlayerError] = useState<string | null>(null);
+  const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
+  const [countdownActive, setCountdownActive] = useState(false);
+  const countdownIntervalRef = useRef<number | null>(null);
+  const startTimeoutRef = useRef<number | null>(null);
+  const [showStartPrompt, setShowStartPrompt] = useState(false);
+  const [liveEventActive, setLiveEventActive] = useState(false);
   const [isMobile, setIsMobile] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
+  // Detect whether LiveChat is present on the page so we can ensure the video remains visible above it
+  const [chatVisible, setChatVisible] = useState(false);
+
+  useEffect(() => {
+    const check = () => setChatVisible(Boolean(document.querySelector('[data-livechat]')));
+    check();
+    const mo = new MutationObserver(check);
+    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
+    window.addEventListener('resize', check);
+    return () => { mo.disconnect(); window.removeEventListener('resize', check); };
+  }, []);
+
   const computeItemsPerView = () => {
     if (typeof window === 'undefined') return 2;
     const w = window.innerWidth;
@@ -90,6 +110,64 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     return 4; // desktop-ish (fallback)
   };
   const [mobileItemsPerView, setMobileItemsPerView] = useState<number>(computeItemsPerView());
+
+  // Ensure countdown interval is cleared on unmount
+  useEffect(() => {
+    return () => {
+      if (countdownIntervalRef.current) {
+        window.clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+      if (startTimeoutRef.current) {
+        window.clearTimeout(startTimeoutRef.current);
+        startTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  // Helper to start a countdown for a live item
+  const startCountdown = (ms: number, liveItem: MediaItem, show: StudioShow) => {
+    try {
+      if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
+      setCountdownActive(true);
+      setCountdownSeconds(Math.ceil(ms / 1000));
+      countdownIntervalRef.current = window.setInterval(() => {
+        setCountdownSeconds(prev => {
+          if (!prev) return 0;
+          if (prev <= 1) {
+            if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
+            setCountdownActive(false);
+            setCountdownSeconds(0);
+            setShowStartPrompt(true);
+            setMediaQueue([liveItem]);
+            setQueueIndex(0);
+            setCurrentMedia(liveItem);
+            setLiveEventActive(true);
+            try { sendLiveStartAnalytics(show); } catch (e) {}
+            try { window.dispatchEvent(new CustomEvent('live_event_started', { detail: { show } })); } catch (e) {}
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000) as unknown as number;
+    } catch (err) {
+      console.warn('startCountdown error', err);
+    }
+  };
+
+  const sendLiveStartAnalytics = async (show: StudioShow | null | undefined) => {
+    if (!show) return;
+    try {
+      const url = apiUrl('/api/analytics/live_start');
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ showId: show.id, title: show.title, started_at: new Date().toISOString() })
+      }).catch(() => {});
+    } catch (e) {
+      // swallow analytics errors
+    }
+  };
   
   // keep a ref for the latest time to avoid stale closures when seeking on remount
   const videoCurrentTimeRef = useRef<number>(0);
@@ -111,6 +189,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const [vodEpisodes, setVodEpisodes] = useState<VODEpisode[]>([]);
   const [currentScrollIndex, setCurrentScrollIndex] = useState(0);
   const [isLoadingVOD, setIsLoadingVOD] = useState(false);
+  const [nowTick, setNowTick] = useState(0);
 
   // Mobile catch-up grid renderer and data loader
   const renderMobileCatchUpGrid = () => {
@@ -175,9 +254,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                         <img src={episode.thumbnail_url || episode.show_thumbnail || '/placeholder.svg'} alt={episode.title} className="w-full h-full object-cover" loading="lazy" />
                         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
                         <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">{episode.duration ? formatDuration(episode.duration) : 'N/A'}</div>
-                        <div className="absolute top-2 left-2">
-                          <Badge className="bg-purple-600 text-white text-xs">{displayName}</Badge>
-                        </div>
+                        {/* removed show-name badge to avoid covering thumbnail */}
                       </div>
                       <div className="p-3">
                         <h4 className="text-sm font-semibold text-white mb-1 line-clamp-1">{episode.title}</h4>
@@ -238,7 +315,11 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
     if (isMobile && catchUpOpen) load();
 
-    return () => { mounted = false; controller.abort(); };
+    return () => { 
+      mounted = false; 
+      controller.abort(); 
+      if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
+    };
   }, [isMobile, catchUpOpen]);
 
   // Track horizontal scroll index for indicators
@@ -442,6 +523,14 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     };
   }, []);
 
+  // tick every second to update upcoming events countdown UI
+  useEffect(() => {
+    const t = window.setInterval(() => setNowTick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  
+
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 
   const [shuffledShows, setShuffledShows] = useState<StudioShow[]>([]);
@@ -460,6 +549,37 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     setCurrentShowIndex(0);
     if (typeof onCurrentShowChange === 'function') onCurrentShowChange(0);
   }, [shows]);
+
+  // Auto-select a running live event when its scheduled_time has passed
+  useEffect(() => {
+    try {
+      // Don't override when parent explicitly selected a show
+      if (selectedShowId) return;
+      if (!Array.isArray(shuffledShows) || shuffledShows.length === 0) return;
+      // If a live event is already active we should not switch away
+      if (liveEventActive) return;
+
+      const now = Date.now();
+      let pickIndex = -1;
+      for (let i = 0; i < shuffledShows.length; i++) {
+        const s = shuffledShows[i];
+        if (!s) continue;
+        if (s.is_live) { pickIndex = i; break; }
+        if ((s as any).show_type === 'event' && s.live_url && s.scheduled_time) {
+          const st = new Date(s.scheduled_time).getTime();
+          if (!isNaN(st) && st <= now) { pickIndex = i; break; }
+        }
+      }
+
+      if (pickIndex >= 0 && pickIndex !== currentShowIndex) {
+        console.log('Auto-selecting running live event at index', pickIndex, shuffledShows[pickIndex]?.title);
+        setCurrentShowIndex(pickIndex);
+        if (typeof onCurrentShowChange === 'function') onCurrentShowChange(pickIndex);
+      }
+    } catch (err) {
+      console.warn('Auto-select live event error', err);
+    }
+  }, [shows, nowTick, selectedShowId, liveEventActive, shuffledShows, currentShowIndex, onCurrentShowChange]);
 
   // Accept external currentShowIndex if provided by parent (Feed)
   useEffect(() => {
@@ -488,6 +608,12 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     const minutes = Math.floor(duration / 60);
     const seconds = duration % 60;
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const formatCountdown = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
   // Try common fallback fields for media URL if `video_url` is missing
@@ -608,6 +734,56 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
       if (!currentShow) return;
 
+      // If this is a one-off Live Event with a live_url, prefer the live_url
+      // and handle scheduled start time / countdown behavior.
+      if ((currentShow as any).show_type === 'event' && currentShow.live_url) {
+        try {
+          // clear any previous countdown
+          if (countdownIntervalRef.current) {
+            window.clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
+
+          const startTime = currentShow.scheduled_time ? new Date(currentShow.scheduled_time).getTime() : null;
+          const now = Date.now();
+
+          const liveItem: MediaItem = { id: `live-${currentShow.id}`, type: 'show', title: currentShow.title, video_url: currentShow.live_url || null, thumbnail_url: currentShow.thumbnail_url || null, duration: currentShow.duration, raw: currentShow };
+
+          if (!startTime || now >= startTime) {
+            // start immediately
+            const queue = [liveItem];
+            setMediaQueue(queue);
+            setQueueIndex(0);
+            setCurrentMedia(queue[0]);
+            setLiveEventActive(true);
+            setCountdownActive(false);
+            setCountdownSeconds(null);
+            // Analytics + notify listeners that live started
+            try { sendLiveStartAnalytics(currentShow); } catch (e) {}
+            try { window.dispatchEvent(new CustomEvent('live_event_started', { detail: { show: currentShow } })); } catch (e) {}
+            return;
+          }
+
+          const msUntilStart = startTime - now;
+          const fiveMin = 5 * 60 * 1000;
+
+          // If start is within 5 minutes, begin countdown now
+          if (msUntilStart <= fiveMin) {
+            startCountdown(msUntilStart, liveItem, currentShow);
+            return;
+          }
+
+          // If start is further out, schedule a timeout to begin the 5-minute countdown
+          const timeToCountdown = msUntilStart - fiveMin;
+          if (startTimeoutRef.current) { window.clearTimeout(startTimeoutRef.current); startTimeoutRef.current = null; }
+          startTimeoutRef.current = window.setTimeout(() => {
+            // begin a 5-minute countdown
+            startCountdown(fiveMin, liveItem, currentShow);
+          }, timeToCountdown) as unknown as number;
+        } catch (err) {
+          console.warn('Live event handling error', err);
+        }
+      }
       try {
         // try preferred API route
         const url = apiUrl(`/api/shows/${currentShow.id}/episodes?limit=200`);
@@ -662,6 +838,36 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     return () => { mounted = false; controller.abort(); };
   }, [currentShow]);
 
+  // Clear or schedule clearing of liveEventActive when event ends or when show changes
+  useEffect(() => {
+    if (!currentShow) {
+      setLiveEventActive(false);
+      return;
+    }
+
+    // If the current show is not an event, ensure the flag is false
+    if ((currentShow as any).show_type !== 'event') {
+      setLiveEventActive(false);
+      return;
+    }
+
+    // If there's an end_time, schedule clearing when it passes
+    if (currentShow.end_time) {
+      try {
+        const endTs = new Date(currentShow.end_time).getTime();
+        const now = Date.now();
+        if (now >= endTs) {
+          setLiveEventActive(false);
+          return;
+        }
+        const id = window.setTimeout(() => setLiveEventActive(false), endTs - now) as unknown as number;
+        return () => { window.clearTimeout(id); };
+      } catch (err) {
+        setLiveEventActive(false);
+      }
+    }
+  }, [currentShow]);
+
   // Keep currentMedia in sync with queueIndex/mediaQueue
   useEffect(() => {
     if (!mediaQueue || mediaQueue.length === 0) {
@@ -693,6 +899,12 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   }, []);
 
   const moveToNextShow = () => {
+    // Prevent automatic advance while a live event is active
+    if (liveEventActive) {
+      console.log('moveToNextShow blocked: live event active');
+      return;
+    }
+
     const nextIndex = (currentShowIndex + 1) % sortedShows.length;
     setCurrentShowIndex(nextIndex);
     if (typeof onCurrentShowChange === 'function') onCurrentShowChange(nextIndex);
@@ -702,6 +914,11 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     // If there is a queue for this show, advance within it.
     // If the show's scheduled `end_time` hasn't passed, loop within the queue.
     try {
+      // If a live event is active, do not automatically advance to the next show
+      if (liveEventActive) {
+        console.log('advanceQueueOrNextShow blocked: live event active');
+        return;
+      }
       const now = Date.now();
       const endTime = currentShow && currentShow.end_time ? new Date(currentShow.end_time).getTime() : null;
 
@@ -1360,7 +1577,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             top: 0,
             left: 0,
             width: '100%',
-            height: '100%'
+            height: '100%',
+            zIndex: chatVisible ? 60 : undefined
           }}
         />
       );
@@ -1380,7 +1598,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             top: 0,
             left: 0,
             width: '100%',
-            height: '100%'
+            height: '100%',
+            zIndex: chatVisible ? 60 : undefined
           }}
         />
       );
@@ -1408,7 +1627,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             left: 0,
             width: '100%',
             height: '100%',
-            objectFit: 'cover'
+            objectFit: 'cover',
+            zIndex: chatVisible ? 60 : undefined
           }}
           onLoadedMetadata={() => {
             // Restore video time if transitioning between modes (with retries)
@@ -1648,10 +1868,10 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
   return (
     <div ref={videoContainerRef} className={videoWrapperClass} style={videoWrapperStyle}>
-      <Card className={isFullscreen ? "w-full h-full m-0 p-0 bg-transparent border-none shadow-none" : "mb-4"}>
+      <Card className={isFullscreen ? "w-full h-full m-0 p-0 bg-transparent border-none shadow-none" : "mb-4 shadow-md dark:shadow-none"}>
         <CardContent className={isFullscreen ? "p-0 w-full h-full" : "p-0"}>
           <div className={isFullscreen ? "relative w-full h-full" : "relative aspect-video rounded-lg overflow-hidden bg-black"}>
-            {currentShow?.video_url ? (
+            {currentMedia?.video_url || currentShow?.video_url ? (
               renderVideoPlayer(isFullscreen)
             ) : currentShow?.thumbnail_url ? (
               <div className="relative w-full h-full">
@@ -1719,6 +1939,43 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                 </div>
               )}
 
+              {/* Countdown banner for scheduled Live Events */}
+              {countdownActive && countdownSeconds !== null && (
+                <div className={`absolute top-4 right-4 z-${isFullscreen ? '20' : '10'} pointer-events-auto`}>
+                  <div className="flex items-center space-x-2 bg-yellow-500 text-black px-3 py-1 rounded-full">
+                    <Clock className="w-4 h-4" />
+                    <span className="font-semibold">Live starts in {formatCountdown(countdownSeconds)}</span>
+                  </div>
+                </div>
+              )}
+              {/* Prompt to open live when it starts (user click may be required to autoplay/unmute) */}
+              {showStartPrompt && (
+                <div className={`absolute top-4 right-4 z-${isFullscreen ? '20' : '10'} pointer-events-auto`}>
+                  <div className="flex items-center space-x-2 bg-green-600 text-white px-3 py-1 rounded-full">
+                    <span className="font-semibold">Live has started</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowStartPrompt(false);
+                        // Try to unmute and play
+                        try {
+                          if (videoRef.current) {
+                            videoRef.current.muted = false;
+                            videoRef.current.play().catch(() => {});
+                          }
+                          if (youtubePlayerRef.current && youtubePlayerRef.current.playVideo) {
+                            try { youtubePlayerRef.current.unMute(); youtubePlayerRef.current.playVideo(); } catch (e) {}
+                          }
+                        } catch (err) {}
+                      }}
+                      className="ml-2 bg-white text-black px-3 py-1 rounded text-sm font-semibold"
+                    >
+                      Watch Live
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {currentShow && (
                 <div className={`absolute bottom-4 left-4 px-3 py-1 rounded-full text-sm font-medium z-${isFullscreen ? '20' : '10'} ${getTimeStatus(currentShow).className} pointer-events-auto`}>
                   {currentShow.is_live && <Eye className="inline w-4 h-4 mr-1" />}
@@ -1744,7 +2001,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
               </div>
 
               {/* Mute toggle for YouTube in overlays */}
-              {isYouTubeUrl(currentShow?.video_url || '') && (
+              {isYouTubeUrl(currentMedia?.video_url || currentShow?.video_url || '') && (
                 <button
                   onClick={(e) => { e.stopPropagation(); handleMuteToggle(); }}
                   className={`absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full transition-colors z-${isFullscreen ? '20' : '10'} pointer-events-auto`}
@@ -1784,6 +2041,35 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                     </div>
                   </div>
                 )}
+                {/* Upcoming live event (single compact pill under description) */}
+                {(() => {
+                  if (!Array.isArray(shows)) return null;
+                  const upcoming = shows
+                    .filter(s => s.show_type === 'event' && s.scheduled_time)
+                    .map(s => ({ show: s, startsIn: Math.max(0, Math.ceil((new Date(s.scheduled_time!).getTime() - Date.now()) / 1000)) }))
+                    .filter(x => x.startsIn > 0)
+                    .sort((a, b) => a.startsIn - b.startsIn);
+                  if (upcoming.length === 0) return null;
+                  const next = upcoming[0].show as StudioShow;
+                  const startsIn = upcoming[0].startsIn;
+                  // If the next upcoming is the currently playing show and it's live, hide the pill
+                  const showIsNowPlaying = currentShow && String(currentShow.id) === String(next.id) && (currentShow.is_live || (currentShow.scheduled_time && new Date(currentShow.scheduled_time).getTime() <= Date.now()));
+                  if (showIsNowPlaying) return null;
+                  return (
+                    <div className="mt-3">
+                      <div className="inline-flex items-center gap-3 bg-gradient-to-r from-indigo-600 to-pink-500 text-white px-3 py-2 rounded-lg shadow-md">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-md bg-white/20 flex items-center justify-center text-sm font-semibold">{next.title?.substring(0,1) || 'E'}</div>
+                          <div className="text-sm font-semibold">{next.title}</div>
+                        </div>
+                        <div className="text-xs bg-white/20 px-2 py-1 rounded">
+                          <Clock className="inline w-4 h-4 mr-1" />
+                          {startsIn > 3600 ? `${Math.ceil(startsIn/3600)}h` : formatCountdown(startsIn)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
                 {/* IMPROVED CATCH UP BUTTON - matches description badge height */}
                 <div className="flex items-center">
                   <button
@@ -1836,13 +2122,19 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                       <h2 className="text-2xl font-bold text-white">Catch Up</h2>
                       <p className="text-sm text-gray-400 mt-1">Watch all past shows you've missed</p>
                     </div>
-                    <button
-                      onClick={() => setCatchUpOpen(false)}
-                      className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded-lg"
-                      aria-label="Close modal"
-                    >
-                      <X size={24} />
-                    </button>
+                    <div className="flex items-center space-x-4">
+                      {/* Logo: white for dark mode, dark for light mode */}
+                      <div className="w-36 h-10 flex items-center justify-end">
+                        <img src="/uploads/one%20studio-white.png" alt="oneStudio" className="h-8 object-contain" />
+                      </div>
+                      <button
+                        onClick={() => setCatchUpOpen(false)}
+                        className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded-lg"
+                        aria-label="Close modal"
+                      >
+                        <X size={24} />
+                      </button>
+                    </div>
                   </div>
                 </div>
 

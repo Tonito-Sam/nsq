@@ -4,6 +4,7 @@ import axios from 'axios';
 import { extractHashtagsFromText as extractHashtagsUtil, escapeRegExp } from '@/utils/hashtagUtils';
 import keywordExtractor from 'keyword-extractor';
 import Sentiment from 'sentiment';
+import { Skeleton } from '@/components/ui/skeleton';
 // --- AI Helpers ---
 
 // Simple spam keywords list (used by isSpam)
@@ -114,6 +115,7 @@ const customThreatWords = [
   'murder', 'murdered', 'murdering', 'kill', 'killed', 'killing', 'stab', 'stabbed', 'stabbing', 'assassinate', 'assassinated', 'assassinating', 'slaughter', 'slaughtered', 'slaughtering', 'execute', 'executed', 'behead', 'beheaded', 'beheading', 'decapitate', 'decapitated', 'decapitating', 'strangle', 'strangled', 'strangling', 'shoot', 'shot', 'shooting', 'hang', 'hanged', 'hanging', 'lynch', 'lynched', 'lynching', 'poison', 'poisoned', 'poisoning', 'drown', 'drowned', 'drowning', 'suffocate', 'suffocated', 'suffocating', 'burn alive', 'burned alive', 'burning alive', 'torture', 'tortured', 'torturing', 'massacre', 'massacred', 'massacring', 'suicide', 'suicidal', 'homicide', 'homicidal', 'manslaughter', 'genocide', 'genocidal', 'exterminate', 'exterminated', 'exterminating', 'eliminate', 'eliminated', 'eliminating', 'terminate', 'terminated', 'terminating', 'butcher', 'butchered', 'butchering', 'bludgeon', 'bludgeoned', 'bludgeoning', 'maim', 'maimed', 'maiming', 'disembowel', 'disemboweled', 'disemboweling', 'disfigure', 'disfigured', 'disfiguring', 'rape', 'raped', 'raping', 'abduct', 'abducted', 'abducting', 'kidnap', 'kidnapped', 'kidnapping', 'molest', 'molested', 'molesting', 'abuse', 'abused', 'abusing', 'assault', 'assaulted', 'assaulting', 'batter', 'battered', 'battering', 'beat', 'beaten', 'beating', 'threaten', 'threatened', 'threatening', 'terrorize', 'terrorized', 'terrorizing', 'violate', 'violated', 'violating'
 ];
 leoProfanity.add(customThreatWords);
+import '@tensorflow/tfjs';
 import * as nsfwjs from 'nsfwjs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -186,11 +188,29 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   // NSFWJS model state
   const [nsfwModel, setNsfwModel] = useState<nsfwjs.NSFWJS | null>(null);
   
-  // Load NSFWJS model once
+  // Load NSFWJS model once with robust fallbacks and error handling
   useEffect(() => {
-    if (!nsfwModel) {
-      nsfwjs.load().then(setNsfwModel);
-    }
+    let mounted = true;
+    const loadModel = async () => {
+      try {
+        // Try the default loader (works when the bundle includes the model)
+        const model = await nsfwjs.load();
+        if (mounted) setNsfwModel(model);
+      } catch (err) {
+        // If default load fails (common with some bundlers), try CDN-hosted model files
+        console.warn('nsfwjs default load failed, trying CDN model path', err);
+        try {
+          const model = await nsfwjs.load('https://unpkg.com/nsfwjs@4.2.1/dist/model/');
+          if (mounted) setNsfwModel(model);
+        } catch (err2) {
+          console.error('Could not load nsfwjs model:', err2);
+          if (mounted) setNsfwModel(null);
+        }
+      }
+    };
+
+    if (!nsfwModel) loadModel();
+    return () => { mounted = false; };
   }, [nsfwModel]);
 
   const { user } = useAuth();
@@ -1324,7 +1344,15 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       reader.onload = async (e) => {
         const img = new window.Image();
         img.onload = async () => {
-          const predictions = await nsfwModel.classify(img);
+          let predictions: any = null;
+          try {
+            predictions = await nsfwModel.classify(img);
+          } catch (err) {
+            console.error('nsfwjs classify error (image)', err);
+            resolve(false);
+            return;
+          }
+
           // Evaluate predictions with stricter rules to avoid false positives.
           // Only block when porn/hentai probabilities are high. "Sexy" alone
           // often flags non-nude images (swimwear, cleavage, short sleeves),
@@ -1385,7 +1413,15 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
           const img = new window.Image();
           img.src = canvas.toDataURL();
           await new Promise(r => { img.onload = r; });
-          const predictions = await nsfwModel.classify(img);
+          let predictions: any = null;
+          try {
+            predictions = await nsfwModel.classify(img);
+          } catch (err) {
+            console.error('nsfwjs classify error (video frame)', err);
+            // don't bail out of the entire video scan; treat this frame as non-nsfw and continue
+            continue;
+          }
+
           const probs: Record<string, number> = {};
           (predictions || []).forEach((p: any) => { probs[p.className] = p.probability; });
           const porn = probs['Porn'] || 0;
@@ -1964,7 +2000,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
           {/* Voice-to-Text - Enhanced */}
           <div className="flex items-center justify-between p-3 bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 rounded-xl">
             <div className="flex items-center space-x-3">
-              <Button
+                <Button
                 type="button"
                 size="sm"
                 variant={isVoiceToText || speechToText.listening ? 'default' : 'outline'}
@@ -1980,7 +2016,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
                 disabled={isPosting}
                 className={`transition-all duration-200 ${
                   speechToText.listening 
-                    ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse' 
+                    ? 'bg-red-500 hover:bg-red-600 text-white' 
                     : 'bg-purple-600 hover:bg-purple-700 text-white'
                 }`}
               >
@@ -1991,7 +2027,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
               </Button>
               {speechToText.listening && (
                 <div className="flex items-center space-x-2">
-                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                  <Skeleton className="w-2 h-2 rounded-full bg-red-500" />
                   <span className="text-sm text-red-600 dark:text-red-400 font-medium">
                     Listening...
                   </span>

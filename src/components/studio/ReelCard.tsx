@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
+import type { MutableRefObject } from "react";
 // --- OUTRO animation styles (from Studio.tsx) ---
 const outroStyles = `
 @keyframes scale-in {
@@ -45,16 +46,26 @@ import {
   VideoIcon,
   Radio,
   Settings,
-  Users
+  Users,
+  ExternalLink,
+  Calendar,
+  Globe,
+  Mail,
+  Link as LinkIcon,
+  MapPin,
+  UserPlus,
+  Check,
+  X,
+  MoreVertical
 } from "lucide-react";
 
 import { ENABLE_LIVE } from '@/config/featureFlags';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/hooks/useAuth';
 
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { ProfileModal } from "./ProfileModal";
 import CommentsSection from "./CommentsSection";
 import VideoShareModal from './VideoShareModal';
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -69,6 +80,10 @@ type StudioReelVideo = ReelVideo & {
   title?: string;
   description?: string;
   subscriber_count?: number;
+  channel_description?: string;
+  channel_website?: string;
+  channel_location?: string;
+  channel_email?: string;
 };
 
 interface ReelCardProps {
@@ -83,7 +98,304 @@ interface ReelCardProps {
   userData?: any; // Pass userData as prop
   // When true, hide studio-level controls like the Go Live button regardless of feature flag
   hideLive?: boolean;
+  // Optional callback to expose the internal video element to parent components
+  videoRef?: (el: HTMLVideoElement | null) => void;
 }
+
+// Enhanced ProfileModal Component
+interface ProfileModalProps {
+  creator: { name: string; avatar_url?: string };
+  channelName?: string;
+  subscriberCount: number;
+  isFollowing: boolean;
+  onFollow: () => void;
+  channelId?: string;
+  userId?: string;
+  channelDescription?: string;
+  channelWebsite?: string;
+  channelLocation?: string;
+  channelEmail?: string;
+  children: React.ReactNode;
+}
+
+const ProfileModal = ({
+  creator,
+  channelName,
+  subscriberCount,
+  isFollowing,
+  onFollow,
+  channelId,
+  userId,
+  channelDescription,
+  channelWebsite,
+  channelLocation,
+  channelEmail,
+  children
+}: ProfileModalProps) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isSubscribed, setIsSubscribed] = useState(isFollowing);
+  const [localSubscriberCount, setLocalSubscriberCount] = useState(subscriberCount);
+  const [videosCount, setVideosCount] = useState<number | null>(null);
+  const [videosViews, setVideosViews] = useState<number | null>(null);
+  const navigate = useNavigate();
+
+  const handleSubscribe = async () => {
+    // For now, just navigate to channel page
+    // The actual subscription will happen on the channel page
+    if (channelId) {
+      navigate(`/studio/channel/${channelId}`);
+    } else if (userId) {
+      navigate(`/studio/channel/user/${userId}`);
+    }
+    setIsOpen(false);
+  };
+
+  const handleViewChannel = () => {
+    if (channelId) {
+      navigate(`/studio/channel/${channelId}`);
+    } else if (userId) {
+      navigate(`/studio/channel/user/${userId}`);
+    }
+    setIsOpen(false);
+  };
+
+  const handleShareProfile = () => {
+    const url = channelId 
+      ? `${window.location.origin}/studio/channel/${channelId}`
+      : `${window.location.origin}/studio/channel/user/${userId}`;
+    
+    navigator.clipboard.writeText(url).then(() => {
+      // You could add a toast notification here
+      console.log('Profile URL copied to clipboard');
+    });
+  };
+
+  // Fetch channel stats (videos count and total views) when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const fetchStats = async () => {
+      try {
+        if (channelId) {
+          // get videos list (limited) and sum views
+          const { data } = await supabase
+            .from('studio_videos')
+            .select('id, views')
+            .eq('channel_id', channelId)
+            .order('created_at', { ascending: false })
+            .limit(1000);
+
+          if (data) {
+            setVideosCount(data.length);
+            const total = data.reduce((s: number, v: any) => s + (v.views || 0), 0);
+            setVideosViews(total);
+          }
+
+          // fetch subscriber count
+          try {
+            const { count } = await supabase
+              .from('studio_channel_subscribers')
+              .select('*', { head: true, count: 'exact' })
+              .eq('channel_id', channelId);
+            if (typeof count === 'number') setLocalSubscriberCount(count);
+          } catch (e) {
+            console.error('[ProfileModal] failed to fetch subscriber count', e);
+          }
+        } else if (userId) {
+          const { data } = await supabase
+            .from('studio_videos')
+            .select('id, views')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(1000);
+
+          if (data) {
+            setVideosCount(data.length);
+            const total = data.reduce((s: number, v: any) => s + (v.views || 0), 0);
+            setVideosViews(total);
+          }
+
+          // fetch subscriber count by user -> channel mapping
+          try {
+            // Attempt to find channel for this user then count subscribers
+            const { data: channelForUser } = await supabase
+              .from('studio_channels')
+              .select('id')
+              .eq('user_id', userId)
+              .single();
+            if (channelForUser?.id) {
+              const { count } = await supabase
+                .from('studio_channel_subscribers')
+                .select('*', { head: true, count: 'exact' })
+                .eq('channel_id', channelForUser.id);
+              if (typeof count === 'number') setLocalSubscriberCount(count);
+            }
+          } catch (e) {
+            console.error('[ProfileModal] failed to fetch subscriber count for user channel', e);
+          }
+        }
+      } catch (e) {
+        console.error('[ProfileModal] failed to fetch channel stats', e);
+      }
+    };
+
+    fetchStats();
+  }, [isOpen, channelId, userId]);
+
+  return (
+    <>
+      {/* Trigger */}
+      <div onClick={() => setIsOpen(true)} className="cursor-pointer">
+        {children}
+      </div>
+
+      {/* Modal */}
+      {isOpen && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div 
+            className="relative w-full max-w-md mx-4 rounded-2xl overflow-hidden bg-gradient-to-b from-gray-900 to-black border border-gray-800 shadow-2xl animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => setIsOpen(false)}
+              className="absolute right-4 top-4 z-10 p-2 rounded-full bg-black/50 hover:bg-black/70 transition"
+            >
+              <X className="h-5 w-5 text-white" />
+            </button>
+
+            {/* Header with banner and avatar */}
+            <div className="relative">
+              {/* Banner */}
+              <div className="h-32 bg-gradient-to-r from-purple-900/40 to-pink-900/40" />
+              
+              {/* Avatar */}
+              <div className="absolute left-1/2 -translate-x-1/2 -bottom-12">
+                <Avatar className="h-24 w-24 border-4 border-black">
+                  <AvatarImage src={creator.avatar_url} alt={creator.name} />
+                  <AvatarFallback className="text-2xl bg-gradient-to-br from-purple-600 to-pink-600">
+                    {creator.name?.charAt(0).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="pt-16 px-6 pb-6">
+              {/* Name and badges */}
+              <div className="text-center mb-6">
+                <h2 className="text-2xl font-bold text-white mb-1">{creator.name}</h2>
+                {channelName && (
+                  <div className="flex items-center justify-center gap-2 mb-3">
+                    <Badge className="bg-purple-600/20 text-purple-300 border-purple-600/30">
+                      {channelName}
+                    </Badge>
+                    <Badge variant="outline" className="bg-gray-800/50 border-gray-700 text-gray-300">
+                      <Users className="h-3 w-3 mr-1" />
+                      {localSubscriberCount.toLocaleString()} subscribers
+                    </Badge>
+                  </div>
+                )}
+                
+                {channelDescription && (
+                  <p className="text-gray-300 text-sm mb-4">{channelDescription}</p>
+                )}
+              </div>
+
+              {/* Stats - Use localSubscriberCount instead of subscriberCount prop */}
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-white">{localSubscriberCount.toLocaleString()}</div>
+                  <div className="text-xs text-gray-400">Subscribers</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-white">{videosCount ?? '—'}</div>
+                  <div className="text-xs text-gray-400">Videos</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-white">{(videosViews != null ? videosViews.toLocaleString() : '—')}</div>
+                  <div className="text-xs text-gray-400">Views</div>
+                </div>
+              </div>
+
+              {/* Channel Info */}
+              {(channelWebsite || channelLocation || channelEmail) && (
+                <div className="mb-6 space-y-3">
+                  {channelWebsite && (
+                    <div className="flex items-center gap-3 text-sm">
+                      <Globe className="h-4 w-4 text-gray-400" />
+                      <a 
+                        href={channelWebsite.startsWith('http') ? channelWebsite : `https://${channelWebsite}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-purple-400 hover:underline flex items-center gap-1"
+                      >
+                        {channelWebsite.replace(/^https?:\/\//, '')}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  )}
+                  {channelLocation && (
+                    <div className="flex items-center gap-3 text-sm text-gray-300">
+                      <MapPin className="h-4 w-4 text-gray-400" />
+                      {channelLocation}
+                    </div>
+                  )}
+                  {channelEmail && (
+                    <div className="flex items-center gap-3 text-sm text-gray-300">
+                      <Mail className="h-4 w-4 text-gray-400" />
+                      {channelEmail}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  onClick={isSubscribed ? handleViewChannel : handleSubscribe}
+                  className={`flex-1 ${isSubscribed ? 'bg-gray-800 hover:bg-gray-700' : 'bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700'}`}
+                >
+                  {isSubscribed ? (
+                    <>
+                      <Check className="h-4 w-4 mr-2" />
+                      View Channel
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="h-4 w-4 mr-2" />
+                      Subscribe
+                    </>
+                  )}
+                </Button>
+                
+                <Button
+                  onClick={handleShareProfile}
+                  variant="outline"
+                  className="border-gray-700 text-white hover:bg-gray-800"
+                >
+                  <LinkIcon className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {/* Quick Stats */}
+              <div className="mt-6 pt-6 border-t border-gray-800">
+                <div className="flex items-center justify-between text-sm">
+                  <div className="text-gray-400">Member since</div>
+                  <div className="text-white">Recently</div>
+                </div>
+                <div className="flex items-center justify-between text-sm mt-2">
+                  <div className="text-gray-400">Content type</div>
+                  <div className="text-white">Short videos</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
 
 export function ReelCard({
   video,
@@ -96,7 +408,9 @@ export function ReelCard({
   isActive,
   userData = null,
   hideLive = false,
+  videoRef: externalVideoRef,
 }: ReelCardProps) {
+  const { user } = useAuth();
   // Debug: log the video prop, video_url, and userData
   console.log('ReelCard video prop:', video);
   console.log('ReelCard userData:', userData);
@@ -110,7 +424,7 @@ export function ReelCard({
   const [seekValue, setSeekValue] = useState(0);
   const [isMuted, setIsMuted] = useState(true);
   const [showControls, setShowControls] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null) as MutableRefObject<HTMLVideoElement | null>;
   const isMobile = useIsMobile();
   // Recording button navigates directly to the Record page; no inline popover on ReelCard.
 
@@ -129,32 +443,115 @@ export function ReelCard({
   const [showShareModal, setShowShareModal] = useState(false);
   const commentChannelRef = useRef<any>(null);
   const [commentsCount, setCommentsCount] = useState<number>(video.comments_count ?? 0);
+  const [videoAspect, setVideoAspect] = useState<'portrait' | 'landscape' | 'square' | null>(null);
 
-  // --- Fetch comments for this video (Studio.tsx logic) ---
+  // Detect aspect ratio by loading metadata offscreen so we can choose object-fit
+  useEffect(() => {
+    if (!video?.video_url) return;
+    let canceled = false;
+    const probe = document.createElement('video');
+    probe.preload = 'metadata';
+    probe.src = video.video_url;
+
+    const onMeta = () => {
+      if (canceled) return;
+      try {
+        const w = probe.videoWidth || 0;
+        const h = probe.videoHeight || 0;
+        if (w === 0 || h === 0) {
+          setVideoAspect('square');
+        } else {
+          const ratio = w / h;
+          if (ratio > 1.1) setVideoAspect('landscape');
+          else if (ratio < 0.9) setVideoAspect('portrait');
+          else setVideoAspect('square');
+        }
+      } catch (e) {
+        setVideoAspect(null);
+      }
+    };
+
+    probe.addEventListener('loadedmetadata', onMeta);
+    // If metadata already available
+    if (probe.readyState >= 1) onMeta();
+
+    return () => {
+      canceled = true;
+      probe.removeEventListener('loadedmetadata', onMeta);
+      probe.src = '';
+    };
+  }, [video.video_url]);
+
+  // --- Fetch comments for this video with likes and replies counts ---
   const fetchComments = async () => {
     setCommentLoading(true);
     try {
       // Use correct PostgREST join syntax for related users table
       if (!video?.id) return;
       if (!supabase) throw new Error('Supabase client not available');
+      
       const { data, error } = await supabase
         .from('studio_video_comments')
-        .select('id, user_id, comment, created_at, users:user_id(id,username,avatar_url)')
+        .select(`
+          id, 
+          user_id, 
+          comment, 
+          created_at,
+          users:user_id(id,username,avatar_url),
+          comment_likes:studio_video_comment_likes(count),
+          comment_replies:studio_video_comment_replies(count)
+        `)
         .order('created_at', { ascending: false })
         .limit(100)
-        .eq('video_id', video.id)
-        ;
+        .eq('video_id', video.id);
+      
       if (error) {
         console.error('[ReelCard] fetchComments supabase error:', error);
       } else if (data) {
-        const mapped = data.map((c: any) => ({ ...c, user: c.users || null }));
+        const mapped = data.map((c: any) => ({ 
+          ...c, 
+          user: c.users || null,
+          likes_count: c.comment_likes?.[0]?.count || 0,
+          replies_count: c.comment_replies?.[0]?.count || 0,
+          is_liked: false, // Will be updated when user checks are done
+          replies: [] // Will be loaded when expanded
+        }));
         setComments(mapped);
         setCommentsCount(mapped.length);
+        
+        // Check if current user has liked any of these comments
+        if (user) {
+          checkUserCommentLikes(mapped);
+        }
       }
     } catch (e) {
       console.error('[ReelCard] fetchComments error:', e);
     } finally {
       setCommentLoading(false);
+    }
+  };
+
+  // Check which comments the current user has liked
+  const checkUserCommentLikes = async (commentsList: any[]) => {
+    if (!user || commentsList.length === 0) return;
+    
+    try {
+      const commentIds = commentsList.map(c => c.id);
+      const { data: userLikes } = await supabase
+        .from('studio_video_comment_likes')
+        .select('comment_id')
+        .in('comment_id', commentIds)
+        .eq('user_id', user.id);
+      
+      if (userLikes) {
+        const likedCommentIds = new Set(userLikes.map(l => l.comment_id));
+        setComments(prev => prev.map(comment => ({
+          ...comment,
+          is_liked: likedCommentIds.has(comment.id)
+        })));
+      }
+    } catch (error) {
+      console.error('[ReelCard] Error checking user comment likes:', error);
     }
   };
 
@@ -174,20 +571,57 @@ export function ReelCard({
     try {
       // Create a channel for this video's comments
       const channel = supabase.channel(`studio-video-comments-${video.id}`);
+      
+      // Listen for new comments
       channel.on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'studio_video_comments', filter: `video_id=eq.${video.id}` },
         (payload: any) => {
           // Append new comment and increment count
-          const newComment = { ...payload.new, user: payload.new.users || null };
+          const newCommentData = { 
+            ...payload.new, 
+            user: payload.new.users || null,
+            likes_count: 0,
+            replies_count: 0,
+            is_liked: false,
+            replies: []
+          };
           setComments(prev => {
             // Avoid duplicates
-            if (prev.some(c => String(c.id) === String(newComment.id))) return prev;
-            return [...prev, newComment];
+            if (prev.some(c => String(c.id) === String(newCommentData.id))) return prev;
+            return [newCommentData, ...prev];
           });
           setCommentsCount(c => (c || 0) + 1);
         }
       );
+      
+      // Listen for comment likes
+      channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'studio_video_comment_likes' },
+        (payload: any) => {
+          // Update comment likes count
+          setComments(prev => prev.map(comment => {
+            if (comment.id === payload.new?.comment_id) {
+              if (payload.eventType === 'INSERT') {
+                return {
+                  ...comment,
+                  likes_count: (comment.likes_count || 0) + 1,
+                  is_liked: payload.new.user_id === user?.id ? true : comment.is_liked
+                };
+              } else if (payload.eventType === 'DELETE') {
+                return {
+                  ...comment,
+                  likes_count: Math.max(0, (comment.likes_count || 0) - 1),
+                  is_liked: payload.old.user_id === user?.id ? false : comment.is_liked
+                };
+              }
+            }
+            return comment;
+          }));
+        }
+      );
+      
       channel.subscribe();
       commentChannelRef.current = channel;
     } catch (e) {
@@ -201,13 +635,33 @@ export function ReelCard({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [video?.id]);
+  }, [video?.id, user]);
 
-  // 360 eligibility check removed from ReelCard; move gating to the Record page if needed.
+  // Stop video and prevent outro when comments modal is open
+  useEffect(() => {
+    const handleCommentsModalOpened = (event: CustomEvent) => {
+      const isOpen = event.detail;
+      if (isOpen && videoRef.current) {
+        // Pause video
+        videoRef.current.pause();
+        setIsPlaying(false);
+        setUserPaused(true);
+        
+        // Hide any active outro overlay
+        setShowOutro(false);
+      }
+    };
+    
+    // Listen for comments modal events
+    window.addEventListener('commentsModalOpened', handleCommentsModalOpened as EventListener);
+    
+    return () => {
+      window.removeEventListener('commentsModalOpened', handleCommentsModalOpened as EventListener);
+    };
+  }, []);
 
   // Open comments modal and load comments
   const handleOpenComments = () => {
-    // pause the video when opening comments
     try {
       if (videoRef.current && !videoRef.current.paused) {
         videoRef.current.pause();
@@ -216,12 +670,16 @@ export function ReelCard({
     } catch (e) {
       console.warn('[ReelCard] Failed to pause video when opening comments', e);
     }
+    
+    // Dispatch event to notify CommentsSection
+    const event = new CustomEvent('commentsModalOpened', { detail: true });
+    window.dispatchEvent(event);
+    
     setShowComments(true);
     setTimeout(fetchComments, 0);
   };
 
   const handleCloseComments = () => {
-    // simply close the comments modal and let the user control playback explicitly
     setShowComments(false);
   };
 
@@ -244,7 +702,7 @@ export function ReelCard({
 
   // Post a new comment
   const handlePostComment = async () => {
-    const userId = userData?.id || userData?.user_metadata?.id;
+    const userId = user?.id || userData?.id || userData?.user_metadata?.id;
     const userDisplayName = userData?.username || (userData?.user_metadata && userData.user_metadata.username) || 'Someone';
     const commentText = newComment.trim();
     if (!userId || !commentText || !supabase) return;
@@ -265,8 +723,7 @@ export function ReelCard({
         setNewComment('');
         // optimistic update of comment count then refresh
         setCommentsCount(c => (c || 0) + 1);
-        fetchComments();
-
+        
         // Create a notification server-side via the backend route so we don't rely on client RLS rules
         try {
           const recipientId = video.user_id || video.creator_id || null;
@@ -331,7 +788,11 @@ export function ReelCard({
   // Outro logic: show overlay and play sound at end of reel (all devices)
   useEffect(() => {
     if (!videoRef.current) return;
+    
     const handleEnded = () => {
+      // Don't show outro if comments modal is open
+      if (showComments) return;
+      
       console.log('[ReelCard] Video ended, showing outro overlay');
       setShowOutro(true);
       if (outroAudioRef.current) {
@@ -354,26 +815,34 @@ export function ReelCard({
         setShowOutro(false);
         // Only restart video after outro overlay is hidden
         setTimeout(() => {
-          if (videoRef.current) {
+          if (videoRef.current && !showComments) {
             videoRef.current.currentTime = 0;
             videoRef.current.play();
           }
         }, 100); // slight delay to ensure outro overlay is gone
       }, 3000);
     };
+    
     const vid = videoRef.current;
     vid.addEventListener('ended', handleEnded);
     return () => {
       vid.removeEventListener('ended', handleEnded);
     };
-  }, [video.id]);
+  }, [video.id, showComments]);
 
   // Autoplay/pause depending on active status and mobile
   useEffect(() => {
     const videoEl = videoRef.current;
     if (!videoEl) return;
 
-    if (isActive && !userPaused) {
+    if (isActive && !userPaused && !showComments) {
+      // Ensure the browser preloads the resource, but avoid calling load()
+      // repeatedly because it can interrupt an ongoing play() and cause AbortError.
+      try {
+        videoEl.preload = 'auto';
+      } catch (e) {
+        console.warn('[ReelCard] preload set failed', e);
+      }
       // Attempt to unmute on both desktop and mobile when active.
       // Browsers may block autoplay with sound; if so, fall back to muted playback.
       try {
@@ -383,33 +852,48 @@ export function ReelCard({
         console.warn('[ReelCard] Could not set muted=false directly', e);
       }
 
-      videoEl
-        .play()
-        .then(() => {
+      // Try play and, if blocked, fall back to muted playback.
+      const tryPlay = async () => {
+        try {
+          await videoEl.play();
+          // Ensure the element is visibly playing (some browsers delay rendering)
           setIsPlaying(true);
-          onView(video.id);
-        })
-        .catch((err) => {
+          try { onView(video.id); } catch (e) { /* ignore */ }
+        } catch (err) {
           console.warn('[ReelCard] Autoplay with sound blocked or failed, falling back to muted playback:', err);
           try {
             videoEl.muted = true;
             setIsMuted(true);
-            videoEl.play().then(() => {
-              setIsPlaying(true);
-              onView(video.id);
-            }).catch((err2) => {
-              console.error('[ReelCard] Muted playback also failed:', err2);
-            });
-          } catch (e2) {
-            console.error('[ReelCard] Error during muted fallback playback:', e2);
+            await videoEl.play();
+            setIsPlaying(true);
+            try { onView(video.id); } catch (e) { /* ignore */ }
+          } catch (err2) {
+            console.error('[ReelCard] Muted playback also failed:', err2);
           }
-        });
-    } else if (!isActive) {
-      videoEl.pause();
-      videoEl.currentTime = 0;
+        }
+      };
+
+      // If video has enough data to play, try immediately; otherwise wait for loadeddata
+      if (videoEl.readyState >= 3) {
+        tryPlay();
+      } else {
+        const handleLoaded = () => {
+          tryPlay();
+          videoEl.removeEventListener('loadeddata', handleLoaded);
+        };
+        videoEl.addEventListener('loadeddata', handleLoaded);
+        // cleanup will be handled below by effect teardown
+      }
+    } else if (!isActive || showComments) {
+      // Pause when not active OR when comments modal is open
+      try {
+        videoEl.pause();
+      } catch (e) {
+        console.warn('[ReelCard] pause failed', e);
+      }
       setIsPlaying(false);
     }
-  }, [isActive, video.id, onView, isMobile]);
+  }, [isActive, video.id, onView, isMobile, showComments]);
 
   // Track progress and persist playback position
   useEffect(() => {
@@ -432,6 +916,16 @@ export function ReelCard({
       }
     };
 
+    const handlePlaying = () => {
+      // Ensure video is visible when playback actually starts
+      try {
+        if (videoEl.style) videoEl.style.opacity = '1';
+      } catch (e) {
+        // ignore
+      }
+      setIsPlaying(true);
+    };
+
     const handleEnded = () => {
       setIsPlaying(false);
       setProgress(0);
@@ -441,6 +935,7 @@ export function ReelCard({
 
     videoEl.addEventListener("timeupdate", updateProgress);
     videoEl.addEventListener("ended", handleEnded);
+    videoEl.addEventListener('playing', handlePlaying);
 
     // Save on pause/unmount
     const saveOnPause = () => {
@@ -451,6 +946,7 @@ export function ReelCard({
     return () => {
       videoEl.removeEventListener("timeupdate", updateProgress);
       videoEl.removeEventListener("ended", handleEnded);
+      videoEl.removeEventListener('playing', handlePlaying);
       videoEl.removeEventListener("pause", saveOnPause);
       // Save on unmount
       localStorage.setItem(storageKey, String(videoEl.currentTime));
@@ -470,9 +966,6 @@ export function ReelCard({
       setUserPaused(false);
     }
   };
-
-
-  // (mute toggle removed here because the action button now controls play/pause)
 
   // Toggle play/pause when user clicks the action button
   const handlePlayPauseToggle = async () => {
@@ -505,7 +998,6 @@ export function ReelCard({
       videoRef.current.muted = isMuted;
     }
   }, [isMuted]);
-
 
   const formatCount = (count: number) => {
     if (count < 1000) return count.toString();
@@ -552,28 +1044,29 @@ export function ReelCard({
       onMouseLeave={() => setShowControls(false)}
     >
       {/* Outro overlay and sound (all devices, forced z-index and pointer-events) */}
-      {showOutro && (
+      {showOutro && !showComments && (
         <div className="fixed inset-0 flex flex-col items-center justify-center bg-black/90 z-[9999] animate-fade-in" style={{pointerEvents:'all'}}>
           <div className="flex flex-col items-center animate-scale-in">
             <div className="relative mb-4">
-              <div className="w-20 h-20 flex items-center justify-center">
-                <img
-                  src="/lovable-uploads/3e6633e4-a22d-4a00-aae1-4e8ac1c93c03.png"
-                  alt="Brand Logo"
-                  style={{
-                    width: 64,
-                    height: 64,
-                    objectFit: 'contain',
-                    filter: 'none',
-                    boxShadow: 'none',
-                    background: 'none',
-                    borderRadius: 0,
-                    opacity: 1,
-                    display: 'block'
-                  }}
-                />
+              <div className="w-24 h-24 flex items-center justify-center">
+                <div className="w-20 h-20 rounded-2xl flex items-center justify-center shadow-2xl"
+                     style={{ background: 'linear-gradient(135deg,#7c3aed,#e879f9)' }}>
+                  <div className="w-16 h-16 bg-black/0 rounded-md overflow-hidden flex items-center justify-center">
+                    <Avatar className="w-16 h-16 rounded-md">
+                      <AvatarImage
+                        src={video?.creator?.avatar_url || '/lovable-uploads/3e6633e4-a22d-4a00-aae1-4e8ac1c93c03.png'}
+                        alt={video?.creator?.name ? `${video.creator.name} avatar` : 'Brand Logo'}
+                        onError={(e) => { try { (e.currentTarget as HTMLImageElement).src = '/lovable-uploads/3e6633e4-a22d-4a00-aae1-4e8ac1c93c03.png'; } catch {} }}
+                        className="w-full h-full object-contain"
+                      />
+                      <AvatarFallback>
+                        {(video?.creator?.name || 'U').charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                  </div>
+                </div>
               </div>
-              <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-black/80 px-2 py-0.5 rounded-full text-xs text-white font-semibold border border-white shadow">
+              <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 bg-black/90 px-3 py-0.5 rounded-full text-sm text-white font-semibold border-2 border-white">
                 @{video.creator?.name || 'author'}
               </div>
             </div>
@@ -582,7 +1075,7 @@ export function ReelCard({
       )}
 
       {/* Mobile-only: Animated comment display (fade in/out, 12s per comment) */}
-      {isMobile && comments.length > 0 && showComment && (
+      {isMobile && comments.length > 0 && showComment && !showComments && (
         <div className="absolute left-1/2 bottom-32 z-30 -translate-x-1/2 w-[90%] max-w-xs text-center pointer-events-none" style={{ background: 'none', boxShadow: 'none', backdropFilter: 'none', transition: 'none', opacity: 1 }}>
           <div className="bg-black/70 px-4 py-3 rounded-xl text-white text-base font-medium shadow-lg animate-fade-in">
             {comments[commentIndex]?.comment}
@@ -595,45 +1088,53 @@ export function ReelCard({
       <audio ref={outroAudioRef} src="/whistle.mp3" preload="auto" />
       
       {/* Left studio tools */}
-          <div className="absolute top-1/2 left-4 flex flex-col items-center gap-4 -translate-y-1/2 z-20">
-            <button
-              className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
-              onClick={() => navigate("/studio/upload")}
-            >
-              <Plus className="h-5 w-5" />
-            </button>
+      <div className="absolute top-1/2 left-4 flex flex-col items-center gap-4 -translate-y-1/2 z-20">
+        <button
+          className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
+          onClick={() => navigate("/studio/upload")}
+        >
+          <Plus className="h-5 w-5" />
+        </button>
 
-            {/* Recording button: navigate straight to the Record page (90s default) */}
-            <div className="relative">
-              <button
-                className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
-                onClick={() => navigate('/studio/record?duration=90')}
-                aria-label="Record"
-              >
-                <VideoIcon className="h-5 w-5" />
-              </button>
-            </div>
+        {/* Recording button: navigate straight to the Record page (90s default) */}
+        <div className="relative">
+          <button
+            className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
+            onClick={() => navigate('/studio/record?duration=90')}
+            aria-label="Record"
+          >
+            <VideoIcon className="h-5 w-5" />
+          </button>
+        </div>
 
-            {!hideLive && ENABLE_LIVE && (
-              <button
-                className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
-                onClick={() => navigate('/studio/live')}
-              >
-                <Radio className="h-5 w-5" />
-              </button>
-            )}
-            <button
-              className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
-              onClick={() => navigate("/studio/settings")}
-            >
-              <Settings className="h-5 w-5" />
-            </button>
-          </div>
+        {!hideLive && ENABLE_LIVE && (
+          <button
+            className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
+            onClick={() => navigate('/studio/live')}
+          >
+            <Radio className="h-5 w-5" />
+          </button>
+        )}
+        <button
+          className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
+          onClick={() => navigate("/studio/settings")}
+        >
+          <Settings className="h-5 w-5" />
+        </button>
+      </div>
 
       {/* Video */}
       <video
-        ref={videoRef}
-        className="w-full h-full object-cover cursor-pointer"
+        ref={(el) => {
+          // keep internal ref
+          videoRef.current = el;
+          // forward to parent if provided
+          try { if (externalVideoRef) externalVideoRef(el); } catch (e) { /* ignore */ }
+        }}
+        className={cn(
+          "w-full h-full cursor-pointer",
+          videoAspect === 'landscape' ? 'object-contain' : 'object-cover'
+        )}
         onClick={handleVideoClick}
         muted={isMuted}
         playsInline
@@ -642,46 +1143,57 @@ export function ReelCard({
         Your browser does not support video playback.
       </video>
 
-
-    {/* Right side actions */}
-  <div className="absolute right-2 bottom-40 flex flex-col gap-6">
-        {/* Avatar + ProfileModal + Channel/Subscriber badges */}
+      {/* Right side actions */}
+      <div className="absolute right-2 bottom-40 flex flex-col gap-6">
+        {/* Avatar + Enhanced ProfileModal */}
         <ProfileModal
           creator={displayCreator}
           channelName={video.channel_name}
           subscriberCount={video.subscriber_count || 0}
           isFollowing={isFollowing}
-          onFollow={() => onFollow(video.creator_id || "")}
+          onFollow={() => {
+            if (video.channel_id) {
+              navigate(`/studio/channel/${video.channel_id}`);
+            } else if (video.user_id) {
+              navigate(`/studio/channel/user/${video.user_id}`);
+            }
+          }}
+          channelId={video.channel_id}
+          userId={video.user_id}
+          channelDescription={video.channel_description}
+          channelWebsite={video.channel_website}
+          channelLocation={video.channel_location}
+          channelEmail={video.channel_email}
         >
-          <button className="flex flex-col items-center gap-1 group mt-0 mb-2">
-            <Avatar className="h-12 w-12 border-2 border-white/20">
+          <div className="flex flex-col items-center gap-1 group mt-0 mb-2">
+            <Avatar className="h-12 w-12 border-2 border-white/20 hover:border-purple-500 transition-all duration-300">
               <AvatarImage src={video.creator?.avatar_url} alt={video.creator?.name || 'User'} />
-              <AvatarFallback className="text-xs bg-primary text-primary-foreground">
+              <AvatarFallback className="text-xs bg-gradient-to-br from-purple-600 to-pink-600 text-white">
                 {(displayCreator.name || 'U').slice(0, 2).toUpperCase()}
               </AvatarFallback>
             </Avatar>
             {/* Slim, small username badge closely stacked under avatar */}
-            <Badge className="-mt-1 px-3 py-0.5 rounded-full bg-purple-700/90 text-white text-[11px] font-medium shadow border border-purple-400/40">
+            <Badge className="-mt-1 px-3 py-0.5 rounded-full bg-gradient-to-r from-purple-700/90 to-pink-700/90 text-white text-[11px] font-medium shadow border border-purple-400/40 hover:scale-105 transition-transform">
               @{displayCreator.name || 'unknown'}
             </Badge>
             {/* Channel and subscriber badges stacked below username badge */}
             <div className="flex flex-col items-center gap-1 mt-2 w-full">
               {video.channel_name && (
-                <Badge variant="secondary" className="text-[11px] bg-white/20 text-white border-white/30 px-3 py-1 rounded-full w-fit">
+                <Badge variant="secondary" className="text-[11px] bg-white/20 text-white border-white/30 px-3 py-1 rounded-full w-fit hover:bg-white/30 transition">
                   {video.channel_name}
                 </Badge>
               )}
               <Badge variant="outline" className="text-[11px] bg-transparent text-white border-white/30 flex items-center gap-1 px-3 py-1 rounded-full w-fit">
                 <Users className="h-3 w-3 mr-1" />
-                {video.subscriber_count ? video.subscriber_count.toLocaleString() : '0'}
+                {video.subscriber_count ? formatCount(video.subscriber_count) : '0'}
               </Badge>
             </div>
-          </button>
+          </div>
         </ProfileModal>
 
         {/* Action Icons: Like, Comment, Share, View - Capsule Badges */}
         <div className="flex flex-col items-center gap-2">
-          <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center">
+          <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center hover:bg-black/80 transition">
             <Button
               onClick={() => onLike(video.id)}
               size="icon"
@@ -693,7 +1205,7 @@ export function ReelCard({
             </Button>
             {formatCount(video.likes_count ?? 0)}
           </Badge>
-          <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center">
+          <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center hover:bg-black/80 transition">
             <Button
               size="icon"
               variant="ghost"
@@ -705,7 +1217,7 @@ export function ReelCard({
             </Button>
             {formatCount(commentsCount ?? video.comments_count ?? comments.length ?? 0)}
           </Badge>
-          <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center">
+          <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center hover:bg-black/80 transition">
               <Button
                 onClick={() => {
                   setShowShareModal(true);
@@ -720,7 +1232,7 @@ export function ReelCard({
               </Button>
             {formatCount(video.shares_count ?? 0)}
           </Badge>
-          <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center">
+          <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center hover:bg-black/80 transition">
             <Eye className="w-4 h-4 text-white" />
             {formatCount(video.views_count ?? video.views ?? 0)}
           </Badge>
@@ -729,7 +1241,7 @@ export function ReelCard({
             type="button"
             size="icon"
             variant="ghost"
-            className="w-12 h-12 rounded-full bg-black/20 hover:bg-black/40 mt-2"
+            className="w-12 h-12 rounded-full bg-black/20 hover:bg-black/40 mt-2 transition-all hover:scale-110"
             aria-label="Play/Pause"
           >
             {isPlaying ? (
@@ -813,13 +1325,13 @@ export function ReelCard({
       </div>
 
       {/* Play overlay (clickable on desktop) */}
-      {showControls && !isPlaying && !isMobile && (
+      {showControls && !isPlaying && !isMobile && !showComments && (
         <div 
           className="absolute inset-0 flex items-center justify-center cursor-pointer"
           onClick={handleVideoClick}
           style={{ zIndex: 30 }}
         >
-          <div className="w-16 h-16 bg-black/50 rounded-full flex items-center justify-center">
+          <div className="w-16 h-16 bg-black/50 rounded-full flex items-center justify-center hover:scale-110 transition-transform">
             <div className="w-0 h-0 border-l-[12px] border-l-white border-y-[8px] border-y-transparent ml-1" />
           </div>
         </div>
@@ -840,6 +1352,8 @@ export function ReelCard({
         viewerCount={video.views_count ?? video.views}
         likeCount={video.likes_count ?? 0}
         commentsCount={commentsCount}
+        videoId={video.id}
+        onCommentsUpdate={fetchComments}
       />
       <VideoShareModal show={showShareModal} onClose={() => setShowShareModal(false)} videoUrl={video.video_url} videoId={video.id} title={video.title} />
     </div>

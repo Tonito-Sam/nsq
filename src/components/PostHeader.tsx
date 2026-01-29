@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { MoreHorizontal, Copy, Bookmark, EyeOff, Flag, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Copy, Bookmark, EyeOff, Flag, Trash2, Users, Award } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -19,9 +19,11 @@ interface PostHeaderProps {
     name: string;
     username: string;
     avatar?: string;
-    verified?: boolean;
-    heading?: string; // Added for profile popover
-    bio?: string;     // Added for profile popover
+    verification_level?: 'new' | 'rising' | 'popular' | 'influencer' | 'verified'; // New verification system
+    followers_count?: number;
+    posts_count?: number;
+    heading?: string;
+    bio?: string;
   };
   timestamp: string;
   userId: string;
@@ -57,11 +59,147 @@ export const PostHeader: React.FC<PostHeaderProps> = ({
       return 'Unknown time';
     }
   };
+  
   const navigate = useNavigate();
   const { user } = useAuth ? useAuth() : { user: null };
   const [showProfilePopup, setShowProfilePopup] = useState(false);
   const [popupIsFollowing, setPopupIsFollowing] = useState(initialIsFollowing);
   const [popupLoading, setPopupLoading] = useState(false);
+  const [verificationData, setVerificationData] = useState({
+    level: author.verification_level || 'new',
+    followers: author.followers_count || 0,
+    posts: author.posts_count || 0
+  });
+
+  // Determine verification badge based on metrics
+  const getVerificationBadge = () => {
+    const { level, followers, posts } = verificationData;
+    
+    // If explicit verification level is provided, use it
+    if (level === 'verified') {
+      return {
+        text: 'Verified',
+        icon: <Award className="h-3 w-3" />,
+        color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400',
+        tooltip: 'Verified Creator'
+      };
+    }
+    
+    // Calculate verification level based on metrics
+    if (followers >= 10000 || posts >= 500) {
+      return {
+        text: 'Influencer',
+        icon: <Users className="h-3 w-3" />,
+        color: 'bg-purple-100 text-purple-700 dark:bg-purple-900/20 dark:text-purple-400',
+        tooltip: `${followers.toLocaleString()} followers • ${posts} posts`
+      };
+    }
+    
+    if (followers >= 1000 || posts >= 100) {
+      return {
+        text: 'Popular',
+        icon: <Users className="h-3 w-3" />,
+        color: 'bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400',
+        tooltip: `${followers.toLocaleString()} followers • ${posts} posts`
+      };
+    }
+    
+    if (followers >= 100 || posts >= 25) {
+      return {
+        text: 'Rising',
+        icon: <Users className="h-3 w-3" />,
+        color: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400',
+        tooltip: `${followers.toLocaleString()} followers • ${posts} posts`
+      };
+    }
+    
+    return null; // No badge for new users
+  };
+
+  const verificationBadge = getVerificationBadge();
+
+  // Fetch user metrics and verification data
+  useEffect(() => {
+    const fetchUserMetrics = async () => {
+      try {
+        // Try to read explicit verification_level and optional aggregated counters from users table
+        const { data: userRow, error: userErr } = await supabase
+          .from('users')
+          .select('verification_level, followers_count, posts_count')
+          .eq('id', userId)
+          .single();
+
+        if (userErr) {
+          console.warn('Failed to read aggregated user fields (verification_level/followers_count/posts_count):', userErr.message || userErr);
+        }
+
+        // Prefer aggregated counters if available, otherwise count rows
+        let followers: number | null = userRow?.followers_count ?? null;
+        let posts: number | null = userRow?.posts_count ?? null;
+
+        if (followers === null) {
+          try {
+            const { count: followersCount, error: fErr } = await supabase
+              .from('followers')
+              .select('id', { count: 'exact', head: true })
+              .eq('following_id', userId);
+            if (fErr) {
+              console.warn('Error counting followers:', fErr);
+              followers = 0;
+            } else {
+              followers = followersCount || 0;
+            }
+          } catch (e) {
+            console.warn('Followers count failed:', e);
+            followers = 0;
+          }
+        }
+
+        if (posts === null) {
+          try {
+            const { count: postsCount, error: pErr } = await supabase
+              .from('posts')
+              .select('id', { count: 'exact', head: true })
+              .eq('user_id', userId);
+            if (pErr) {
+              console.warn('Error counting posts:', pErr);
+              posts = 0;
+            } else {
+              posts = postsCount || 0;
+            }
+          } catch (e) {
+            console.warn('Posts count failed:', e);
+            posts = 0;
+          }
+        }
+
+        // Compute metric-based level
+        let metricLevel: PostHeaderProps['author']['verification_level'] = 'new';
+        if ((followers || 0) >= 10000 || (posts || 0) >= 500) {
+          metricLevel = 'influencer';
+        } else if ((followers || 0) >= 1000 || (posts || 0) >= 100) {
+          metricLevel = 'popular';
+        } else if ((followers || 0) >= 100 || (posts || 0) >= 25) {
+          metricLevel = 'rising';
+        } else {
+          metricLevel = 'new';
+        }
+
+        // Final level: explicit verification_level in users table > author.provided > metricLevel
+        const finalLevel = userRow?.verification_level || author.verification_level || metricLevel;
+
+        setVerificationData({
+          level: finalLevel,
+          followers: followers || 0,
+          posts: posts || 0
+        });
+      } catch (error) {
+        console.error('Error fetching user metrics:', error);
+      }
+    };
+
+    fetchUserMetrics();
+  }, [userId, author.verification_level]);
 
   // Fetch follow state when popup opens
   useEffect(() => {
@@ -127,13 +265,33 @@ export const PostHeader: React.FC<PostHeaderProps> = ({
                   {author.name.charAt(0)}
                 </AvatarFallback>
               </Avatar>
-              <div className="font-semibold text-lg text-gray-900 dark:text-white flex items-center space-x-2">
+              <div className="font-semibold text-lg text-gray-900 dark:text-white flex items-center space-x-2 mb-1">
                 <span>{author.name}</span>
-                {author.verified && (
-                  <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 px-1.5 py-0.5">✓</Badge>
+                {verificationBadge && (
+                  <Badge 
+                    variant="secondary" 
+                    className={`text-xs px-2 py-1 flex items-center gap-1 ${verificationBadge.color}`}
+                    title={verificationBadge.tooltip}
+                  >
+                    {verificationBadge.icon}
+                    {verificationBadge.text}
+                  </Badge>
                 )}
               </div>
               <div className="text-gray-500 dark:text-gray-400 text-sm mb-1">@{author.username}</div>
+              
+              {/* User metrics in popup */}
+              <div className="flex items-center justify-center gap-4 mb-3">
+                <div className="text-center">
+                  <div className="font-bold text-gray-900 dark:text-white">{verificationData.posts.toLocaleString()}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Posts</div>
+                </div>
+                <div className="text-center">
+                  <div className="font-bold text-gray-900 dark:text-white">{verificationData.followers.toLocaleString()}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Followers</div>
+                </div>
+              </div>
+              
               {author.heading && (
                 <div className="text-blue-600 dark:text-blue-400 font-medium text-sm mb-1 text-center w-full">{author.heading}</div>
               )}
@@ -155,6 +313,7 @@ export const PostHeader: React.FC<PostHeaderProps> = ({
           </div>
         </div>
       )}
+      
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-start space-x-3 flex-1">
           {/* Make avatar open popup */}
@@ -172,6 +331,7 @@ export const PostHeader: React.FC<PostHeaderProps> = ({
               </AvatarFallback>
             </Avatar>
           </button>
+          
           <div className="flex-1 min-w-0">
             <div className="flex items-center space-x-2 mb-1">
               {/* Make fullname clickable */}
@@ -184,12 +344,20 @@ export const PostHeader: React.FC<PostHeaderProps> = ({
               >
                 {author.name}
               </button>
-              {author.verified && (
-                <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 px-1.5 py-0.5">
-                  ✓
+              
+              {/* Metric-based verification badge */}
+              {verificationBadge && (
+                <Badge 
+                  variant="secondary" 
+                  className={`text-xs px-1.5 py-0.5 flex items-center gap-1 ${verificationBadge.color}`}
+                  title={verificationBadge.tooltip}
+                >
+                  {verificationBadge.icon}
+                  {verificationBadge.text}
                 </Badge>
               )}
             </div>
+            
             <div className="text-gray-500 dark:text-gray-400 text-xs space-y-0.5">
               {/* Make username clickable */}
               <button

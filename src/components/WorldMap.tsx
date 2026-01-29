@@ -8,6 +8,7 @@ import { useTheme } from './ThemeProvider';
 const currencyCountryCoords: Record<string, { country: string; coords: [number, number] }> = {
   USD: { country: 'United States', coords: [37.0902, -95.7129] },
   ZAR: { country: 'South Africa', coords: [-30.5595, 22.9375] },
+  NGN: { country: 'Nigeria', coords: [9.0820, 8.6753] },
   // Add more currency-country mappings as needed
 };
 
@@ -41,6 +42,7 @@ const WorldMap: React.FC = () => {
     const countryCodeMap: Record<string, string> = {
       'United States': 'us',
       'South Africa': 'za',
+      'Nigeria': 'ng',
       // Add more mappings as needed
     };
     const code = countryCodeMap[country];
@@ -60,7 +62,11 @@ const WorldMap: React.FC = () => {
       >
         <TileLayer
           url={theme === 'dark' ? darkTile : lightTile}
-          attribution="&copy; OpenStreetMap contributors"
+            attribution="&copy; OpenStreetMap contributors"
+            eventHandlers={{
+              tileerror: (err) => console.error('Tile load error', err),
+              tileloaderror: (err) => console.error('Tile load error (load)', err)
+            }}
         />
         {Object.entries(currencyCounts).map(([currency, count]) => {
           const entry = currencyCountryCoords[currency];
@@ -86,12 +92,11 @@ const WorldMap: React.FC = () => {
         <div style={{display:'flex',flexWrap:'wrap',gap:16}}>
           {Object.entries(currencyCounts).map(([currency, count]) => {
             const entry = currencyCountryCoords[currency];
-            if (!entry) return null;
-            const flagUrl = getFlagUrl(entry.country);
+            const flagUrl = entry ? getFlagUrl(entry.country) : '';
             return (
               <div key={currency} style={{display:'flex',alignItems:'center',gap:8,background:theme==='dark'?'#23232b':'#fff',borderRadius:8,padding:'4px 12px',boxShadow:'0 1px 4px #0001'}}>
-                {flagUrl && <img src={flagUrl} alt={entry.country+" flag"} style={{width:24,height:18,borderRadius:2,objectFit:'cover',border:'1px solid #ccc'}} />}
-                <span style={{fontWeight:500}}>{entry.country}</span>
+                {flagUrl ? <img src={flagUrl} alt={(entry?.country||currency)+" flag"} style={{width:24,height:18,borderRadius:2,objectFit:'cover',border:'1px solid #ccc'}} /> : <span style={{width:24,height:18,display:'inline-block'}}/>}
+                <span style={{fontWeight:500}}>{entry?.country || currency}</span>
                 <span style={{color:'#888',fontSize:13}}>({count})</span>
               </div>
             );

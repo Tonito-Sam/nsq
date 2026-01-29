@@ -14,7 +14,7 @@ import { toast } from '@/components/ui/use-toast';
 import { useNavigate } from 'react-router-dom';
 import type { Database } from '@/types/supabase';
 import { getDisplayPrice, getDiscountPercentage } from '@/utils/pricing';
-// use ShoppingCart from the main import
+import { Skeleton } from '@/components/ui/skeleton';
 
 type ProductRow = Database['public']['Tables']['store_products']['Row'];
 
@@ -38,7 +38,6 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ audioUrl, productTitle }) => 
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Setup audio listeners and 30s preview cutoff. Re-run when audioUrl changes.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -66,7 +65,6 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ audioUrl, productTitle }) => 
     };
   }, [audioUrl]);
 
-
   const togglePlay = () => {
     const audio = audioRef.current;
     if (!audio || !audioUrl) return;
@@ -77,7 +75,6 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ audioUrl, productTitle }) => 
       return;
     }
 
-    // Try to play and update state only on success
     audio.play()
       .then(() => setIsPlaying(true))
       .catch((err) => {
@@ -128,7 +125,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ audioUrl, productTitle }) => 
   );
 };
 
-// Global styles used by the Square page feature hub (line-clamp + hide scrollbar)
+// Global styles used by the Square page feature hub
 const globalStyles = `
   .line-clamp-2 {
     display: -webkit-box;
@@ -145,6 +142,45 @@ const globalStyles = `
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  /* Animations for seasonal carousel */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(18px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes slideLeft {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  @keyframes zoomIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  @keyframes pop {
+    0% { transform: translateY(6px) scale(0.98); opacity: 0; }
+    60% { transform: translateY(-4px) scale(1.02); opacity: 1; }
+    100% { transform: translateY(0) scale(1); opacity: 1; }
+  }
+
+  .anim-fade { animation: fadeIn 600ms ease forwards; }
+  .anim-slide-up { animation: slideUp 700ms cubic-bezier(.2,.8,.2,1) forwards; }
+  .anim-slide-left { animation: slideLeft 650ms cubic-bezier(.2,.8,.2,1) forwards; }
+  .anim-zoom { animation: zoomIn 600ms cubic-bezier(.2,.8,.2,1) forwards; }
+  .anim-pop { animation: pop 700ms cubic-bezier(.2,.8,.2,1) forwards; }
+
+  /* variants */
+  .anim-slow { animation-duration: 1100ms; }
+  .anim-delay-200 { animation-delay: 200ms; }
+  .anim-delay-350 { animation-delay: 350ms; }
+  .anim-delay-500 { animation-delay: 500ms; }
 `;
 
 // React Query keys
@@ -156,7 +192,6 @@ const QUERY_KEYS = {
 import useMeta from '@/hooks/useMeta';
 
 const Square = () => {
-  // page-specific meta
   useMeta({
     title: 'Square — Shop, Deals & Discover — NexSq',
     description: 'Explore the Square: featured products, limited-time deals, and curated shops on NexSq.',
@@ -167,16 +202,81 @@ const Square = () => {
   const queryClient = useQueryClient();
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  // UI filters
   const [categoryFilter, setCategoryFilter] = useState<string>('');
   const [mainTab, setMainTab] = useState<'all' | 'physical' | 'digital'>('all');
   const [digitalSubTab, setDigitalSubTab] = useState<'all' | 'music' | 'audiobook' | 'ebook'>('all');
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
-  
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+
+  // Seasonal carousel slides for holiday hero
+  const seasonalMessages = [
+    {
+      title: 'Seasonal Savings — Gift More, Spend Less',
+      subtitle: 'Explore curated gift picks, limited-time bundles, and exclusive seasonal deals.',
+      bgClass: 'bg-gradient-to-r from-purple-700 via-pink-600 to-yellow-400',
+      textClass: 'text-white',
+    },
+    {
+      title: 'Produce Locally. Sell Globally. Earn Without Borders',
+      subtitle: 'Turn what you create into global income—reach buyers anywhere in the world.',
+      bgClass: 'bg-gradient-to-r from-green-600 to-blue-500',
+      textClass: 'text-white',
+      titleAnim: 'anim-pop',
+      subtitleAnim: 'anim-fade anim-delay-200',
+    },
+    {
+      title: 'Sell & Buy From Home',
+      subtitle: 'List products, shop freely, and manage everything from the comfort of your space.',
+      bgClass: 'bg-white dark:bg-[#0b1220] border dark:border-gray-800',
+      textClass: 'text-gray-900 dark:text-gray-100',
+      titleAnim: 'anim-slide-left',
+      subtitleAnim: 'anim-fade anim-delay-200',
+    },
+    {
+      title: 'Your Home. Your Store. The World Is Your Market.',
+      subtitle: 'List, sell, and ship globally from the comfort of your home.',
+      bgClass: 'bg-gradient-to-r from-indigo-600 to-sky-500',
+      textClass: 'text-white',
+      titleAnim: 'anim-zoom',
+      subtitleAnim: 'anim-slide-up anim-delay-200',
+    },
+    {
+      title: 'Ship To & From Anywhere',
+      subtitle: 'Whether local or international, your products move seamlessly across borders.',
+      bgClass: 'bg-gradient-to-r from-rose-500 to-amber-400',
+      textClass: 'text-white',
+      titleAnim: 'anim-slide-up',
+      subtitleAnim: 'anim-fade anim-delay-200',
+    },
+    {
+      title: 'Trusted Shipping Partners',
+      subtitle: 'We work with reliable logistics partners to ensure safe, fast deliveries.',
+      bgClass: 'bg-gradient-to-r from-stone-700 to-gray-600',
+      textClass: 'text-white',
+      titleAnim: 'anim-pop',
+      subtitleAnim: 'anim-fade anim-delay-350',
+    },
+    {
+      title: 'We Ship Worldwide',
+      subtitle: 'From your doorstep to the world—no boundaries, just opportunities.',
+      bgClass: 'bg-gradient-to-r from-teal-600 to-emerald-500',
+      textClass: 'text-white',
+      titleAnim: 'anim-slide-left anim-slow',
+      subtitleAnim: 'anim-fade anim-delay-200',
+    },
+  ];
+  const [seasonalIndex, setSeasonalIndex] = useState(0);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      setSeasonalIndex((i) => (i + 1) % seasonalMessages.length);
+    }, 5000);
+    return () => clearInterval(t);
+  }, []);
 
   // Fetch products with React Query
-  const { data: products = [], isLoading } = useQuery({
+  const { data: products = [], isLoading } = useQuery<Product[], Error>({
     queryKey: QUERY_KEYS.products,
     queryFn: async () => {
       try {
@@ -190,7 +290,6 @@ const Square = () => {
 
         const storeIds = Array.from(new Set(typedProducts.map(p => p.store_id).filter(Boolean)));
 
-        // Fetch all stores in one query
         const { data: storesData, error: storesError } = await supabase
           .from('user_stores')
           .select('id, store_name, verification_status, is_active')
@@ -200,7 +299,6 @@ const Square = () => {
 
         const storesMap = new Map((storesData || []).map((store: any) => [store.id, store]));
 
-        // Attach store info, but always keep the original store_id for navigation
         return typedProducts.map(product => {
           const storeData = storesMap.get(product.store_id);
           return {
@@ -219,14 +317,18 @@ const Square = () => {
         throw error;
       }
     },
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    gcTime: 10 * 60 * 1000, // 10 minutes
+    staleTime: 5 * 60 * 1000,
+    gcTime: 10 * 60 * 1000,
   });
 
-  // derived categories for sidebar
+  useEffect(() => {
+    if (products && Array.isArray(products)) {
+      setIsInitialLoading(false);
+    }
+  }, [products]);
+
   const categories: string[] = Array.from(new Set((products || []).map(p => p.category).filter(Boolean))) as string[];
 
-  // Top stores derived from products (by number of products listed)
   const topStores = (() => {
     const map = new Map<string, { id: string; name: string; verification?: string; count: number; image?: string }>();
     (products || []).forEach(p => {
@@ -246,21 +348,16 @@ const Square = () => {
     return Array.from(map.values()).sort((a, b) => b.count - a.count).slice(0, 6);
   })();
 
-  // Derived product sections for UI (client-side heuristics)
-  // Helper: apply current main/category/digital filters to a product (used for section derivations)
   const applyMainFilters = (p: Product) => {
-    // category filter
     if (categoryFilter) {
       if ((p.category || '').toLowerCase() !== categoryFilter.toLowerCase()) return false;
     }
 
-    // main tab filter
     if (mainTab !== 'all') {
       const type = (p.product_type || '').toLowerCase();
       if (mainTab !== type) return false;
     }
 
-    // digital sub-tab filter (only when mainTab === 'digital')
     if (mainTab === 'digital' && digitalSubTab !== 'all') {
       const cat = (p.category || '').toLowerCase();
       const pt = (p.product_type || '').toLowerCase();
@@ -272,18 +369,12 @@ const Square = () => {
     return true;
   };
 
-  // Base product list for section derivations — respects category/main/digital tabs (but not searchTerm)
   const baseForSections = (products || []).filter(applyMainFilters);
-
-  // featuredProducts was removed (unused): picks are built per-store in featuredStoresProducts
-
-  // Updated onSaleProducts to use the getDisplayPrice helper
   const onSaleProducts = baseForSections.filter(p => {
     const priceInfo = getDisplayPrice(p);
     return priceInfo.isOnSale;
   }).slice(0, 8);
 
-  // Featured stores: pick one random product per store (for feature carousel)
   const featuredStoresProducts = (() => {
     const byStore = new Map<string, Product[]>();
     baseForSections.forEach(p => {
@@ -294,7 +385,6 @@ const Square = () => {
       byStore.set(sid, arr);
     });
 
-    // pick one random product per store
     const picks: Product[] = [];
     for (const [, arr] of byStore) {
       if (!arr || arr.length === 0) continue;
@@ -302,7 +392,6 @@ const Square = () => {
       picks.push(pick);
     }
 
-    // show up to 12 stores
     return picks.slice(0, 12);
   })();
   
@@ -316,19 +405,16 @@ const Square = () => {
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, 6);
   
-  // Top selling heuristic (by sales_count or sold_count)
   const topSellingProducts = baseForSections
     .slice()
     .sort((a, b) => ((b as any).sales_count || (b as any).sold_count || 0) - ((a as any).sales_count || (a as any).sold_count || 0))
     .slice(0, 6);
   
-  // Trending heuristic (by views or recent)
   const trendingProducts = baseForSections
     .slice()
     .sort((a, b) => ((b as any).views || 0) - ((a as any).views || 0))
     .slice(0, 6);
 
-  // Pagination states for desktop views
   const [dealsPage, setDealsPage] = useState(0);
   const dealsPerPage = 6;
 
@@ -338,7 +424,6 @@ const Square = () => {
   const [trendingPage, setTrendingPage] = useState(0);
   const trendingPerPage = 12;
 
-  // Filter digital products for table view
   const digitalMusicProducts = baseForSections.filter(p => {
     const cat = (p.category || '').toLowerCase();
     const pt = (p.product_type || '').toLowerCase();
@@ -351,8 +436,6 @@ const Square = () => {
     return (cat.includes('audiobook') || pt.includes('audiobook') || cat.includes('audio'));
   });
 
-
-  // Refs for mobile carousels
   const topSellingRef = useRef<HTMLDivElement | null>(null);
   const dealsRef = useRef<HTMLDivElement | null>(null);
   const newArrivalsRef = useRef<HTMLDivElement | null>(null);
@@ -361,27 +444,23 @@ const Square = () => {
   const featuredStoresRef = useRef<HTMLDivElement | null>(null);
   const onSaleRef = useRef<HTMLDivElement | null>(null);
 
-  // Featured carousel state (index for single-item view)
   const [featuredIndex, setFeaturedIndex] = useState(0);
-  // autoplay for the featured hero (single-item mode)
   const [isAutoPlaying, setIsAutoPlaying] = useState(true);
   const autoPlayRef = useRef<number | null>(null);
 
-  // helper: chunk array into groups of `size`
   const chunk = <T,>(arr: T[], size: number) => {
     const out: T[][] = [];
     for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
     return out;
   };
 
-  // Auto-advance carousel helper
   const useAutoAdvance = (ref: React.RefObject<HTMLDivElement>, slidesCount: number, intervalMs = 10000) => {
     useEffect(() => {
       const el = ref.current;
       if (!el || slidesCount <= 1) return;
       let idx = 0;
       const handler = () => {
-        if (window.innerWidth >= 1024) return; // only auto-advance on mobile
+        if (window.innerWidth >= 1024) return;
         idx = (idx + 1) % slidesCount;
         const width = el.clientWidth;
         el.scrollTo({ left: idx * width, behavior: 'smooth' });
@@ -391,15 +470,9 @@ const Square = () => {
     }, [ref, slidesCount, intervalMs]);
   };
 
-  // Simple carousel scroll helper used by the feature hub (Takealot-style controls)
-  // (Removed unused scrollCarousel helper)
-
-  // Scroll directly to a featured slide index (calculates slide width from first child)
-  // Enhanced to wrap indexes and reset the autoplay timer when user manually navigates.
   const scrollToFeatured = (index: number) => {
     if (!featuredStoresProducts || featuredStoresProducts.length === 0) return;
 
-    // wrap index
     if (index < 0) {
       index = featuredStoresProducts.length - 1;
     } else if (index >= featuredStoresProducts.length) {
@@ -408,7 +481,6 @@ const Square = () => {
 
     setFeaturedIndex(index);
 
-    // Reset autoplay timer if user manually navigates
     if (isAutoPlaying) {
       if (autoPlayRef.current) {
         clearInterval(autoPlayRef.current);
@@ -418,22 +490,19 @@ const Square = () => {
       }, 12000);
     }
 
-    // also scroll the store-track (if present) for the small-store track layout
     const el = featuredStoresRef.current;
     if (!el) return;
     const track = el.firstElementChild as HTMLElement | null;
     if (!track) return;
     const first = track.children[0] as HTMLElement | undefined;
-    const gap = 16; // Tailwind gap-4 == 1rem == 16px
+    const gap = 16;
     const slideWidth = (first?.offsetWidth || el.clientWidth) + gap;
     const left = Math.max(0, Math.min(index, Math.max(0, track.children.length - 1))) * slideWidth;
     el.scrollTo({ left, behavior: 'smooth' });
   };
 
-  // Autoplay effect for the featured hero (updates featuredIndex every 12s)
   useEffect(() => {
     if (!isAutoPlaying) return;
-    // clear any existing timer
     if (autoPlayRef.current) {
       clearInterval(autoPlayRef.current);
       autoPlayRef.current = null;
@@ -449,7 +518,6 @@ const Square = () => {
         autoPlayRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAutoPlaying, featuredStoresProducts.length]);
 
   const toggleAutoPlay = () => {
@@ -463,7 +531,6 @@ const Square = () => {
     });
   };
 
-  // Keep featuredIndex in sync with manual scrolling
   useEffect(() => {
     const el = featuredStoresRef.current;
     if (!el) return;
@@ -482,7 +549,6 @@ const Square = () => {
     return () => el.removeEventListener('scroll', onScroll);
   }, [featuredStoresProducts.length]);
 
-  // Fetch cart count with React Query
   const { data: cartCount = 0 } = useQuery({
     queryKey: QUERY_KEYS.cartCount,
     queryFn: async () => {
@@ -497,11 +563,10 @@ const Square = () => {
       return count || 0;
     },
     enabled: !!user,
-    staleTime: 2 * 60 * 1000, // 2 minutes
-    gcTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 2 * 60 * 1000,
+    gcTime: 5 * 60 * 1000,
   });
 
-  // Fetch cart items for dropdown preview
   const { data: cartItems = [], isLoading: cartLoading } = useQuery({
     queryKey: ['cartItems'],
     queryFn: async () => {
@@ -518,12 +583,10 @@ const Square = () => {
     staleTime: 30 * 1000,
   });
 
-  // Add to cart mutation
   const addToCartMutation = useMutation({
     mutationFn: async (product: Product) => {
       if (!user) throw new Error('User not authenticated');
 
-      // Check if item already exists in cart
       try {
         const { data: existing, error: checkError } = await supabase
           .from('cart_items')
@@ -537,7 +600,6 @@ const Square = () => {
         }
 
         if (existing) {
-          // If already in cart, increment quantity
           const { error: updateError } = await supabase
             .from('cart_items')
             .update({ quantity: (existing.quantity || 0) + 1 })
@@ -552,7 +614,6 @@ const Square = () => {
           return { action: 'updated', product };
         }
 
-        // If not in cart, insert new row and return the inserted row
         const { error: insError } = await supabase
           .from('cart_items')
           .insert({
@@ -565,7 +626,6 @@ const Square = () => {
 
         if (insError) {
           console.error('[addToCart] insert error', insError);
-          // throw with full error to allow UI to display
           throw insError;
         }
 
@@ -576,7 +636,6 @@ const Square = () => {
       }
     },
     onSuccess: ({ action, product }) => {
-      // Invalidate cart count query
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.cartCount });
       
       toast({
@@ -611,18 +670,15 @@ const Square = () => {
     product.description?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     product.category?.toLowerCase().includes(searchTerm.toLowerCase()))
   )
-  // category sidebar filter
   .filter(product => {
     if (!categoryFilter) return true;
     return (product.category || '').toLowerCase() === categoryFilter.toLowerCase();
   })
-  // main tab filter
   .filter(product => {
     if (mainTab === 'all') return true;
     const type = (product.product_type || '').toLowerCase();
     return mainTab === type;
   })
-  // digital sub-tab filter
   .filter(product => {
     if (mainTab !== 'digital' || digitalSubTab === 'all') return true;
     const cat = (product.category || '').toLowerCase();
@@ -633,20 +689,14 @@ const Square = () => {
     return true;
   });
 
-  // wire up auto-advance for carousels now that filteredProducts is available
   useAutoAdvance(topSellingRef, Math.max(1, Math.ceil(topSellingProducts.length / 2)));
-  // Deals: mobile 3-per-view auto-advance every 12s
   useAutoAdvance(dealsRef, Math.max(1, Math.ceil(dealsOfTheDay.length / 3)), 12000);
-  // New Arrivals: show 1 per view on mobile and auto-advance every 15s
   useAutoAdvance(newArrivalsRef, Math.max(1, newArrivals.length), 15000);
   useAutoAdvance(trendingRef, Math.max(1, Math.ceil(trendingProducts.length / 6)), 12000);
   useAutoAdvance(mainCarouselRef, Math.max(1, filteredProducts.length));
-  // Featured stores carousel (auto-advance on mobile)
   useAutoAdvance(featuredStoresRef, Math.max(1, Math.ceil(featuredStoresProducts.length / 3)), 12000);
-  // On Sale compact carousel
   useAutoAdvance(onSaleRef, Math.max(1, Math.ceil(onSaleProducts.length / 3)), 12000);
 
-  // AUTO SLIDE FOR NEW ARRIVALS
   useEffect(() => {
     if (!newArrivalsRef.current) return;
 
@@ -658,19 +708,17 @@ const Square = () => {
 
       const containerWidth = container.clientWidth;
 
-      // Detect items-per-view
-      let itemsPerView = 1; // default mobile
+      let itemsPerView = 1;
       if (window.innerWidth >= 1024) {
-        itemsPerView = 4; // desktop
+        itemsPerView = 4;
       } else if (window.innerWidth >= 640) {
-        itemsPerView = 2; // tablet
+        itemsPerView = 2;
       }
 
       const slideWidth = containerWidth / itemsPerView;
 
       slideIndex++;
 
-      // Loop back when reaching end
       if (slideIndex * slideWidth >= container.scrollWidth) {
         slideIndex = 0;
       }
@@ -686,7 +734,6 @@ const Square = () => {
     return () => clearInterval(interval);
   }, [newArrivals]);
 
-  // Reset pagination when underlying collections or filters change
   useEffect(() => {
     setDealsPage(0);
   }, [newArrivals.length, dealsOfTheDay.length, categoryFilter, mainTab, digitalSubTab]);
@@ -699,7 +746,6 @@ const Square = () => {
     setTrendingPage(0);
   }, [trendingProducts.length, categoryFilter, mainTab, digitalSubTab]);
 
-  // Mobile deals carousel controls
   const mobileDealsPerView = 3;
   const mobileDealsSlides = Math.max(1, Math.ceil(dealsOfTheDay.length / mobileDealsPerView));
   const mobileDealsIndexRef = useRef<number>(0);
@@ -727,7 +773,6 @@ const Square = () => {
     scrollDealsTo(idx);
   };
 
-  // Keep mobileDealsIndex in sync with manual scrolls
   useEffect(() => {
     const el = dealsRef.current;
     if (!el) return;
@@ -740,8 +785,6 @@ const Square = () => {
     return () => el.removeEventListener('scroll', onScroll);
   }, [dealsRef.current]);
 
-  // Mobile trending carousel controls (mirror deals behavior)
-  // Show 6 items per slide on mobile as 3 columns x 2 rows
   const mobileTrendingPerView = 6;
   const mobileTrendingSlides = Math.max(1, Math.ceil(trendingProducts.length / mobileTrendingPerView));
   const mobileTrendingIndexRef = useRef<number>(0);
@@ -781,9 +824,7 @@ const Square = () => {
     return () => el.removeEventListener('scroll', onScroll);
   }, [trendingRef.current]);
 
-  // Helper function to get file type from product
   const getFileType = (product: Product) => {
-    // Extract file type from description or use default
     const desc = product.description?.toLowerCase() || '';
     if (desc.includes('mp3') || product.title.toLowerCase().includes('mp3')) return 'MP3';
     if (desc.includes('wav') || product.title.toLowerCase().includes('wav')) return 'WAV';
@@ -793,40 +834,418 @@ const Square = () => {
     return 'Audio File';
   };
 
-    // Helper function to get preview URL (this would come from your product data)
-    const getPreviewUrl = (product: Product) => {
-      // prefer explicit audio/preview fields if present
-      const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.oga'];
-      const looksLikeAudio = (url?: string) => typeof url === 'string' && AUDIO_EXTS.some(ext => url.toLowerCase().includes(ext));
+  const getPreviewUrl = (product: Product) => {
+    const AUDIO_EXTS = ['.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg', '.oga'];
+    const looksLikeAudio = (url?: string) => typeof url === 'string' && AUDIO_EXTS.some(ext => url.toLowerCase().includes(ext));
 
-      const candidateKeys = [
-        (product as any).preview_url,
-        (product as any).audio_url,
-        (product as any).preview_audio,
-        (product as any).audio_preview,
-        (product as any).file_url,
-        (product as any).file,
-        (product as any).src,
-      ];
+    const candidateKeys = [
+      (product as any).preview_url,
+      (product as any).audio_url,
+      (product as any).preview_audio,
+      (product as any).audio_preview,
+      (product as any).file_url,
+      (product as any).file,
+      (product as any).src,
+    ];
 
-      for (const c of candidateKeys) {
-        if (looksLikeAudio(c)) return c as string;
+    for (const c of candidateKeys) {
+      if (looksLikeAudio(c)) return c as string;
+    }
+
+    const fileArrays = (product as any).files || (product as any).attachments || (product as any).media || (product as any).assets;
+    if (Array.isArray(fileArrays)) {
+      for (const f of fileArrays) {
+        const url = typeof f === 'string' ? f : f?.url || f?.path || f?.file || f?.src;
+        if (looksLikeAudio(url)) return url;
       }
+    }
 
-      // check arrays that may contain files
-      const fileArrays = (product as any).files || (product as any).attachments || (product as any).media || (product as any).assets;
-      if (Array.isArray(fileArrays)) {
-        for (const f of fileArrays) {
-          const url = typeof f === 'string' ? f : f?.url || f?.path || f?.file || f?.src;
-          if (looksLikeAudio(url)) return url;
-        }
-      }
+    return '';
+  };
 
-      // fallback: no audio preview available
-      return '';
-    };
+  // SKELETON COMPONENTS
 
-  // Seasonal flags are declared where needed in the Feature Hub to keep scope local.
+  // Header skeleton
+  const renderHeaderSkeleton = () => (
+    <div className="w-full bg-white dark:bg-[#1a1a1a] border-b dark:border-gray-800">
+      <div className="max-w-7xl mx-auto px-4 py-4">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-8 w-32" />
+          <div className="flex items-center gap-4">
+            <Skeleton className="h-10 w-10 rounded-full" />
+            <Skeleton className="h-10 w-24 rounded-md" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Categories sidebar skeleton
+  const renderCategoriesSkeleton = () => (
+    <aside className="hidden lg:block col-span-1">
+      <div className="sticky top-24 space-y-4">
+        <div className="bg-white dark:bg-[#161616] p-4 rounded-lg shadow-sm">
+          <Skeleton className="h-6 w-32 mb-3" />
+          <div className="flex flex-col space-y-2">
+            {[...Array(8)].map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full rounded" />
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-[#161616] p-4 rounded-lg shadow-sm">
+          <Skeleton className="h-6 w-32 mb-2" />
+          <div className="space-y-3">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="flex items-center space-x-3">
+                <Skeleton className="w-12 h-12 rounded" />
+                <div className="flex-1">
+                  <Skeleton className="h-4 w-3/4 mb-1" />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-[#161616] p-4 rounded-lg shadow-sm">
+          <Skeleton className="h-6 w-32 mb-2" />
+          <div className="space-y-3">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="flex items-center gap-3">
+                <Skeleton className="w-12 h-12 rounded" />
+                <div className="flex-1 min-w-0">
+                  <Skeleton className="h-4 w-3/4 mb-1" />
+                  <Skeleton className="h-3 w-1/3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+
+  // Main tabs skeleton
+  const renderMainTabsSkeleton = () => (
+    <div className="mb-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between space-x-2 w-full">
+          {[...Array(3)].map((_, i) => (
+            <Skeleton key={i} className="flex-1 h-10 rounded" />
+          ))}
+        </div>
+        <div className="hidden lg:flex items-center">
+          <Skeleton className="h-4 w-24 mr-4" />
+          <Skeleton className="w-64 h-10 rounded-lg" />
+        </div>
+      </div>
+      <div className="mt-3">
+        <Skeleton className="h-10 w-full rounded" />
+      </div>
+    </div>
+  );
+
+  // Hero banner skeleton
+  const renderHeroBannerSkeleton = () => (
+    <div className="bg-gradient-to-r from-gray-200 to-gray-300 dark:from-gray-800 dark:to-gray-900 text-white rounded-lg p-6 mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex-1">
+          <Skeleton className="h-8 w-3/4 mb-2" />
+          <Skeleton className="h-4 w-1/2" />
+        </div>
+        <div className="mt-4 sm:mt-0 flex gap-2">
+          <Skeleton className="h-10 w-24 rounded" />
+          <Skeleton className="h-10 w-24 rounded" />
+        </div>
+      </div>
+    </div>
+  );
+
+  // Featured products carousel skeleton
+  const renderFeaturedProductsSkeleton = () => (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <Skeleton className="h-8 w-48 mb-2" />
+          <Skeleton className="h-4 w-64" />
+        </div>
+        <Skeleton className="h-10 w-32 rounded-lg" />
+      </div>
+
+      <div className="relative group">
+        <div className="relative h-[600px] sm:h-[700px] rounded-2xl overflow-hidden bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 shadow-lg">
+          <div className="relative h-full grid grid-cols-1 lg:grid-cols-2 gap-8 p-6">
+            <div className="flex items-center justify-center relative order-first lg:order-last">
+              <Skeleton className="w-full h-56 sm:h-96 lg:h-full rounded-3xl" />
+            </div>
+            <div className="flex flex-col justify-center space-y-6 z-20 order-last lg:order-first">
+              <Skeleton className="h-12 w-3/4" />
+              <Skeleton className="h-16 w-1/2" />
+              <Skeleton className="h-6 w-32" />
+              <div className="flex gap-4">
+                <Skeleton className="h-14 w-40 rounded-2xl" />
+                <Skeleton className="h-14 w-40 rounded-2xl" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-center mt-6 space-x-3">
+          {[...Array(5)].map((_, i) => (
+            <Skeleton key={i} className="w-3 h-3 rounded-full" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  // Digital products table skeleton
+  const renderDigitalTableSkeleton = () => (
+    <section className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-4 w-32" />
+      </div>
+
+      <Card className="dark:bg-[#161616] overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-gray-200 dark:border-gray-700">
+                {[...Array(6)].map((_, i) => (
+                  <th key={i} className="text-left py-3 px-4">
+                    <Skeleton className="h-4 w-20" />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[...Array(5)].map((_, i) => (
+                <tr key={i} className="border-b border-gray-100 dark:border-gray-800">
+                  {[...Array(6)].map((_, j) => (
+                    <td key={j} className="py-3 px-4">
+                      <Skeleton className="h-4 w-16" />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </section>
+  );
+
+  // Deals of the day skeleton
+  const renderDealsSkeleton = () => (
+    <section className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-4 w-32" />
+      </div>
+
+      <div className="lg:hidden mb-4 overflow-x-auto">
+        <div className="flex gap-3 px-2">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="snap-start flex-shrink-0 w-1/3">
+              <Skeleton className="w-full h-48 rounded-lg" />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="hidden md:block mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="bg-white dark:bg-[#161616] rounded-lg p-4 shadow-sm">
+              <Skeleton className="w-24 h-24 rounded mb-3" />
+              <Skeleton className="h-4 w-3/4 mb-2" />
+              <Skeleton className="h-4 w-1/2" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+
+  // On sale products skeleton
+  const renderOnSaleSkeleton = () => (
+    <section className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-4 w-32" />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+        {[...Array(8)].map((_, i) => (
+          <div key={i} className="bg-white dark:bg-[#161616] rounded-lg p-3 shadow-sm">
+            <Skeleton className="h-36 w-full rounded mb-2" />
+            <Skeleton className="h-4 w-3/4 mb-1" />
+            <Skeleton className="h-4 w-1/2" />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+
+  // New arrivals skeleton
+  const renderNewArrivalsSkeleton = () => (
+    <section className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-4 w-32" />
+      </div>
+
+      <div className="overflow-x-auto scroll-smooth snap-x snap-mandatory flex gap-4 pb-3">
+        {[...Array(4)].map((_, i) => (
+          <div key={i} className="snap-start flex-shrink-0 w-[90%] sm:w-[45%] lg:w-[23%]">
+            <Skeleton className="aspect-square rounded-t" />
+            <div className="p-4">
+              <div className="flex items-start justify-between mb-2">
+                <Skeleton className="h-6 w-20" />
+                <Skeleton className="h-6 w-16" />
+              </div>
+              <Skeleton className="h-4 w-3/4 mb-2" />
+              <Skeleton className="h-3 w-full mb-3" />
+              <div className="mt-3 flex items-center justify-between">
+                <div />
+                <div className="flex items-center space-x-2">
+                  <Skeleton className="h-8 w-8 rounded" />
+                  <Skeleton className="h-8 w-8 rounded" />
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+
+  // Trending products skeleton
+  const renderTrendingSkeleton = () => (
+    <section className="mb-6 hidden lg:block">
+      <div className="flex items-center justify-between mb-3">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-4 w-32" />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-4">
+        {[...Array(6)].map((_, i) => (
+          <div key={i} className="bg-white dark:bg-[#161616] rounded-lg p-3 shadow-sm">
+            <Skeleton className="h-28 w-full rounded mb-2" />
+            <Skeleton className="h-4 w-3/4 mb-1" />
+            <Skeleton className="h-4 w-1/2" />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+
+  // Mobile trending skeleton
+  const renderMobileTrendingSkeleton = () => (
+    <div className="mt-4 lg:hidden">
+      <div className="flex items-center justify-between mb-3">
+        <Skeleton className="h-6 w-48" />
+        <Skeleton className="h-4 w-32" />
+      </div>
+      <div className="overflow-x-auto scroll-smooth snap-x snap-mandatory">
+        <div className="min-w-full snap-start px-2">
+          <div className="grid grid-cols-3 gap-3">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="bg-white dark:bg-[#161616] rounded-lg p-2 shadow-sm">
+                <Skeleton className="w-full h-20 rounded" />
+                <div className="mt-2">
+                  <Skeleton className="h-4 w-3/4 mb-1" />
+                  <Skeleton className="h-4 w-1/2" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Page header skeleton
+  const renderPageHeaderSkeleton = () => (
+    <div className="mb-8 flex items-center justify-between">
+      <div>
+        <Skeleton className="h-10 w-48 mb-2" />
+        <Skeleton className="h-4 w-64" />
+      </div>
+      <div className="flex items-center gap-2">
+        <Skeleton className="h-10 w-24 rounded-md" />
+        <Skeleton className="h-10 w-10 rounded-full" />
+      </div>
+    </div>
+  );
+
+  // Full page skeleton loading
+  if (isInitialLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a] overflow-x-hidden custom-scrollbar pb-28 md:pb-0">
+        <style>{globalStyles}</style>
+        
+        {/* Header Skeleton */}
+        {renderHeaderSkeleton()}
+        
+        <div className="max-w-7xl mx-auto px-4 pt-6 pb-32 lg:pb-8">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            {/* Categories Sidebar Skeleton */}
+            {renderCategoriesSkeleton()}
+            
+            {/* Main Content Skeleton */}
+            <main className="col-span-1 lg:col-span-3">
+              {/* Mobile Search and Categories */}
+              <div className="mb-2 lg:hidden">
+                <div className="flex items-center mb-2">
+                  <Skeleton className="h-10 w-10 rounded-md mr-2" />
+                  <Skeleton className="flex-1 h-10 rounded-md" />
+                </div>
+              </div>
+              
+              {/* Main Tabs Skeleton */}
+              {renderMainTabsSkeleton()}
+              
+              {/* Page Header Skeleton */}
+              {renderPageHeaderSkeleton()}
+              
+              {/* Hero Banner Skeleton */}
+              {renderHeroBannerSkeleton()}
+              
+              {/* Featured Products Skeleton */}
+              {renderFeaturedProductsSkeleton()}
+              
+              {/* Deals of the Day Skeleton */}
+              {renderDealsSkeleton()}
+              
+              {/* On Sale Skeleton */}
+              {renderOnSaleSkeleton()}
+              
+              {/* New Arrivals Skeleton */}
+              {renderNewArrivalsSkeleton()}
+              
+              {/* Trending Skeleton (Desktop) */}
+              {renderTrendingSkeleton()}
+              
+              {/* Trending Skeleton (Mobile) */}
+              {renderMobileTrendingSkeleton()}
+            </main>
+          </div>
+        </div>
+        
+        {/* Mobile Bottom Navigation Skeleton */}
+        <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-[#1a1a1a] border-t dark:border-gray-800 lg:hidden">
+          <div className="flex justify-around py-3">
+            {[...Array(5)].map((_, i) => (
+              <Skeleton key={i} className="h-6 w-6" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -841,10 +1260,9 @@ const Square = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">
-  <Header />
-  {/* Inject small global styles for line-clamp and scrollbar hiding used by the featured hub */}
-  <style>{globalStyles}</style>
+    <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a] overflow-x-hidden custom-scrollbar pb-28 md:pb-0">
+      <Header />
+      <style>{globalStyles}</style>
       
       <div className="max-w-7xl mx-auto px-4 pt-6 pb-32 lg:pb-8">
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -1201,23 +1619,46 @@ const Square = () => {
             <section className="mb-6">
               {/* seasonal / promo hero */}
               {(() => {
-                const month = new Date().getMonth(); // 0 = Jan, 10 = Nov
-                const isBlackFridaySeason = month === 10; // November
-                const isHolidaySeason = month === 11; // December
+                const month = new Date().getMonth();
+                const isBlackFridaySeason = month === 10;
+                const isHolidaySeason = month === 11;
                 if (isBlackFridaySeason) {
-                  // Moved Black Friday hero to the Sales area below (before New Arrivals).
-                  // Keep this spot empty during Black Friday so the promo appears in the Sales section instead.
                   return null;
                 }
 
                 if (isHolidaySeason) {
+                  const prev = () => setSeasonalIndex(i => (i - 1 + seasonalMessages.length) % seasonalMessages.length);
+                  const next = () => setSeasonalIndex(i => (i + 1) % seasonalMessages.length);
+
+                  const slide = seasonalMessages[seasonalIndex];
                   return (
-                    <div className="bg-gradient-to-r from-purple-700 via-pink-600 to-yellow-400 text-white rounded-lg p-6 mb-4">
+                    <div className={`${slide.bgClass} ${slide.textClass} rounded-lg p-6 mb-4`}>
                       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <h2 className="text-2xl font-extrabold">Seasonal Savings — Gift More, Spend Less</h2>
-                          <p className="mt-1 text-gray-100">Discover curated gift picks, limited time bundles, and store promos for the season.</p>
+                        <div className="flex-1">
+                          <h2 className={`text-2xl font-extrabold ${slide.titleAnim || 'anim-fade'}`}>{slide.title}</h2>
+                          <p className={`${slide.subtitleAnim || 'anim-fade anim-delay-200'} mt-1`}>{slide.subtitle}</p>
+
+                          <div className="mt-3 flex items-center gap-2">
+                            <Button size="sm" variant="ghost" className="!p-2" onClick={prev} aria-label="Previous">
+                              <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            <Button size="sm" variant="ghost" className="!p-2" onClick={next} aria-label="Next">
+                              <ChevronRight className="h-4 w-4" />
+                            </Button>
+
+                            <div className="ml-2 flex items-center gap-2">
+                              {seasonalMessages.map((_, idx) => (
+                                <button
+                                  key={idx}
+                                  onClick={() => setSeasonalIndex(idx)}
+                                  aria-label={`Show message ${idx + 1}`}
+                                  className={`h-2 w-2 rounded-full ${idx === seasonalIndex ? 'bg-white' : 'bg-white/50'}`}
+                                />
+                              ))}
+                            </div>
+                          </div>
                         </div>
+
                         <div className="mt-4 sm:mt-0 flex gap-2">
                           <Button size="sm" className="bg-white text-black" onClick={() => navigate('/collections/holiday')}>Browse Gifts</Button>
                           <Button size="sm" variant="outline" onClick={() => navigate('/deals')}>Today's Deals</Button>
@@ -1232,7 +1673,7 @@ const Square = () => {
                     <div className="flex items-center justify-between">
                       <div>
                         <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Featured Picks</h2>
-                        <p className="text-gray-500 dark:text-gray-400">Handpicked highlights from stores you’ll love.</p>
+                        <p className="text-gray-500 dark:text-gray-400">Handpicked highlights from stores you'll love.</p>
                       </div>
                       <div className="hidden sm:flex gap-2">
                         <Button size="sm" variant="outline" onClick={() => navigate('/featured')}>Explore Featured</Button>
@@ -1581,9 +2022,6 @@ const Square = () => {
             {/* Regular grid view for other digital products and when not in music/audiobook tabs */}
             {digitalSubTab !== 'music' && digitalSubTab !== 'audiobook' && (
               <>
-                {/* Featured section */}
-                
-
                 {/* Deals of the Day */}
                 {dealsOfTheDay && dealsOfTheDay.length > 0 && (
                   <section className="mb-6">
@@ -1592,7 +2030,7 @@ const Square = () => {
                       <div className="text-sm text-gray-500">Limited-time highlights</div>
                     </div>
 
-                    {/* Mobile carousel: 3 per view, auto-advance handled by useAutoAdvance */}
+                    {/* Mobile carousel */}
                     <div ref={dealsRef} style={{ WebkitOverflowScrolling: 'touch' }} className="lg:hidden mb-4 overflow-x-auto scroll-smooth snap-x snap-mandatory">
                       <div className="flex gap-3 px-2">
                         {dealsOfTheDay.map(p => {
@@ -1603,7 +2041,6 @@ const Square = () => {
                               className="snap-start flex-shrink-0 w-1/3 lg:w-[16.666%] bg-white dark:bg-[#161616] rounded-lg p-2 shadow-sm hover:shadow-md transition cursor-pointer"
                               onClick={() => navigate(`/product/${p.id}`)}
                             >
-                              {/* smaller image height for compact look */}
                               <div className="w-full h-20 sm:h-24 lg:h-28 overflow-hidden rounded">
                                 {p.images?.[0] ? (
                                   <img src={p.images[0]} alt={p.title} loading="lazy" decoding="async" className="w-full h-full object-cover" />
@@ -1629,7 +2066,7 @@ const Square = () => {
                       </div>
                     </div>
 
-                    {/* Mobile controls: prettier pagination and View All (outside carousel so always visible) */}
+                    {/* Mobile controls */}
                     <div className="lg:hidden flex items-center justify-between mt-3 px-2">
                       <div className="flex items-center gap-3">
                         <Button size="sm" variant="ghost" onClick={handleDealsPrev} className="p-2 rounded-full border border-gray-200 dark:border-gray-700">
@@ -1712,9 +2149,8 @@ const Square = () => {
                 {/* On Sale section */}
                 {onSaleProducts && onSaleProducts.length > 0 && (
                   <section className="mb-6">
-                    {/* Black Friday hero lives in Sales during November */}
                     {(() => {
-                      const monthLocal = new Date().getMonth(); // 0 = Jan, 10 = Nov
+                      const monthLocal = new Date().getMonth();
                       const isBlackFridaySeasonLocal = monthLocal === 10;
                       if (!isBlackFridaySeasonLocal) return null;
                       return (
@@ -1971,7 +2407,7 @@ const Square = () => {
                       ))}
                     </div>
 
-                    {/* Mobile trending controls: outside carousel so always visible */}
+                    {/* Mobile trending controls */}
                     <div className="lg:hidden flex items-center justify-between mt-3 px-2">
                       <div className="flex items-center gap-3">
                         <Button size="sm" variant="ghost" onClick={handleTrendingPrev} className="p-2 rounded-full border border-gray-200 dark:border-gray-700">

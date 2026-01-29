@@ -164,14 +164,14 @@ const StudioSettings = () => {
               <div className="flex items-center gap-2">
                 <Input
                   readOnly
-                  value={`https://1voicesquare.com/studio/${channel.id}`}
+                  value={`https://nexsq.com/studio/${channel.id}`}
                   className="flex-1 bg-gray-800 text-white border-none focus:ring-0 focus:outline-none text-xs px-2 py-1 rounded"
                   style={{ minWidth: 0 }}
                 />
                 <Button
                   size="sm"
                   onClick={async () => {
-                    await navigator.clipboard.writeText(`https://1voicesquare.com/studio/${channel.id}`);
+                    await navigator.clipboard.writeText(`https://nexsq.com/studio/${channel.id}`);
                     toast({ description: 'Link copied to clipboard!' });
                   }}
                   className="text-xs"

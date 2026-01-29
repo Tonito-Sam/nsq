@@ -1,0 +1,36 @@
+<!-- Save as test-direct.html in project root -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Direct Test</title>
+</head>
+<body style="margin:0;background:#222;color:white;font-family:Arial">
+    <h1 style="text-align:center;padding:30px">Direct HTML + React Test</h1>
+    
+    <div id="root" style="padding:50px;background:#333;margin:20px">
+        React will load here...
+    </div>
+    
+    <script type="module">
+        console.log("Direct module script executing");
+        
+        // Load React from CDN
+        import React from 'https://esm.sh/react@18.3.1';
+        import ReactDOM from 'https://esm.sh/react-dom@18.3.1/client';
+        
+        console.log("React loaded from CDN");
+        
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement('div', {
+            style: {
+                background: 'green',
+                color: 'white',
+                padding: '40px',
+                fontSize: '24px'
+            }
+        }, '✅ React from CDN works!'));
+        
+        console.log("React rendered successfully");
+    </script>
+</body>
+</html>

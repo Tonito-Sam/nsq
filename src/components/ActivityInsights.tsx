@@ -57,10 +57,19 @@ export const ActivityInsights = () => {
           .order('likes_count', { ascending: false })
           .limit(3);
 
+        // Normalize returned rows: Supabase may return the related `user` as an array
+        const normalized = (trendingPosts || []).map((p: any) => ({
+          id: String(p.id),
+          content: p.content || '',
+          likes_count: Number(p.likes_count || 0),
+          comments_count: Number(p.comments_count || 0),
+          user: (p.user && Array.isArray(p.user) ? p.user[0] : p.user) || { first_name: '', last_name: '' }
+        })) as TrendingPost[];
+
         setStats({
           totalPosts: postsCount || 0,
           totalConnections: connectionsCount || 0,
-          trendingPosts: trendingPosts || []
+          trendingPosts: normalized
         });
       } catch (error) {
         console.error('Error fetching stats:', error);

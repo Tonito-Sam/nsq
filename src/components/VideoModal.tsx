@@ -587,9 +587,9 @@ export const VideoModal: React.FC<VideoModalProps> = (props) => {
     if (!moment) return;
     try {
       const { data, error } = await supabase
-        .from('moment_likes')
+        .from('likes')
         .select('id, user_id, created_at, users (username, first_name, last_name, avatar_url)')
-        .eq('moment_id', moment.id)
+        .eq('post_id', moment.id)
         .order('created_at', { ascending: false });
       
       if (!error && data) {
@@ -685,18 +685,18 @@ export const VideoModal: React.FC<VideoModalProps> = (props) => {
     try {
       // Check if user already liked this moment
       const { data: existingLike } = await supabase
-        .from('moment_likes')
+        .from('likes')
         .select('id')
-        .eq('moment_id', moment.id)
+        .eq('post_id', moment.id)
         .eq('user_id', currentUser.id)
         .single();
 
       if (existingLike) {
         // Unlike - remove the like
         await supabase
-          .from('moment_likes')
+          .from('likes')
           .delete()
-          .eq('moment_id', moment.id)
+          .eq('post_id', moment.id)
           .eq('user_id', currentUser.id);
         await fetchLikes();
         setShowHeartAnimation(false);
@@ -704,10 +704,11 @@ export const VideoModal: React.FC<VideoModalProps> = (props) => {
       } else {
         // Like - add the like
         await supabase
-          .from('moment_likes')
+          .from('likes')
           .insert({
-            moment_id: moment.id,
+            post_id: moment.id,
             user_id: currentUser.id,
+            reaction_type: 'like',
             created_at: new Date().toISOString()
           });
         await fetchLikes();
@@ -736,15 +737,15 @@ export const VideoModal: React.FC<VideoModalProps> = (props) => {
   useEffect(() => {
     const checkUserLike = async () => {
       if (!moment || !currentUser) return;
-      
+
       try {
         const { data } = await supabase
-          .from('moment_likes')
+          .from('likes')
           .select('id')
-          .eq('moment_id', moment.id)
+          .eq('post_id', moment.id)
           .eq('user_id', currentUser.id)
           .single();
-        
+
         setUserHasLiked(!!data);
       } catch (error) {
         setUserHasLiked(false);

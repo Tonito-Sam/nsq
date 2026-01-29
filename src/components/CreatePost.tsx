@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { CreatePostModal } from './CreatePostModal';
+import { getMediaUrl } from '@/utils/mediaUtils';
 import { useAuth } from '@/hooks/useAuth';
 
 interface CreatePostProps {
@@ -24,7 +25,13 @@ export const CreatePost: React.FC<CreatePostProps> = ({ onPostCreated, groupId }
   // Robust avatar logic: always show a visible avatar/fallback
   const getUserAvatar = () => {
     const url = user?.user_metadata?.avatar_url;
-    if (url && typeof url === 'string' && url.trim() && url !== '/placeholder.svg') return url;
+    if (url && typeof url === 'string' && url.trim() && url !== '/placeholder.svg') {
+      try {
+        return getMediaUrl(url, 'posts');
+      } catch (err) {
+        return url;
+      }
+    }
     return "/placeholder.svg";
   };
   const getUserName = () => {

@@ -106,6 +106,7 @@ function TypingHeroCard() {
 }
 
 const Auth = () => {
+  console.log('Auth component mount');
   const [isLogin, setIsLogin] = useState(true);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [email, setEmail] = useState('');
@@ -123,6 +124,8 @@ const Auth = () => {
   
   const { signIn, signUp, user } = useAuth();
   const navigate = useNavigate();
+
+  console.log('Auth state init', { isLogin, showConfirmation, user });
 
   // Modern feature cards for right side
   const features = [

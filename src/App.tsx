@@ -20,7 +20,6 @@ import MyStore from "./pages/MyStore";
 import Square from "./pages/Square";
 import Wallet from "./pages/Wallet";
 import Studio from "./pages/Studio";
-import Studio2 from "./pages/studio2";
 import ReelViewPage from "./pages/ReelViewPage";
 import PostViewPage from "./pages/PostViewPage";
 import Messages from "./pages/Messages";
@@ -48,6 +47,7 @@ import SendBulkResetEmails from "./pages/SendBulkResetEmails";
 import CreateStore from "./pages/CreateStore";
 import ShippingPartnerPage from "./pages/ShippingPartnerPage";
 import ChannelPage from "./pages/ChannelPage";
+import StudioChannelPage from "./components/studio/ChannelPage";
 import Cart from "./pages/Cart";
 import Checkout from "./pages/Checkout";
 import OrderSummary from "./pages/OrderSummary";
@@ -164,88 +164,129 @@ const LoadingOverlay = ({ fadeOut }: { fadeOut: boolean }) => (
 
 // Removed SessionValidator and validateSession usage due to missing property
 
+function StreamEndPreviewWrapper() {
+  const location = useLocation();
+  const { streamId } = useParams();
+  const videoUrl = location.state?.videoUrl || "";
+  return <StreamEndPreview streamId={streamId!} videoUrl={videoUrl} />;
+}
+
+// Wrapper component for ManageOrders that provides the required storeCurrency prop
+function ManageOrdersWithCurrency() {
+  // In a real app, you would fetch this from:
+  // 1. Store context/state
+  // 2. User's profile/settings
+  // 3. Store API call
+  // For now, using a sensible default - you should replace this with actual logic
+  const storeCurrency = "USD"; // Default to USD
+  
+  // You might want to implement logic like:
+  // const { currentStore } = useStoreContext();
+  // const storeCurrency = currentStore?.currency || "USD";
+  
+  // Or fetch from localStorage:
+  // useEffect(() => {
+  //   const storeData = localStorage.getItem('currentStore');
+  //   if (storeData) {
+  //     const store = JSON.parse(storeData);
+  //     setStoreCurrency(store.currency || "USD");
+  //   }
+  // }, []);
+  
+  return <ManageOrders storeCurrency={storeCurrency} />;
+}
+
 const App = () => {
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
   const [fadeOut, setFadeOut] = useState(false);
 
   useEffect(() => {
-    const timer1 = setTimeout(() => setFadeOut(true), 1500);
-    const timer2 = setTimeout(() => setLoading(false), 2700);
-    return () => {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-    };
+    const timer = setTimeout(() => {
+      setFadeOut(true);
+      setTimeout(() => setIsLoading(false), 1200);
+    }, 2700);
+    return () => clearTimeout(timer);
   }, []);
 
+  console.log("App is rendering");
+
   return (
-    <>
-      {loading && <LoadingOverlay fadeOut={fadeOut} />}
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <TooltipProvider>
-            <AuthProvider>
-              <ShowProvider>
-                <Toaster />
-                <Sonner />
-                <BrowserRouter>
-                  {/* Track last non-auth route for session restore */}
-                  <RouteTracker />
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <ThemeProvider defaultTheme="dark" storageKey="nexsq-theme">
+          <ShowProvider>
+            <TooltipProvider>
+              <BrowserRouter>
+                <RouteTracker />
+                {isLoading && <LoadingOverlay fadeOut={fadeOut} />}
+                <div style={{ display: isLoading ? "none" : "block" }}>
                   <Routes>
-                    <Route path="/" element={<Index />} />
+                    {/* Public Routes */}
                     <Route path="/auth" element={<Auth />} />
-                    <Route path="/reset-password" element={<ResetPassword />} />
                     <Route path="/forgot-password" element={<ForgotPassword />} />
-                    <Route path="/profile" element={<Profile />} />
-                    <Route path="/profile/:username" element={<Profile />} />
-                    <Route path="/profile/edit" element={<EditProfile />} />
-                    <Route path="/campaigns" element={<Campaigns />} />
-                    <Route path="/campaigns/create" element={<CampaignCreate />} />
-                    <Route path="/my-store" element={<MyStore />} />
-                    <Route path="/create-store" element={<CreateStore />} />
-                    <Route path="/square" element={<Square />} />
-                    <Route path="/deals" element={<Deals />} />
-                    <Route path="/sales" element={<Sales />} />
-                    <Route path="/wallet" element={<Wallet />} />
-                    <Route path="/studio" element={<Studio />} />
-                    <Route path="/studio2" element={<Studio2 />} />
-                    <Route path="/studio/reel/:id" element={<ReelViewPage />} />
-                    <Route path="/post/:id" element={<PostViewPage />} />
-                    <Route path="/studio/upload" element={<UploadReels />} />
-                    <Route path="/studio/record" element={<RecordReel />} />
-                    <Route path="/studio/record-preview" element={<RecordVideo />} />
-                    <Route path="/studio/live" element={<LiveStream />} />
-                    <Route path="/studio/settings" element={<StudioSettings />} />
-                    <Route path="/messages" element={<Messages />} />
-                    <Route path="/messages/:conversationId" element={<Messages />} />
-                    <Route path="/notifications" element={<Notifications />} />
-                    <Route path="/groups" element={<Groups />} />
-                    <Route path="/groups/:groupId" element={<GroupDetails />} />
-                    <Route path="/events" element={<Events />} />
-                    <Route path="/bookmarks" element={<Bookmarks />} />
-                    <Route path="/settings" element={<Settings />} />
-                    <Route path="/users" element={<Users />} />
+                    <Route path="/reset-password/:token" element={<ResetPassword />} />
                     <Route path="/email-confirmed" element={<EmailConfirmed />} />
                     <Route path="/about" element={<About />} />
-                    <Route path="/about-onepager" element={<AboutOnePager />} />
+                    <Route path="/about-one-pager" element={<AboutOnePager />} />
                     <Route path="/terms" element={<Terms />} />
-                    <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+                    <Route path="/privacy" element={<PrivacyPolicy />} />
                     <Route path="/cookies" element={<Cookies />} />
                     <Route path="/careers" element={<Careers />} />
                     <Route path="/developers" element={<Developers />} />
                     
-                    <Route path="/cart" element={<Cart />} />
-                    <Route path="/checkout" element={<Checkout />} />
+                    {/* Protected Routes */}
+                    <Route path="/" element={<Index />} />
+                    {/* Dynamic profile route for other users */}
+                    <Route path="/profile/:username" element={<Profile />} />
+                    <Route path="/profile" element={<Profile />} />
+                    <Route path="/profile/edit" element={<EditProfile />} />
+                    <Route path="/edit-profile" element={<EditProfile />} />
+                    <Route path="/square" element={<Square />} />
+                    <Route path="/studio" element={<Studio />} />
+                    <Route path="/studio/upload" element={<UploadReels />} />
+                    <Route path="/studio/record" element={<RecordReel />} />
+                    <Route path="/studio/record-preview" element={<RecordVideo />} />
+                    <Route path="/studio/settings" element={<StudioSettings />} />
+                    <Route path="/wallet" element={<Wallet />} />
+                    <Route path="/wallet/topup-result" element={<WalletTopupResult />} />
+                    <Route path="/my-store" element={<MyStore />} />
+                    <Route path="/create-store" element={<CreateStore />} />
                     <Route path="/store/:store_id" element={<StorePage />} />
                     <Route path="/product/:product_id" element={<ProductPage />} />
+                    <Route path="/campaigns" element={<Campaigns />} />
+                    <Route path="/campaigns/create" element={<CampaignCreate />} />
+                    <Route path="/reels/upload" element={<UploadReels />} />
+                    <Route path="/reels/record" element={<RecordReel />} />
+                    <Route path="/video/record" element={<RecordVideo />} />
+                    <Route path="/live" element={<LiveStream />} />
+                    <Route path="/stream-end/:streamId" element={<StreamEndPreviewWrapper />} />
+                    <Route path="/reel/:reelId" element={<ReelViewPage />} />
+                    <Route path="/post/:postId" element={<PostViewPage />} />
+                    <Route path="/messages" element={<Messages />} />
+                    <Route path="/notifications" element={<Notifications />} />
+                    <Route path="/groups" element={<Groups />} />
+                    <Route path="/groups/:groupId" element={<GroupDetails />} />
+                    <Route path="/events" element={<Events />} />
+                    <Route path="/events/settings/:eventId" element={<EventSettingsPage />} />
+                    <Route path="/bookmarks" element={<Bookmarks />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/channel/:channelId" element={<ChannelPage />} />
+                    <Route path="/studio/channel/:id" element={<StudioChannelPage />} />
+                    <Route path="/studio/channel/user/:id" element={<StudioChannelPage />} />
+                    <Route path="/cart" element={<Cart />} />
+                    <Route path="/checkout" element={<Checkout />} />
+                    <Route path="/order/summary" element={<OrderSummary />} />
+                    <Route path="/order/failed" element={<OrderSummaryFailed />} />
                     <Route path="/hashtag/:tag" element={<HashtagPage />} />
-                    <Route path="/user-management" element={<UserManagement />} />
-                    <Route path="/admin/content" element={<ContentModeration />} />
-                    <Route path="/admin/settings" element={<SystemSettings />} />
-                    <Route path="/analytics" element={<Analytics />} />
-                    <Route path="/send-bulk-reset-emails" element={<SendBulkResetEmails />} />
-                    <Route path="/shipping-partner/:partnerCode" element={<ShippingPartnerPage />} />
-                    <Route path="/1voiceadmin" element={<OneVoiceAdmin />} />
-                    <Route path="/admin" element={<AdminLayout />}>
+                    <Route path="/saved" element={<SavedPostsPage />} />
+                    <Route path="/shipping-partners" element={<ShippingPartnerPage />} />
+                    <Route path="/deals" element={<Deals />} />
+                    <Route path="/sales" element={<Sales />} />
+                    <Route path="/manage-orders" element={<ManageOrdersWithCurrency />} />
+                    
+                    {/* Admin Routes */}
+                    <Route path="/admin" element={<AdminRedirect />} />
+                    <Route path="/admin/*" element={<AdminLayout />}>
                       <Route path="overview" element={<OverviewPage />} />
                       <Route path="users" element={<UsersPage />} />
                       <Route path="studios" element={<StudiosPage />} />
@@ -256,37 +297,30 @@ const App = () => {
                       <Route path="tickets" element={<TicketsPage />} />
                       <Route path="announcements" element={<AnnouncementsPage />} />
                       <Route path="revenue" element={<RevenuePage />} />
-                      {/* Sound Bank (admin) */}
                       <Route path="soundbank" element={<SoundBankManager />} />
+                      <Route path="user-management" element={<UserManagement />} />
+                      <Route path="analytics" element={<Analytics />} />
+                      <Route path="content-moderation" element={<ContentModeration />} />
+                      <Route path="system-settings" element={<SystemSettings />} />
                     </Route>
-                    <Route path="/order-summary" element={<OrderSummaryFailed />} />
-                    <Route path="/order-summary/:orderId" element={<OrderSummary />} />
-                    <Route path="/orders" element={<ManageOrders storeCurrency="ZAR" />} />
-                    <Route path="/saved-posts" element={<SavedPostsPage />} />
-                    <Route path="/studio/:channelId" element={<ChannelPage />} />
-                    <Route path="/events/settings/:eventId" element={<EventSettingsPage />} />
-                    <Route path="/admin" element={<AdminRedirect />} />
-                    <Route path="/wallet-topup-result" element={<WalletTopupResult />} />
-                    <Route path="/stream/preview/:streamId" element={<StreamEndPreviewWrapper />} />
-                    <Route path="/stream-end-preview/:streamId" element={<StreamEndPreviewWrapper />} />
+                    
+                    {/* Other Admin */}
+                    <Route path="/1voiceadmin" element={<OneVoiceAdmin />} />
+                    <Route path="/send-bulk-reset-emails" element={<SendBulkResetEmails />} />
+                    
+                    {/* 404 */}
                     <Route path="*" element={<NotFound />} />
                   </Routes>
-                </BrowserRouter>
-              </ShowProvider>
-            </AuthProvider>
-          </TooltipProvider>
+                </div>
+                <Toaster />
+                <Sonner />
+              </BrowserRouter>
+            </TooltipProvider>
+          </ShowProvider>
         </ThemeProvider>
-      </QueryClientProvider>
-    </>
+      </AuthProvider>
+    </QueryClientProvider>
   );
 };
-
-// Wrapper to extract state for StreamEndPreview
-function StreamEndPreviewWrapper() {
-  const location = useLocation();
-  const { streamId } = useParams();
-  const videoUrl = location.state?.videoUrl || "";
-  return <StreamEndPreview streamId={streamId!} videoUrl={videoUrl} />;
-}
 
 export default App;

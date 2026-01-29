@@ -218,7 +218,7 @@ export const ProfileSection = () => {
 
   if (!userData) {
     return (
-      <Card className="p-6 bg-card">
+      <Card className="p-6 dark:bg-[#161616] bg-white dark:border-gray-700 shadow-md dark:shadow-none">
         <div className="animate-pulse">
           <div className="h-20 bg-gray-200 rounded-lg mb-4"></div>
           <div className="h-4 bg-gray-200 rounded mb-2"></div>
@@ -234,7 +234,7 @@ export const ProfileSection = () => {
 
   return (
     <>
-      <Card className="overflow-hidden bg-card">
+      <Card className="overflow-hidden dark:bg-[#161616] bg-white dark:border-gray-700 shadow-md dark:shadow-none">
         {/* Cover Photo (Clickable) */}
         <div
           className="h-32 bg-gradient-to-r from-purple-600 via-yellow-400 to-purple-600 relative cursor-pointer"

@@ -17,6 +17,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { EnhancedStoreSetupModal } from '@/components/EnhancedStoreSetupModal';
+import { Skeleton } from '@/components/ui/skeleton';
 
 interface Product {
   id: string;
@@ -70,6 +71,7 @@ const MyStore = () => {
     totalViews: 0
   });
   const [showStoreSetup, setShowStoreSetup] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   useEffect(() => {
     if (user) {
@@ -116,6 +118,7 @@ const MyStore = () => {
       window.location.href = '/create-store';
     }
     setStoreLoading(false);
+    setIsInitialLoading(false);
   };
 
   const fetchProducts = async () => {
@@ -143,6 +146,7 @@ const MyStore = () => {
       });
     } finally {
       setLoading(false);
+      setIsInitialLoading(false);
     }
   };
 
@@ -387,7 +391,278 @@ const MyStore = () => {
     }, 1200);
   };
 
+  // SKELETON COMPONENTS
+
+  // Header skeleton
+  const renderHeaderSkeleton = () => (
+    <div className="w-full bg-white dark:bg-[#1a1a1a] border-b dark:border-gray-800">
+      <div className="max-w-7xl mx-auto px-4 py-4">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-8 w-32" />
+          <div className="flex items-center gap-4">
+            <Skeleton className="h-10 w-10 rounded-full" />
+            <Skeleton className="h-10 w-24 rounded-md" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Mobile store nav skeleton
+  const renderMobileNavSkeleton = () => (
+    <div className="lg:hidden mb-4">
+      <Skeleton className="h-10 w-full rounded-lg mb-2" />
+      <div className="flex gap-2 overflow-x-auto pb-2">
+        {[...Array(6)].map((_, i) => (
+          <Skeleton key={i} className="h-8 w-20 flex-shrink-0 rounded-full" />
+        ))}
+      </div>
+    </div>
+  );
+
+  // Desktop navigation skeleton
+  const renderDesktopNavSkeleton = () => (
+    <div className="hidden lg:block w-80 px-4 py-6">
+      <div className="mb-8">
+        <Skeleton className="h-6 w-32 mb-4" />
+        <Skeleton className="h-10 w-full rounded-lg mb-2" />
+        {[...Array(7)].map((_, i) => (
+          <Skeleton key={i} className="h-10 w-full rounded-lg mb-2" />
+        ))}
+      </div>
+    </div>
+  );
+
+  // Dashboard stats skeleton
+  const renderDashboardStatsSkeleton = () => (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      {[...Array(4)].map((_, i) => (
+        <Card key={i} className="dark:bg-[#161616] p-6">
+          <Skeleton className="h-6 w-3/4 mb-2" />
+          <Skeleton className="h-8 w-1/2" />
+          <div className="mt-4">
+            <Skeleton className="h-3 w-full mb-1" />
+            <Skeleton className="h-3 w-2/3" />
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+
+  // Dashboard chart skeleton
+  const renderDashboardChartSkeleton = () => (
+    <Card className="dark:bg-[#161616] p-6 mb-6">
+      <Skeleton className="h-6 w-48 mb-4" />
+      <Skeleton className="h-64 w-full" />
+    </Card>
+  );
+
+  // Recent orders skeleton
+  const renderRecentOrdersSkeleton = () => (
+    <Card className="dark:bg-[#161616] p-6">
+      <Skeleton className="h-6 w-48 mb-4" />
+      <div className="space-y-3">
+        {[...Array(5)].map((_, i) => (
+          <div key={i} className="flex items-center justify-between py-3 border-b dark:border-gray-700">
+            <div className="flex items-center gap-3">
+              <Skeleton className="h-10 w-10 rounded-full" />
+              <div>
+                <Skeleton className="h-4 w-32 mb-1" />
+                <Skeleton className="h-3 w-24" />
+              </div>
+            </div>
+            <Skeleton className="h-6 w-20" />
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+
+  // Products section skeleton
+  const renderProductsSkeleton = () => (
+    <>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <Skeleton className="h-8 w-48 mb-2" />
+          <Skeleton className="h-4 w-64" />
+        </div>
+        <Skeleton className="h-10 w-32 rounded-lg" />
+      </div>
+      
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {[...Array(8)].map((_, i) => (
+          <Card key={i} className="dark:bg-[#161616] overflow-hidden">
+            <Skeleton className="h-48 w-full" />
+            <div className="p-4">
+              <Skeleton className="h-5 w-3/4 mb-2" />
+              <Skeleton className="h-4 w-1/2 mb-3" />
+              <Skeleton className="h-6 w-20 mb-3" />
+              <div className="flex justify-between">
+                <Skeleton className="h-8 w-20 rounded" />
+                <Skeleton className="h-8 w-20 rounded" />
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
+
+  // Chat board skeleton
+  const renderChatBoardSkeleton = () => (
+    <div className="w-full max-w-full overflow-x-hidden">
+      <Card className="dark:bg-[#161616] p-6">
+        <Skeleton className="h-8 w-48 mb-6" />
+        <div className="space-y-4">
+          {[...Array(3)].map((_, i) => (
+            <div key={i} className={`flex ${i % 2 === 0 ? 'justify-start' : 'justify-end'}`}>
+              <div className={`max-w-xs ${i % 2 === 0 ? '' : 'text-right'}`}>
+                <Skeleton className="h-4 w-24 mb-1" />
+                <Skeleton className="h-16 w-64 rounded-lg" />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-6 pt-6 border-t dark:border-gray-700">
+          <Skeleton className="h-12 w-full rounded-lg" />
+        </div>
+      </Card>
+    </div>
+  );
+
+  // Orders management skeleton
+  const renderOrdersSkeleton = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <Skeleton className="h-8 w-48" />
+        <div className="flex gap-2">
+          <Skeleton className="h-10 w-24 rounded-lg" />
+          <Skeleton className="h-10 w-32 rounded-lg" />
+        </div>
+      </div>
+      <Card className="dark:bg-[#161616] overflow-hidden">
+        <div className="p-6">
+          <Skeleton className="h-6 w-64 mb-6" />
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr>
+                  {['Order ID', 'Customer', 'Amount', 'Status', 'Date', 'Actions'].map((_, i) => (
+                    <th key={i} className="text-left py-3">
+                      <Skeleton className="h-4 w-20" />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[...Array(5)].map((_, i) => (
+                  <tr key={i} className="border-t dark:border-gray-700">
+                    {[...Array(6)].map((_, j) => (
+                      <td key={j} className="py-3">
+                        <Skeleton className="h-4 w-24" />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+
+  // Sales reports skeleton
+  const renderSalesReportsSkeleton = () => (
+    <div className="space-y-6">
+      <Skeleton className="h-8 w-64" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="dark:bg-[#161616] p-6">
+          <Skeleton className="h-6 w-48 mb-4" />
+          <Skeleton className="h-64 w-full" />
+        </Card>
+        <Card className="dark:bg-[#161616] p-6">
+          <Skeleton className="h-6 w-48 mb-4" />
+          <Skeleton className="h-64 w-full" />
+        </Card>
+      </div>
+    </div>
+  );
+
+  // Store wallet skeleton
+  const renderWalletSkeleton = () => (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <Skeleton className="h-8 w-48" />
+        <Skeleton className="h-10 w-32 rounded-lg" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        {[...Array(3)].map((_, i) => (
+          <Card key={i} className="dark:bg-[#161616] p-6">
+            <Skeleton className="h-6 w-32 mb-4" />
+            <Skeleton className="h-8 w-1/2 mb-6" />
+            <Skeleton className="h-10 w-full rounded-lg" />
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+
+  // Store settings skeleton
+  const renderSettingsSkeleton = () => (
+    <div className="space-y-6">
+      <Skeleton className="h-8 w-64" />
+      <Card className="dark:bg-[#161616] p-6">
+        <div className="space-y-6">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-10 w-full rounded" />
+            </div>
+          ))}
+          <div className="pt-6 border-t dark:border-gray-700">
+            <Skeleton className="h-10 w-32 rounded-lg" />
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+
   const renderDashboardContent = () => {
+    // Show skeleton if initial loading
+    if (isInitialLoading) {
+      switch (activeSection) {
+        case 'dashboard':
+          return (
+            <>
+              {renderDashboardStatsSkeleton()}
+              {renderDashboardChartSkeleton()}
+              {renderRecentOrdersSkeleton()}
+            </>
+          );
+        case 'products':
+          return renderProductsSkeleton();
+        case 'chat':
+          return renderChatBoardSkeleton();
+        case 'orders':
+          return renderOrdersSkeleton();
+        case 'reports':
+          return renderSalesReportsSkeleton();
+        case 'wallet':
+          return renderWalletSkeleton();
+        case 'settings':
+          return renderSettingsSkeleton();
+        default:
+          return (
+            <Card className="dark:bg-[#161616] p-8 text-center">
+              <Skeleton className="h-6 w-48 mx-auto mb-2" />
+              <Skeleton className="h-4 w-64 mx-auto" />
+            </Card>
+          );
+      }
+    }
+
+    // Actual content when not loading
     switch (activeSection) {
       case 'dashboard':
         return <StoreDashboard stats={stats} storeCurrency={store?.base_currency || 'ZAR'} />;
@@ -447,6 +722,37 @@ const MyStore = () => {
         );
     }
   };
+
+  if (isInitialLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a] transition-colors overflow-x-hidden">
+        {/* Header Skeleton */}
+        {renderHeaderSkeleton()}
+        
+        {/* Mobile Navigation Skeleton */}
+        {renderMobileNavSkeleton()}
+        
+        <div className="flex flex-col lg:flex-row max-w-7xl mx-auto w-full">
+          {/* Desktop Navigation Skeleton */}
+          {renderDesktopNavSkeleton()}
+          
+          <main className="flex-1 w-full px-2 sm:px-4 py-4 pb-32 lg:pb-6 overflow-x-hidden">
+            {/* Dashboard Content Skeleton */}
+            {renderDashboardContent()}
+          </main>
+        </div>
+        
+        {/* Mobile Bottom Navigation Skeleton */}
+        <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-[#1a1a1a] border-t dark:border-gray-800 lg:hidden">
+          <div className="flex justify-around py-3">
+            {[...Array(5)].map((_, i) => (
+              <Skeleton key={i} className="h-6 w-6" />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (storeLoading) {
     return (

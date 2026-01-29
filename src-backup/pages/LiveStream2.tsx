@@ -1,0 +1,817 @@
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { FaHeart, FaGift, FaCommentDots, FaEye, FaStop } from "react-icons/fa";
+import { Video } from "lucide-react";
+import Hls from "hls.js";
+import { Header } from "@/components/Header";
+import { MobileBottomNav } from "@/components/MobileBottomNav";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { StreamPreview } from "@/components/StreamPreview";
+import { LiveStreamChat } from "@/components/LiveStreamChat";
+import { AnimatedHearts } from "@/components/AnimatedHearts";
+import { GiftModal } from "@/components/GiftModal";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from '@/hooks/useAuth';
+
+type StreamInfo = {
+  rtmpIngestUrl: string;
+  streamKey: string;
+  playbackId: string;
+};
+
+type Comment = {
+  id: string;
+  text: string;
+  from: string;
+  userId?: string;
+  avatarUrl?: string;
+};
+
+const LiveStream = () => {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  
+  // User and channel state
+  const [userData, setUserData] = useState<any>(null);
+  const [channel, setChannel] = useState<any>(null);
+  
+  // Stream state
+  const [streamRowId, setStreamRowId] = useState<string | null>(null);
+  const [likeCount, setLikeCount] = useState(0);
+  const [giftList, setGiftList] = useState<any[]>([]);
+  const [streamInfo, setStreamInfo] = useState<StreamInfo | null>(null);
+  const [streamName, setStreamName] = useState("");
+  const [streamDescription, setStreamDescription] = useState("");
+  const [permissionsGranted, setPermissionsGranted] = useState(false);
+  const [previewStream, setPreviewStream] = useState<MediaStream | null>(null);
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentText, setCommentText] = useState("");
+  const [hearts, setHearts] = useState<number[]>([]);
+  const [showGifts, setShowGifts] = useState(false);
+  const [viewerCount, setViewerCount] = useState(1);
+  const [showCountdown, setShowCountdown] = useState(false);
+  const [countdown, setCountdown] = useState(3);
+  const [currentCamera, setCurrentCamera] = useState<"user" | "environment">("user");
+  const [streamDuration, setStreamDuration] = useState(0);
+  const [streamStartTime, setStreamStartTime] = useState<Date | null>(null);
+  const [showMobileChat, setShowMobileChat] = useState(false);
+
+  const previewRef = useRef<HTMLVideoElement>(null);
+  const playbackRef = useRef<HTMLVideoElement>(null);
+  const hlsRef = useRef<Hls | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const heartId = useRef(0);
+  const durationInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Fetch user data and channel info
+  useEffect(() => {
+    const fetchUserAndChannelData = async () => {
+      if (!user) {
+        console.log('No user found');
+        return;
+      }
+
+      try {
+        console.log('Fetching user data for user ID:', user.id);
+        
+        // Fetch user data
+        const { data: userDataResult, error: userError } = await supabase
+          .from('users')
+          .select('id, username, avatar_url')
+          .eq('id', user.id)
+          .single();
+
+        if (userError) {
+          console.error('Error fetching user data:', userError);
+        } else if (userDataResult) {
+          console.log('User data fetched:', userDataResult);
+          setUserData(userDataResult);
+        }
+
+        // Fetch user's channel
+        const { data: channelData, error: channelError } = await supabase
+          .from('studio_channels')
+          .select('*')
+          .eq('user_id', user.id)
+          .single();
+
+        if (channelError) {
+          console.error('Error fetching channel data:', channelError);
+        } else if (channelData) {
+          console.log('Channel data fetched:', channelData);
+          setChannel(channelData);
+        }
+      } catch (error) {
+        console.error('Error in fetchUserAndChannelData:', error);
+      }
+    };
+
+    fetchUserAndChannelData();
+  }, [user]);
+
+  useEffect(() => {
+    if (previewStream && previewRef.current && !isBroadcasting) {
+      previewRef.current.srcObject = previewStream;
+      previewRef.current.muted = true;
+      previewRef.current.play().catch(() => {});
+    }
+    return () => {};
+  }, [previewStream, isBroadcasting]);
+
+  useEffect(() => {
+    const videoEl = playbackRef.current;
+
+    if (!isBroadcasting || !videoEl || !previewStream) return;
+
+    videoEl.srcObject = previewStream;
+    videoEl.muted = false;
+    videoEl.play().catch(() => {});
+
+    return () => {
+      if (videoEl) {
+        videoEl.pause();
+        videoEl.srcObject = null;
+      }
+    };
+  }, [isBroadcasting, previewStream]);
+
+  useEffect(() => {
+    if (isBroadcasting && streamStartTime) {
+      durationInterval.current = setInterval(() => {
+        const now = new Date();
+        const duration = Math.floor((now.getTime() - streamStartTime.getTime()) / 1000);
+        setStreamDuration(duration);
+      }, 1000);
+    } else {
+      if (durationInterval.current) {
+        clearInterval(durationInterval.current);
+        durationInterval.current = null;
+      }
+    }
+
+    return () => {
+      if (durationInterval.current) {
+        clearInterval(durationInterval.current);
+      }
+    };
+  }, [isBroadcasting, streamStartTime]);
+
+  const formatDuration = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, "0")}:${minutes
+        .toString()
+        .padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+    }
+    return `${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const startCameraPreview = async () => {
+    setError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: currentCamera },
+        audio: true,
+      });
+      setPreviewStream(stream);
+      setPermissionsGranted(true);
+    } catch (err: any) {
+      setError(err?.message || "Camera access denied");
+    }
+  };
+
+  const flipCamera = async () => {
+    const newCamera = currentCamera === "user" ? "environment" : "user";
+    setCurrentCamera(newCamera);
+
+    if (!permissionsGranted) return;
+
+    try {
+      if (previewStream) {
+        previewStream.getTracks().forEach((track) => track.stop());
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: newCamera },
+        audio: true,
+      });
+      setPreviewStream(stream);
+    } catch {
+      setError("Unable to switch camera on this device.");
+    }
+  };
+
+  const handleCreateStream = async () => {
+    if (!streamName.trim()) {
+      setError("Please enter a stream title");
+      return;
+    }
+    setShowCountdown(true);
+    setCountdown(3);
+
+    const interval = setInterval(() => {
+      setCountdown((c) => {
+        if (c === 1) {
+          clearInterval(interval);
+          setShowCountdown(false);
+          actuallyCreateStream();
+        }
+        return c - 1;
+      });
+    }, 1000);
+  };
+
+  const actuallyCreateStream = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      console.log('Creating stream with user data:', userData, 'and channel:', channel);
+      
+      if (!user || !userData || !channel) {
+        const missingItems = [];
+        if (!user) missingItems.push('user');
+        if (!userData) missingItems.push('user data');
+        if (!channel) missingItems.push('channel');
+        
+        const errorMsg = `Missing required information: ${missingItems.join(', ')}. Please ensure you're logged in and have created a channel.`;
+        console.error(errorMsg);
+        setError(errorMsg);
+        setLoading(false);
+        return;
+      }
+
+      // Make real API call to Livepeer backend
+      const response = await fetch('https://nsq-98et.onrender.com/api/livepeer/create-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: streamName.trim() }),
+      });
+      const livepeerData = await response.json();
+
+      // Store stream in Supabase with real Livepeer data
+      const playbackUrl = livepeerData.playbackId
+        ? `https://playback.livepeer.studio/hls/${livepeerData.playbackId}/index.m3u8`
+        : '';
+      const { data, error } = await supabase
+        .from('studio_streams')
+        .insert([
+          {
+            user_id: user.id,
+            username: userData.username,
+            channel_id: channel.id,
+            channel_name: channel.name,
+            avatar_url: userData.avatar_url,
+            title: streamName,
+            description: streamDescription,
+            video_url: playbackUrl,
+            thumbnail_url: '',
+            is_live: true,
+            chat_enabled: true,
+            likes: 0,
+            gifts: [],
+            streamkey: livepeerData.streamKey,
+            rtmpingesturl: livepeerData.rtmpIngestUrl,
+            playbackid: livepeerData.playbackId,
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Supabase error:', error);
+        throw error;
+      }
+
+      console.log('Stream created successfully:', data);
+      setStreamRowId(data.id);
+      setLikeCount(0);
+      setGiftList([]);
+      setStreamInfo({
+        rtmpIngestUrl: livepeerData.rtmpIngestUrl,
+        streamKey: livepeerData.streamKey,
+        playbackId: livepeerData.playbackId,
+      });
+      // Attempt to publish the previewStream to Livepeer via WebRTC
+      try {
+        await startWebRtcPublish(livepeerData, previewStream);
+        setIsBroadcasting(true);
+        setStreamStartTime(new Date());
+      } catch (webrtcErr: any) {
+        console.error('WebRTC publish failed:', webrtcErr);
+        setError('Failed to publish stream via WebRTC: ' + (webrtcErr?.message || webrtcErr));
+        // keep preview available but don't mark broadcasting
+      }
+      setStreamDuration(0);
+    } catch (err: any) {
+      console.error('Error creating stream:', err);
+      setError(err.message || 'Failed to create stream');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createPeerConnection = () => {
+    if (pcRef.current) return pcRef.current;
+
+    // Use the prefixed RTCPeerConnection if necessary (older Safari)
+    // and guard for environments where WebRTC is unavailable (insecure contexts or older browsers)
+    const RTCPeerConnectionCls: any = (window as any).RTCPeerConnection || (window as any).webkitRTCPeerConnection || (window as any).mozRTCPeerConnection;
+    if (!RTCPeerConnectionCls) {
+      throw new Error('WebRTC is not supported in this browser or context. Ensure you are on HTTPS and using a modern browser.');
+    }
+
+    const pc = new RTCPeerConnectionCls({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+      ],
+    });
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('PeerConnection ICE state:', pc.iceConnectionState);
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log('PeerConnection state:', pc.connectionState);
+    };
+
+    pcRef.current = pc;
+    return pc;
+  };
+
+  const startWebRtcPublish = async (livepeerData: any, stream: MediaStream | null) => {
+    if (!stream) throw new Error('No media stream to publish');
+    if (!livepeerData || !livepeerData.playbackId) throw new Error('Missing livepeer playbackId/stream id');
+
+    const pc = createPeerConnection();
+
+    // Add local tracks
+    for (const track of stream.getTracks()) {
+      pc.addTrack(track, stream);
+    }
+
+    // Create offer
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // Use absolute backend URL (same pattern as create-stream). Relative /api may resolve to the frontend
+    // host which returns HTML (hence the '<!DOCTYPE' JSON parse error). Replace this with your backend host
+    // or use an environment variable in production.
+  // Use the backend bridge endpoint which will handle the server-side WebRTC relay
+  const backendBase = 'https://nsq-98et.onrender.com/api/webrtc-bridge';
+  const url = `${backendBase}/create-session`;
+
+    // Attempt to improve ICE by fetching TURN creds from backend
+    try {
+      const tResp = await fetch('https://nsq-98et.onrender.com/api/turn/creds');
+      if (tResp.ok) {
+        const tjson = await tResp.json();
+        if (tjson && tjson.url) {
+          const existing = (pc as any).getConfiguration ? (pc as any).getConfiguration() : { iceServers: [] };
+          const ice = Array.isArray(existing.iceServers) ? existing.iceServers.slice() : [{ urls: 'stun:stun.l.google.com:19302' }];
+          ice.push({ urls: tjson.url, username: tjson.username, credential: tjson.password });
+          try { pc.setConfiguration({ iceServers: ice }); } catch (e) { console.warn('Failed to set PC configuration with TURN', e); }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch TURN creds', e);
+    }
+
+    // log local ICE candidates for debugging
+    pc.onicecandidate = (ev) => { console.log('Local ICE candidate:', !!ev?.candidate); };
+
+    // Send offer to backend which forwards to Livepeer
+    // IMPORTANT: use the Livepeer stream `id` (not playbackId) for WebRTC publish
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ streamId: livepeerData.id, sdp: offer.sdp }),
+    });
+
+    // If server returned non-2xx, try to capture response text (HTML error pages will show here)
+    const contentType = resp.headers.get('content-type') || '';
+    const respText = await resp.text();
+    if (!resp.ok) {
+      throw new Error(`Failed to create WebRTC session (status ${resp.status}): ${respText}`);
+    }
+
+    // If response is not JSON, include the raw text in the error so it's easier to debug
+    let data: any;
+    try {
+      if (contentType.includes('application/json')) {
+        data = JSON.parse(respText);
+      } else {
+        // backend returned HTML or plain text
+        throw new Error(`Unexpected response content-type: ${contentType}. Response: ${respText}`);
+      }
+    } catch (parseErr) {
+      const msg = (parseErr as Error)?.message || String(parseErr);
+      throw new Error(`Failed to parse WebRTC session response: ${msg} -- ${respText}`);
+    }
+    const answerSdp = data.sdp;
+    if (!answerSdp) throw new Error('No answer SDP from server');
+
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+    // Wait until connection established
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Timed out waiting for WebRTC connection'));
+      }, 30000);
+
+      const checkState = () => {
+        if (!pc) return;
+        if (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected') {
+          clearTimeout(timeout);
+          pc.removeEventListener('connectionstatechange', checkState as any);
+          resolve();
+        }
+      };
+
+      pc.addEventListener('connectionstatechange', checkState as any);
+      checkState();
+    });
+  };
+
+  const stopStream = async () => {
+    setIsBroadcasting(false);
+    setStreamStartTime(null);
+    setStreamDuration(0);
+    
+    if (durationInterval.current) {
+      clearInterval(durationInterval.current);
+      durationInterval.current = null;
+    }
+
+    // Stop the camera stream
+    if (previewStream) {
+      previewStream.getTracks().forEach(track => track.stop());
+    }
+
+    // Close peer connection if exists
+    if (pcRef.current) {
+      try {
+        pcRef.current.getSenders().forEach(s => { try { s.track?.stop(); } catch(e){} });
+        pcRef.current.close();
+      } catch (e) {}
+      pcRef.current = null;
+    }
+
+    // If we have a stream row ID, navigate to StreamEndPreview page
+    if (streamRowId) {
+      navigate(`/stream-end-preview/${streamRowId}`);
+    } else {
+      // Fallback: if no stream was created, just redirect to studio
+      if (channel && channel.id) {
+        navigate(`/studio/${channel.id}`);
+      } else {
+        navigate('/studio');
+      }
+    }
+  };
+
+  const resetStream = () => {
+    setStreamInfo(null);
+    setStreamName("");
+    setPermissionsGranted(false);
+    setIsBroadcasting(false);
+    setStreamStartTime(null);
+    setStreamDuration(0);
+    if (durationInterval.current) {
+      clearInterval(durationInterval.current);
+      durationInterval.current = null;
+    }
+    if (previewStream) {
+      previewStream.getTracks().forEach((t) => t.stop());
+    }
+    setPreviewStream(null);
+    setError("");
+    setComments([]);
+    setHearts([]);
+    setViewerCount(1);
+    
+    if (playbackRef.current) {
+      playbackRef.current.pause();
+      playbackRef.current.srcObject = null;
+      playbackRef.current.removeAttribute("src");
+      playbackRef.current.load();
+    }
+    if (hlsRef.current) {
+      try {
+        hlsRef.current.destroy();
+      } catch (e) {}
+      hlsRef.current = null;
+    }
+  };
+
+  const sendComment = () => {
+    if (!commentText.trim()) return;
+    const newComment: Comment = {
+      id: String(Date.now()),
+      text: commentText.trim(),
+      from: userData?.username || "Anonymous",
+      userId: user?.id,
+      avatarUrl: userData?.avatar_url || undefined,
+    };
+    setComments((prev) => [newComment, ...prev].slice(0, 50));
+    setCommentText("");
+  };
+
+  const sendHeart = async () => {
+    const id = heartId.current++;
+    setHearts((prev) => [...prev, id]);
+    setTimeout(() => setHearts((prev) => prev.filter((x) => x !== id)), 2200);
+    setLikeCount((prev) => prev + 1);
+    
+    if (streamRowId) {
+      await supabase.from('studio_streams').update({ likes: likeCount + 1 }).eq('id', streamRowId);
+    }
+  };
+
+  const sendGift = async (giftName: string) => {
+    const giftComment: Comment = {
+      id: String(Date.now()),
+      text: `🎁 ${giftName}`,
+      from: userData?.username || "Anonymous",
+    };
+    setComments((prev) => [giftComment, ...prev]);
+    setShowGifts(false);
+    setViewerCount((prev) => prev + Math.floor(Math.random() * 3) + 1);
+    const newGift = { name: giftName, at: new Date().toISOString() };
+    setGiftList((prev) => [...prev, newGift]);
+    
+    if (streamRowId) {
+      await supabase.from('studio_streams').update({ gifts: [...giftList, newGift] }).eq('id', streamRowId);
+    }
+  };
+
+  useEffect(() => {
+    if (isBroadcasting) {
+      const timer = setInterval(() => {
+        setViewerCount((prev) => prev + Math.floor(Math.random() * 2));
+      }, 3000);
+      return () => clearInterval(timer);
+    }
+  }, [isBroadcasting]);
+
+  return (
+    <>
+      <Header />
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 pb-20 md:pb-4">
+        <div className="w-full max-w-6xl mx-auto p-2 md:p-4">
+          {/* Top bar with user info */}
+          <div className="flex items-center justify-between mb-2 md:mb-4 px-2">
+            <div className="flex items-center gap-2 md:gap-4">
+              {/* User Avatar and Username */}
+              <div className="flex items-center gap-2">
+                <Avatar className="w-8 h-8">
+                  {userData?.avatar_url ? (
+                    <AvatarImage src={userData.avatar_url} alt={userData.username} />
+                  ) : (
+                    <AvatarFallback>{userData?.username?.[0]?.toUpperCase() || '?'}</AvatarFallback>
+                  )}
+                </Avatar>
+                <span className="text-white font-semibold text-sm">{userData?.username || 'Loading...'}</span>
+              </div>
+
+              {/* Channel Badge */}
+              {channel && (
+                <div className="flex items-center gap-2 px-2 py-1 rounded-full text-xs text-white font-semibold backdrop-blur-md"
+                     style={{ background: 'linear-gradient(90deg, #6836beff 0%, #241258ff 100%)' }}>
+                  <Video className="h-3 w-3" />
+                  <span>{channel.name}</span>
+                </div>
+              )}
+
+              {/* Viewer count when live */}
+              {isBroadcasting && (
+                <div className="flex items-center gap-2 text-white">
+                  <FaEye className="text-pink-400" size={16} />
+                  <span className="font-semibold text-sm md:text-base">
+                    {viewerCount.toLocaleString()}
+                  </span>
+                </div>
+              )}
+
+            
+            </div>
+          </div>
+
+          {/* Main streaming area */}
+          <div className="relative bg-black rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl">
+            {!streamInfo ? (
+              <StreamPreview
+                permissionsGranted={permissionsGranted}
+                previewStream={previewStream}
+                previewRef={previewRef}
+                streamName={streamName}
+                setStreamName={setStreamName}
+                streamDescription={streamDescription}
+                setStreamDescription={setStreamDescription}
+                startCameraPreview={startCameraPreview}
+                flipCamera={flipCamera}
+                handleCreateStream={handleCreateStream}
+                loading={loading}
+                error={error}
+                setPermissionsGranted={setPermissionsGranted}
+                setPreviewStream={setPreviewStream}
+                resetStream={resetStream}
+              />
+            ) : (
+              <div className="relative w-full h-[75vh] md:h-[80vh]">
+                <ErrorBoundary>
+                  {isBroadcasting ? (
+                    <video
+                      ref={playbackRef}
+                      className="w-full h-full object-cover bg-black"
+                      muted={false}
+                      playsInline
+                      autoPlay
+                      controls={false}
+                      style={{ transform: currentCamera === "user" ? "scaleX(-1)" : "none" }}
+                    />
+                  ) : (
+                    previewStream && (
+                      <video
+                        ref={previewRef}
+                        className="w-full h-full object-cover bg-black"
+                        muted
+                        playsInline
+                        autoPlay
+                        style={{ transform: currentCamera === "user" ? "scaleX(-1)" : "none" }}
+                      />
+                    )
+                  )}
+
+                  {isBroadcasting && (
+                    <div className="absolute top-4 left-4 bg-red-500 text-white text-xs px-3 py-1 rounded-full flex items-center gap-2 shadow-lg z-30">
+                      <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                      <span className="font-mono text-xs">
+                        LIVE {streamDuration > 0 && `• ${formatDuration(streamDuration)}`}
+                      </span>
+                    </div>
+                  )}
+
+                  {isBroadcasting && (
+                    <div className="absolute top-4 right-4 bg-black/50 backdrop-blur-sm text-white text-xs md:text-sm px-3 py-1 rounded-full flex items-center gap-2 z-30">
+                      <FaEye className="text-pink-400" size={14} />
+                      <span className="text-xs">{viewerCount.toLocaleString()}</span>
+                    </div>
+                  )}
+
+                  {isBroadcasting && (
+                    <div className="absolute bottom-16 right-6 z-40">
+                      <button
+                        onClick={stopStream}
+                        className="p-3 md:p-4 rounded-full bg-red-500 hover:bg-red-600 text-white shadow-lg transition-colors duration-200 flex items-center gap-2 md:gap-3"
+                        title="Stop Stream"
+                        style={{ minWidth: 56 }}
+                      >
+                        <FaStop size={18} />
+                        <span className="hidden md:inline text-sm md:text-base font-medium">Stop</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {!isBroadcasting && streamInfo && (
+                    <div className="absolute top-16 left-4 z-30">
+                      <button
+                        onClick={() => {
+                          setIsBroadcasting(true);
+                          setStreamStartTime(new Date());
+                          setStreamDuration(0);
+                        }}
+                        className="p-2 md:p-3 rounded-full bg-green-500 hover:bg-green-600 text-white shadow-lg transition-colors duration-200 flex items-center gap-1 md:gap-2"
+                        title="Resume Stream"
+                      >
+                        <span className="text-xs md:text-sm font-medium">Go Live</span>
+                      </button>
+                    </div>
+                  )}
+                </ErrorBoundary>
+              </div>
+            )}
+
+            {isBroadcasting && <AnimatedHearts hearts={hearts} />}
+
+            {isBroadcasting && (
+              <>
+                <div className="hidden md:block absolute top-20 right-4 w-80 max-h-[50vh] z-40 pointer-events-auto">
+                  <LiveStreamChat comments={comments} />
+                </div>
+
+                {/* Mobile chat popup */}
+                <div className="block md:hidden fixed left-0 right-0 bottom-0 z-50">
+                  {showMobileChat && (
+                    <div className="bg-black/90 rounded-t-2xl p-2 max-h-[40vh] overflow-y-auto">
+                      <LiveStreamChat comments={comments} />
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {isBroadcasting && (
+              <>
+                <div className="absolute left-4 bottom-28 md:bottom-26 flex flex-col gap-3 z-40">
+                  <button
+                    onClick={sendHeart}
+                    className="p-2 rounded-full bg-gradient-to-r from-pink-500 to-red-500 text-white shadow-lg hover:scale-105 transition-transform duration-200"
+                    title="Send Heart"
+                  >
+                    <FaHeart size={16} />
+                  </button>
+
+                  <button
+                    onClick={() => setShowGifts(true)}
+                    className="p-2 rounded-full bg-gradient-to-r from-yellow-400 to-orange-500 text-white shadow-lg hover:scale-105 transition-transform duration-200"
+                    title="Send Gift"
+                  >
+                    <FaGift size={16} />
+                  </button>
+                </div>
+
+                <div className="absolute left-4 bottom-16 z-40">
+                  <button
+                    onClick={() => {
+                      if (window.innerWidth < 768) {
+                        setShowMobileChat((prev) => !prev);
+                      } else {
+                        const el = document.getElementById("livestream-comment-input") as HTMLInputElement | null;
+                        if (el) el.focus();
+                      }
+                    }}
+                    className="relative p-2 rounded-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg hover:scale-105 transition-transform duration-200"
+                    title="Comments"
+                  >
+                    <FaCommentDots size={16} />
+                    {comments.length > 0 && (
+                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                        {comments.length > 99 ? "99+" : comments.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {isBroadcasting && (
+              <div className="absolute left-0 right-0 bottom-0 z-40 px-4">
+                <div className="mx-auto max-w-6xl">
+                  <div className="bg-black/70 p-3 flex items-center gap-2 rounded-full">
+                    <FaCommentDots className="text-purple-400" size={20} />
+                    <input
+                      id="livestream-comment-input"
+                      value={commentText}
+                      onChange={(e) => setCommentText(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && sendComment()}
+                      placeholder="Say something nice..."
+                      className="flex-1 bg-transparent text-white placeholder-white/60 outline-none"
+                    />
+                    <button
+                      onClick={sendComment}
+                      disabled={!commentText.trim()}
+                      className="px-4 py-1.5 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="h-4" />
+        </div>
+
+        {isBroadcasting && (
+          <GiftModal showGifts={showGifts} setShowGifts={setShowGifts} sendGift={sendGift} />
+        )}
+
+        {error && (
+          <div className="fixed top-4 left-2 right-2 md:left-4 md:right-4 z-50 flex justify-center">
+            <div className="bg-red-500/90 backdrop-blur-sm text-white px-4 md:px-6 py-2 md:py-3 rounded-xl md:rounded-2xl shadow-lg max-w-md text-sm md:text-base">
+              {error}
+            </div>
+          </div>
+        )}
+
+        {showCountdown && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center">
+            <div className="text-4xl md:text-6xl font-bold text-white animate-pulse">{countdown}</div>
+          </div>
+        )}
+      </div>
+
+      <MobileBottomNav />
+    </>
+  );
+};
+
+export default LiveStream;

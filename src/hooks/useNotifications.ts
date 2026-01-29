@@ -1,7 +1,7 @@
-
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
+import apiUrl from '@/lib/api';
 
 interface Notification {
   id: string;
@@ -42,9 +42,24 @@ export const useNotifications = () => {
 
     if (mounted.current) setLoading(true);
     try {
-      const resp = await fetch(`/api/notifications/list?user_id=${encodeURIComponent(user.id)}`, { signal: opts?.signal });
-      if (!resp.ok) throw new Error(`notifications list failed: ${resp.status}`);
-      const body = await resp.json();
+      const url = apiUrl(`/api/notifications/list?user_id=${encodeURIComponent(user.id)}`);
+      const resp = await fetch(url, { signal: opts?.signal });
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => '<no-body>');
+        console.error('notifications list non-ok response', resp.status, txt);
+        throw new Error(`notifications list failed: ${resp.status}`);
+      }
+
+      // Try parsing JSON, but if it fails log raw text for debugging
+      let body: any;
+      try {
+        body = await resp.json();
+      } catch (err) {
+        const raw = await resp.text().catch(() => '<no-body>');
+        console.error('Failed to parse notifications JSON. HTTP status:', resp.status, 'body:', raw);
+        throw err;
+      }
+
       const data = body.notifications || [];
 
       const normalized = (data || []).map((n: any) => ({
@@ -104,7 +119,7 @@ export const useNotifications = () => {
   const markAsRead = async (notificationId: string) => {
     try {
       // Call server endpoint to mark as read
-      const resp = await fetch('/api/notifications/mark-read', {
+      const resp = await fetch(apiUrl('/api/notifications/mark-read'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: [notificationId] })
@@ -121,13 +136,13 @@ export const useNotifications = () => {
 
     try {
       // Fetch current unread notifications then mark them via server
-      const resp = await fetch(`/api/notifications/list?user_id=${encodeURIComponent(user.id)}&unread_only=true`);
+      const resp = await fetch(apiUrl(`/api/notifications/list?user_id=${encodeURIComponent(user.id)}&unread_only=true`));
       if (!resp.ok) throw new Error(`failed to fetch unread: ${resp.status}`);
       const body = await resp.json();
       const unread = body.notifications || [];
       const ids = unread.map((n: any) => n.id).filter(Boolean);
       if (ids.length === 0) return;
-      const markResp = await fetch('/api/notifications/mark-read', {
+      const markResp = await fetch(apiUrl('/api/notifications/mark-read'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids })

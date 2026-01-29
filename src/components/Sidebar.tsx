@@ -305,7 +305,7 @@ export const Sidebar = () => {
 			</div>
 
 			{/* Quick Links */}
-			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700">
+			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700 shadow-md dark:shadow-none">
 				<h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-4 flex items-center">
 					<Store className="h-5 w-5 mr-2 text-blue-600" />
 					Quick Links
@@ -355,7 +355,7 @@ export const Sidebar = () => {
 			</div>
 
 			{/* My Groups or Empty State */}
-			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700 mb-2">
+			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700 shadow-md dark:shadow-none mb-2">
 				{myGroups.length === 0 ? (
 					<div className="text-center text-gray-500 text-sm py-4">
 						You haven't joined any groups yet.
@@ -414,7 +414,7 @@ export const Sidebar = () => {
 
 			{/* Discover Groups */}
 			<div className="font-semibold text-gray-900 dark:text-gray-100 text-md mb-2 mt-4">Discover Groups</div>
-			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700">
+			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700 shadow-md dark:shadow-none">
 				{suggestedGroups.length === 0 ? (
 					<div className="text-center text-gray-500 text-sm py-4">
 						No more groups to discover.
@@ -466,7 +466,7 @@ export const GroupSidebar = ({ group, stats, suggestedGroups = [] }) => {
 	return (
 		<aside className="w-72 p-4 space-y-6">
 			{/* Group Info Card */}
-			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700 flex flex-col items-center text-center">
+			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700 shadow-md dark:shadow-none flex flex-col items-center text-center">
 				<Avatar className="h-20 w-20 mb-2">
 					<AvatarImage src={group.avatar_url || '/placeholder.svg'} />
 					<AvatarFallback>{group.name?.charAt(0)?.toUpperCase() || '?'}</AvatarFallback>
@@ -501,7 +501,7 @@ export const GroupSidebar = ({ group, stats, suggestedGroups = [] }) => {
 			</Card>
 			
 			{/* Suggested Groups Card */}
-			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700">
+			<Card className="p-4 dark:bg-[#161616] bg-white dark:border-gray-700 shadow-md dark:shadow-none">
 				<h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-2 flex items-center">
 					<Users className="h-5 w-5 mr-2 text-purple-600" />
 					Suggested Groups

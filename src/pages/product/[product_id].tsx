@@ -70,7 +70,27 @@ const ProductPage: React.FC = () => {
   });
 
   useEffect(() => {
-    if (product_id) fetchProduct(product_id);
+    const tryRestore = () => {
+      if (!product_id) return false;
+      try {
+        const key = `product_${product_id}`;
+        const raw = sessionStorage.getItem(key);
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        // if cached within 5 minutes, restore and skip fetch
+        if (parsed && parsed.timestamp && Date.now() - parsed.timestamp < 5 * 60 * 1000) {
+          setProduct(parsed.data as Product);
+          setLoading(false);
+          return true;
+        }
+      } catch (e) {
+        // ignore
+      }
+      return false;
+    };
+
+    const restored = tryRestore();
+    if (!restored && product_id) fetchProduct(product_id);
     if (user) fetchCartItems();
   }, [product_id, user]);
 
@@ -93,6 +113,11 @@ const ProductPage: React.FC = () => {
           views: (data as any).views || 0 // Handle missing views column
         };
         setProduct(productData);
+        try {
+          const key = `product_${id}`;
+          const payload = { timestamp: Date.now(), data: productData };
+          sessionStorage.setItem(key, JSON.stringify(payload));
+        } catch (e) {}
         
         incrementProductView(id).catch((e) => console.error('Failed to increment product view', e));
         if (storeId) fetchStore(storeId);
@@ -317,8 +342,48 @@ const ProductPage: React.FC = () => {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">
         <Header />
-        <div className="flex items-center justify-center py-20">
-          <div className="text-gray-600 dark:text-gray-400">Loading product...</div>
+        <div className="max-w-6xl mx-auto px-4 py-12">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div>
+              <div className="w-full h-96 rounded-lg bg-white dark:bg-[#111] shadow-sm overflow-hidden">
+                <div className="w-full h-full bg-gray-100 dark:bg-gray-800 animate-pulse" />
+              </div>
+              <div className="mt-4 grid grid-cols-4 gap-2">
+                {[...Array(4)].map((_, i) => (
+                  <div key={i} className="aspect-square rounded-md bg-gray-100 dark:bg-gray-800 animate-pulse" />
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-4">
+                <div className="h-12 w-12 rounded-full bg-gray-100 dark:bg-gray-800 animate-pulse" />
+                <div className="flex-1">
+                  <div className="h-6 bg-gray-100 dark:bg-gray-800 rounded w-3/4 animate-pulse mb-2" />
+                  <div className="h-4 bg-gray-100 dark:bg-gray-800 rounded w-1/2 animate-pulse" />
+                </div>
+              </div>
+
+              <div className="mt-6 space-y-3">
+                <div className="h-8 bg-gray-100 dark:bg-gray-800 rounded w-5/6 animate-pulse" />
+                <div className="h-6 bg-gray-100 dark:bg-gray-800 rounded w-2/3 animate-pulse" />
+                <div className="h-6 bg-gray-100 dark:bg-gray-800 rounded w-1/3 animate-pulse" />
+              </div>
+
+              <div className="mt-6 flex gap-3">
+                <div className="h-10 w-40 bg-gray-100 dark:bg-gray-800 rounded animate-pulse" />
+                <div className="h-10 w-28 bg-gray-100 dark:bg-gray-800 rounded animate-pulse" />
+              </div>
+
+              <div className="mt-8">
+                <div className="space-y-2">
+                  {[...Array(6)].map((_, i) => (
+                    <div key={i} className="h-4 bg-gray-100 dark:bg-gray-800 rounded animate-pulse" />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         <MobileBottomNav />
       </div>

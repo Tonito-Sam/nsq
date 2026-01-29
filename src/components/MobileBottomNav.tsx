@@ -16,7 +16,7 @@ export const MobileBottomNav = () => {
 
   const rightNavItems = [
     { icon: Grid3X3, label: 'Square', path: '/square' },
-    { icon: Video, label: '1Studio', path: '/studio' },
+    { icon: Video, label: 'Studio', path: '/studio' },
   ];
 
   const isActive = (path: string) => location.pathname === path;
