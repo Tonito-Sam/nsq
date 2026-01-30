@@ -591,3 +591,16 @@ body {
 .animate-ripple {
   animation: ripple 2s infinite cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+
+/* Hide bottom navigation when live chat is open on mobile */
+body.live-chat-open .bottom-nav,
+body.live-chat-open footer,
+body.live-chat-open .fixed.bottom-0 {
+  display: none !important;
+}
+
+/* Safe area support */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+}

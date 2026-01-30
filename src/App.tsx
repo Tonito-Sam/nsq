@@ -239,6 +239,7 @@ const App = () => {
                     {/* Dynamic profile route for other users */}
                     <Route path="/profile/:username" element={<Profile />} />
                     <Route path="/profile" element={<Profile />} />
+                    <Route path="/users" element={<Users />} />
                     <Route path="/profile/edit" element={<EditProfile />} />
                     <Route path="/edit-profile" element={<EditProfile />} />
                     <Route path="/square" element={<Square />} />

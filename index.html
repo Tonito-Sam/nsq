@@ -25,6 +25,8 @@
   <!-- Favicon & Touch Icons -->
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
   <link rel="apple-touch-icon" sizes="180x180" href="/favicon.ico" type="image/x-icon">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#4f46e5">
 
   <!-- Schema.org Structured Data for Better Search Visibility -->
   <script type="application/ld+json">
@@ -74,5 +76,12 @@
   <!-- Commented during local debugging: external module that requires secure context -->
   <!-- <script src="https://cdn.gpteng.co/gptengineer.js" type="module"></script> -->
   <script type="module" src="/src/main.tsx"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW registration failed:', err));
+      });
+    }
+  </script>
 </body>
 </html>

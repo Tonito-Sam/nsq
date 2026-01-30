@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Play, Pause, Clock, Eye, Volume2, VolumeX, Heart, MessageCircle, Users, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, Play, Pause, Clock, Eye, Volume2, VolumeX, Heart, MessageCircle, Users, ChevronLeft, ChevronRight, SkipForward } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { useShowContext } from '@/contexts/ShowContext';
@@ -23,6 +23,7 @@ interface StudioShow {
   created_at: string;
   live_url?: string;
   show_type?: string;
+  content_type?: 'ad' | 'show' | 'episode'; // Added for ad detection
 }
 
 interface VideoContainerProps {
@@ -36,12 +37,13 @@ interface VideoContainerProps {
 
 interface MediaItem {
   id: string;
-  type: 'show' | 'episode';
+  type: 'show' | 'episode' | 'ad'; // Added 'ad' type
   title?: string;
   video_url?: string | null;
   thumbnail_url?: string | null;
   duration?: number;
   raw?: any;
+  is_ad?: boolean; // Added for ad detection
 }
 declare global {
   interface Window {
@@ -84,13 +86,28 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const [modalPlayerError, setModalPlayerError] = useState<string | null>(null);
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
   const [countdownActive, setCountdownActive] = useState(false);
-  const countdownIntervalRef = useRef<number | null>(null);
-  const startTimeoutRef = useRef<number | null>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const startTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [showStartPrompt, setShowStartPrompt] = useState(false);
   const [liveEventActive, setLiveEventActive] = useState(false);
   const [isMobile, setIsMobile] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   // Detect whether LiveChat is present on the page so we can ensure the video remains visible above it
   const [chatVisible, setChatVisible] = useState(false);
+  
+  // NEW STATES FOR AD SKIP FUNCTIONALITY
+  const [showSkipAdButton, setShowSkipAdButton] = useState(false);
+  const [adCountdown, setAdCountdown] = useState<number | null>(null);
+  const adCountdownRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // NEW STATE FOR REACTION TOGGLE
+  const [showReactionsPermanently, setShowReactionsPermanently] = useState(false);
+
+  // Move the currentShow variable declaration to the top
+  const [shuffledShows, setShuffledShows] = useState<StudioShow[]>([]);
+  const sortedShows = shuffledShows;
+  const currentShow = selectedShowId 
+    ? sortedShows.find(show => show.id === selectedShowId) || sortedShows[currentShowIndex]
+    : sortedShows[currentShowIndex];
 
   useEffect(() => {
     const check = () => setChatVisible(Boolean(document.querySelector('[data-livechat]')));
@@ -115,12 +132,16 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   useEffect(() => {
     return () => {
       if (countdownIntervalRef.current) {
-        window.clearInterval(countdownIntervalRef.current);
+        clearInterval(countdownIntervalRef.current);
         countdownIntervalRef.current = null;
       }
       if (startTimeoutRef.current) {
-        window.clearTimeout(startTimeoutRef.current);
+        clearTimeout(startTimeoutRef.current);
         startTimeoutRef.current = null;
+      }
+      if (adCountdownRef.current) {
+        clearInterval(adCountdownRef.current);
+        adCountdownRef.current = null;
       }
     };
   }, []);
@@ -128,14 +149,14 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   // Helper to start a countdown for a live item
   const startCountdown = (ms: number, liveItem: MediaItem, show: StudioShow) => {
     try {
-      if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
+      if (countdownIntervalRef.current) { clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
       setCountdownActive(true);
       setCountdownSeconds(Math.ceil(ms / 1000));
-      countdownIntervalRef.current = window.setInterval(() => {
+      countdownIntervalRef.current = setInterval(() => {
         setCountdownSeconds(prev => {
           if (!prev) return 0;
           if (prev <= 1) {
-            if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
+            if (countdownIntervalRef.current) { clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
             setCountdownActive(false);
             setCountdownSeconds(0);
             setShowStartPrompt(true);
@@ -149,7 +170,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
           }
           return prev - 1;
         });
-      }, 1000) as unknown as number;
+      }, 1000);
     } catch (err) {
       console.warn('startCountdown error', err);
     }
@@ -171,8 +192,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   
   // keep a ref for the latest time to avoid stale closures when seeking on remount
   const videoCurrentTimeRef = useRef<number>(0);
-  const youtubeTimePollRef = useRef<number | null>(null);
-  const nativeSeekRetryRefs = useRef<number[]>([]);
+  const youtubeTimePollRef = useRef<NodeJS.Timeout | null>(null);
+  const nativeSeekRetryRefs = useRef<NodeJS.Timeout[]>([]);
   const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -190,6 +211,72 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const [currentScrollIndex, setCurrentScrollIndex] = useState(0);
   const [isLoadingVOD, setIsLoadingVOD] = useState(false);
   const [nowTick, setNowTick] = useState(0);
+
+  // Function to check if current media is an ad
+  const isAd = useCallback(() => {
+    return currentMedia?.type === 'ad' || 
+           currentMedia?.is_ad === true || 
+           currentMedia?.raw?.content_type === 'ad' ||
+           currentShow?.content_type === 'ad' ||
+           (currentMedia?.title?.toLowerCase().includes('ad') || currentMedia?.title?.toLowerCase().includes('commercial') || 
+            currentMedia?.title?.toLowerCase().includes('sponsor') || currentMedia?.title?.toLowerCase().includes('promo'));
+  }, [currentMedia, currentShow]);
+
+  // Function to skip ad
+  const skipAd = useCallback(() => {
+    console.log('Skipping ad');
+    setShowSkipAdButton(false);
+    if (adCountdownRef.current) {
+      clearInterval(adCountdownRef.current);
+      adCountdownRef.current = null;
+    }
+    setAdCountdown(null);
+    advanceQueueOrNextShow();
+  }, []);
+
+  // Start ad countdown when an ad starts playing
+  useEffect(() => {
+    if (isAd() && isVideoPlaying) {
+      // Show skip button after 5 seconds
+      const timer = setTimeout(() => {
+        setShowSkipAdButton(true);
+        // Start 10-second countdown
+        setAdCountdown(10);
+        adCountdownRef.current = setInterval(() => {
+          setAdCountdown(prev => {
+            if (prev === null || prev <= 1) {
+              if (adCountdownRef.current) {
+                clearInterval(adCountdownRef.current);
+                adCountdownRef.current = null;
+              }
+              setShowSkipAdButton(false);
+              // Auto-skip when countdown reaches 0
+              if (prev === 1) {
+                advanceQueueOrNextShow();
+              }
+              return null;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+      }, 5000);
+
+      return () => {
+        clearTimeout(timer);
+        if (adCountdownRef.current) {
+          clearInterval(adCountdownRef.current);
+          adCountdownRef.current = null;
+        }
+      };
+    } else {
+      setShowSkipAdButton(false);
+      setAdCountdown(null);
+      if (adCountdownRef.current) {
+        clearInterval(adCountdownRef.current);
+        adCountdownRef.current = null;
+      }
+    }
+  }, [isAd, isVideoPlaying]);
 
   // Mobile catch-up grid renderer and data loader
   const renderMobileCatchUpGrid = () => {
@@ -318,26 +405,9 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     return () => { 
       mounted = false; 
       controller.abort(); 
-      if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
+      if (countdownIntervalRef.current) { clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
     };
   }, [isMobile, catchUpOpen]);
-
-  // Track horizontal scroll index for indicators
-  useEffect(() => {
-    const el = mobileListRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const scrollLeft = el.scrollLeft || 0;
-      const gap = 16; // matches card margin-right used in render
-      const childWidth = el.firstElementChild ? (el.firstElementChild as HTMLElement).getBoundingClientRect().width + gap : window.innerWidth / 2;
-      const itemsPerView = mobileItemsPerView;
-      const pageIndex = Math.round(scrollLeft / (childWidth * itemsPerView));
-      const pages = Math.max(1, Math.ceil((vodEpisodes.length || 1) / itemsPerView));
-      setCurrentScrollIndex(Math.min(Math.max(0, pageIndex), pages - 1));
-    };
-    el.addEventListener('scroll', onScroll, { passive: true } as any);
-    return () => el.removeEventListener('scroll', onScroll as any);
-  }, [vodEpisodes.length, mobileItemsPerView]);
 
   // Manage body scroll and portal mount/animation for Catch Up modal
   useEffect(() => {
@@ -493,7 +563,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       // Cleanup
       document.body.style.overflow = 'auto';
     };
-  }, [isFullscreen]);
+  }, [isFullscreen, currentShow]);
 
   // Show overlay on touch in fullscreen, hide after 3s
   useEffect(() => {
@@ -511,21 +581,21 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     showAndReset();
 
     // show overlay on interactions
-    container.addEventListener('mousemove', showAndReset as any);
-    container.addEventListener('mousedown', showAndReset as any);
-    container.addEventListener('touchstart', showAndReset as any);
+    container.addEventListener('mousemove', showAndReset);
+    container.addEventListener('mousedown', showAndReset);
+    container.addEventListener('touchstart', showAndReset);
 
     return () => {
-      container.removeEventListener('mousemove', showAndReset as any);
-      container.removeEventListener('mousedown', showAndReset as any);
-      container.removeEventListener('touchstart', showAndReset as any);
+      container.removeEventListener('mousemove', showAndReset);
+      container.removeEventListener('mousedown', showAndReset);
+      container.removeEventListener('touchstart', showAndReset);
       if (overlayTimeoutRef.current) clearTimeout(overlayTimeoutRef.current);
     };
   }, []);
 
   // tick every second to update upcoming events countdown UI
   useEffect(() => {
-    const t = window.setInterval(() => setNowTick(n => n + 1), 1000);
+    const t = setInterval(() => setNowTick(n => n + 1), 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -533,7 +603,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 
-  const [shuffledShows, setShuffledShows] = useState<StudioShow[]>([]);
+  // Removed the duplicate shuffledShows state declaration (it's now at the top)
+
   useEffect(() => {
     if (!shows || shows.length === 0) {
       setShuffledShows([]);
@@ -695,11 +766,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     return { text: formatDuration(show.duration), className: 'bg-black/70 text-white' };
   };
 
-  const sortedShows = shuffledShows;
-  const currentShow = selectedShowId 
-    ? sortedShows.find(show => show.id === selectedShowId) || sortedShows[currentShowIndex]
-    : sortedShows[currentShowIndex];
-
   const { viewCount } = useViewTracking({
     showId: currentShow?.id,
     isPlaying: isVideoPlaying,
@@ -740,14 +806,23 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         try {
           // clear any previous countdown
           if (countdownIntervalRef.current) {
-            window.clearInterval(countdownIntervalRef.current);
+            clearInterval(countdownIntervalRef.current);
             countdownIntervalRef.current = null;
           }
 
           const startTime = currentShow.scheduled_time ? new Date(currentShow.scheduled_time).getTime() : null;
           const now = Date.now();
 
-          const liveItem: MediaItem = { id: `live-${currentShow.id}`, type: 'show', title: currentShow.title, video_url: currentShow.live_url || null, thumbnail_url: currentShow.thumbnail_url || null, duration: currentShow.duration, raw: currentShow };
+          const liveItem: MediaItem = { 
+            id: `live-${currentShow.id}`, 
+            type: 'show', 
+            title: currentShow.title, 
+            video_url: currentShow.live_url || null, 
+            thumbnail_url: currentShow.thumbnail_url || null, 
+            duration: currentShow.duration, 
+            raw: currentShow,
+            is_ad: currentShow.content_type === 'ad'
+          };
 
           if (!startTime || now >= startTime) {
             // start immediately
@@ -775,11 +850,11 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
           // If start is further out, schedule a timeout to begin the 5-minute countdown
           const timeToCountdown = msUntilStart - fiveMin;
-          if (startTimeoutRef.current) { window.clearTimeout(startTimeoutRef.current); startTimeoutRef.current = null; }
-          startTimeoutRef.current = window.setTimeout(() => {
+          if (startTimeoutRef.current) { clearTimeout(startTimeoutRef.current); startTimeoutRef.current = null; }
+          startTimeoutRef.current = setTimeout(() => {
             // begin a 5-minute countdown
             startCountdown(fiveMin, liveItem, currentShow);
-          }, timeToCountdown) as unknown as number;
+          }, timeToCountdown);
         } catch (err) {
           console.warn('Live event handling error', err);
         }
@@ -810,7 +885,16 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         // build queue: include show main media first (if present), then episodes
         const queue: MediaItem[] = [];
         if (currentShow.video_url) {
-          queue.push({ id: `show-${currentShow.id}`, type: 'show', title: currentShow.title, video_url: currentShow.video_url || null, thumbnail_url: currentShow.thumbnail_url || null, duration: currentShow.duration, raw: currentShow });
+          queue.push({ 
+            id: `show-${currentShow.id}`, 
+            type: currentShow.content_type === 'ad' ? 'ad' : 'show', 
+            title: currentShow.title, 
+            video_url: currentShow.video_url || null, 
+            thumbnail_url: currentShow.thumbnail_url || null, 
+            duration: currentShow.duration, 
+            raw: currentShow,
+            is_ad: currentShow.content_type === 'ad'
+          });
         }
 
         // sort episodes by episode_number if available
@@ -822,7 +906,16 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
         for (const ep of sortedEps) {
           const resolved = resolveMediaUrl(ep) || (ep.video_url || null);
-          queue.push({ id: `ep-${ep.id}`, type: 'episode', title: ep.title, video_url: resolved, thumbnail_url: ep.thumbnail_url || ep.show_thumbnail || null, duration: ep.duration, raw: ep });
+          queue.push({ 
+            id: `ep-${ep.id}`, 
+            type: (ep as any).content_type === 'ad' ? 'ad' : 'episode', 
+            title: ep.title, 
+            video_url: resolved, 
+            thumbnail_url: ep.thumbnail_url || ep.show_thumbnail || null, 
+            duration: ep.duration, 
+            raw: ep,
+            is_ad: (ep as any).content_type === 'ad'
+          });
         }
 
         setMediaQueue(queue);
@@ -860,8 +953,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
           setLiveEventActive(false);
           return;
         }
-        const id = window.setTimeout(() => setLiveEventActive(false), endTs - now) as unknown as number;
-        return () => { window.clearTimeout(id); };
+        const id = setTimeout(() => setLiveEventActive(false), endTs - now);
+        return () => { clearTimeout(id); };
       } catch (err) {
         setLiveEventActive(false);
       }
@@ -992,7 +1085,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             if (playing) {
               // start poll
               if (!youtubeTimePollRef.current) {
-                youtubeTimePollRef.current = window.setInterval(() => {
+                youtubeTimePollRef.current = setInterval(() => {
                   try {
                     if (youtubePlayerRef.current && typeof youtubePlayerRef.current.getCurrentTime === 'function') {
                       const t = youtubePlayerRef.current.getCurrentTime();
@@ -1075,7 +1168,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         youtubeTimePollRef.current = null;
       }
     };
-  }, [currentMedia, ytReady, muted]);
+  }, [currentMedia, ytReady, muted, currentShow]);
 
   // When the currentShow changes, try to load any persisted time for native videos as well
   useEffect(() => {
@@ -1193,7 +1286,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         } catch (err) {
           // ignore
         }
-        const id = window.setTimeout(trySeek, 250);
+        const id = setTimeout(trySeek, 250);
         nativeSeekRetryRefs.current.push(id);
       } else {
         // if video is paused try to play (muted autoplay more likely to succeed)
@@ -1240,6 +1333,11 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const handleCommentClick = () => {
     console.log('VideoContainer: Comment button clicked');
     onCommentClick();
+  };
+
+  // Toggle reaction visibility permanently
+  const toggleReactionsPermanently = () => {
+    setShowReactionsPermanently(!showReactionsPermanently);
   };
 
   useEffect(() => {
@@ -1780,7 +1878,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             {modalPlayerError && (
               <div className="absolute top-4 left-4 right-4 p-3 bg-red-900/80 text-red-100 rounded-md z-30">
                 <strong className="font-semibold">Playback Error:</strong>
-                <div className="text-sm mt-1">{modalPlayerError}</div>
               </div>
             )}
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 hover:opacity-100 transition-opacity duration-300">
@@ -1898,6 +1995,29 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
             {/* Overlays and controls */}
             <div className={`absolute inset-0 transition-opacity duration-300 ${showOverlay ? 'opacity-100' : 'opacity-0'} pointer-events-none`}>
+              {/* AD SKIP BUTTON - Only show for ads */}
+              {isAd() && showSkipAdButton && (
+                <div className={`absolute top-20 right-4 z-${isFullscreen ? '30' : '20'} pointer-events-auto`}>
+                  <div className="flex flex-col items-end space-y-2">
+                    {adCountdown !== null && (
+                      <div className="bg-black/70 text-white px-3 py-1 rounded-full text-sm">
+                        Skip in {adCountdown}s
+                      </div>
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        skipAd();
+                      }}
+                      className="flex items-center space-x-2 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white px-4 py-2 rounded-full shadow-lg transition-all duration-200 hover:scale-105 active:scale-95"
+                    >
+                      <SkipForward className="h-4 w-4" />
+                      <span className="font-semibold">Skip Ad</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Centered Play/Pause floating control */}
               <button
                 onClick={(e) => { e.stopPropagation(); togglePlayPause(e); }}
@@ -1984,21 +2104,41 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                 </div>
               )}
 
-              {/* Mobile Overlay Bar */}
-              <div className={`sm:hidden absolute bottom-16 right-2 flex flex-col space-y-2 z-${isFullscreen ? '20' : '10'} pointer-events-auto`}>
-                <div className="flex flex-row items-center bg-black/50 text-white px-3 py-1 rounded-full pointer-events-auto">
-                  <Users className="w-4 h-4 text-red-500 mr-1" />
-                  <span className="text-[10px] font-medium">{viewerCount.toLocaleString()}</span>
+              {/* REACTION TOGGLE BUTTON - Always visible dot/button to show reactions */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleReactionsPermanently();
+                  // clear any existing auto-hide timer
+                  if (overlayTimeoutRef.current) {
+                    clearTimeout(overlayTimeoutRef.current as any);
+                    overlayTimeoutRef.current = null;
+                  }
+                }}
+                className="absolute bottom-20 left-3 z-40 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full pointer-events-auto shadow-lg flex items-center justify-center"
+                aria-label="Toggle reactions"
+                title={showReactionsPermanently ? "Hide reactions" : "Show reactions"}
+              >
+                <div className={`w-2 h-2 rounded-full ${showReactionsPermanently ? 'bg-green-500' : 'bg-white'}`} />
+              </button>
+
+              {/* Mobile Overlay Bar - Now togglable via the dot button */}
+              {(showOverlay || showReactionsPermanently) && (
+                <div className={`sm:hidden absolute bottom-16 right-2 flex flex-col space-y-2 z-${isFullscreen ? '20' : '10'} pointer-events-auto transition-all duration-300 ${showReactionsPermanently ? 'opacity-100' : 'opacity-70'}`}>
+                  <div className="flex flex-row items-center bg-black/50 text-white px-3 py-1 rounded-full pointer-events-auto">
+                    <Users className="w-4 h-4 text-red-500 mr-1" />
+                    <span className="text-[10px] font-medium">{viewerCount.toLocaleString()}</span>
+                  </div>
+                  <div className="flex flex-row items-center bg-black/50 text-pink-500 px-3 py-1 rounded-full cursor-pointer hover:bg-black/70 pointer-events-auto" onClick={handleLike}>
+                    <Heart className="w-4 h-4 fill-current mr-1" />
+                    <span className="text-[10px] font-medium text-white">{likeCount}</span>
+                  </div>
+                  <div className="flex flex-row items-center bg-black/50 text-blue-500 px-3 py-1 rounded-full cursor-pointer hover:bg-black/70 pointer-events-auto" onClick={handleCommentClick}>
+                    <MessageCircle className="w-4 h-4 mr-1" />
+                    <span className="text-[10px] font-medium text-white">{messages.length}</span>
+                  </div>
                 </div>
-                <div className="flex flex-row items-center bg-black/50 text-pink-500 px-3 py-1 rounded-full cursor-pointer hover:bg-black/70 pointer-events-auto" onClick={handleLike}>
-                  <Heart className="w-4 h-4 fill-current mr-1" />
-                  <span className="text-[10px] font-medium text-white">{likeCount}</span>
-                </div>
-                <div className="flex flex-row items-center bg-black/50 text-blue-500 px-3 py-1 rounded-full cursor-pointer hover:bg-black/70 pointer-events-auto" onClick={handleCommentClick}>
-                  <MessageCircle className="w-4 h-4 mr-1" />
-                  <span className="text-[10px] font-medium text-white">{messages.length}</span>
-                </div>
-              </div>
+              )}
 
               {/* Mute toggle for YouTube in overlays */}
               {isYouTubeUrl(currentMedia?.video_url || currentShow?.video_url || '') && (

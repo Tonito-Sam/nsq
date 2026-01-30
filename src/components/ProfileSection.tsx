@@ -9,6 +9,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { FollowersModal } from './FollowersModal';
 import { CustomersModal, ViewsModal, LikesModal, EarningsModal } from './ProfileStatsModals';
 import { getMediaUrl } from '@/utils/mediaUtils';
+import { getVerificationBadge } from '@/utils/verificationUtils';
 
 export const ProfileSection = () => {
   const { user } = useAuth();
@@ -132,7 +133,20 @@ export const ProfileSection = () => {
         .eq('user_id', user.id);
 
       const totalLikes = posts?.reduce((sum, post) => sum + (post.likes_count || 0), 0) || 0;
-      const totalViews = posts?.length * 150 || 0; // Mock calculation
+      const postsCount = Array.isArray(posts) ? posts.length : 0;
+      const totalViews = postsCount * 150; // Mock calculation
+      
+      // Fetch canonical profile likes count from profile_likes table
+      let profileLikesCount = 0;
+      try {
+        const { count: pLikesCount, error: pErr } = await supabase
+          .from('profile_likes')
+          .select('*', { count: 'exact', head: true })
+          .eq('liked_profile_id', user.id);
+        if (!pErr) profileLikesCount = pLikesCount || 0;
+      } catch (e) {
+        // ignore
+      }
 
       // Fetch total earnings from orders
       const { data: orders } = await supabase
@@ -148,7 +162,7 @@ export const ProfileSection = () => {
         following: followingCount || 0,
         customers: customersCount || 0,
         views: totalViews,
-        likes: totalLikes,
+        likes: profileLikesCount || totalLikes,
         earned: totalEarned
       });
     } catch (error) {
@@ -184,7 +198,18 @@ export const ProfileSection = () => {
         .select('likes_count')
         .eq('user_id', userId);
       const totalLikes = posts?.reduce((sum, post) => sum + (post.likes_count || 0), 0) || 0;
-      const totalViews = posts?.length * 150 || 0;
+      const postsCount = Array.isArray(posts) ? posts.length : 0;
+      const totalViews = postsCount * 150;
+      // canonical profile likes for another user
+      let profileLikesCount = 0;
+      try {
+        const { count: pLikesCount, error: pErr } = await supabase
+          .from('profile_likes')
+          .select('*', { count: 'exact', head: true })
+          .eq('liked_profile_id', userId);
+        if (!pErr) profileLikesCount = pLikesCount || 0;
+      } catch (e) {}
+
       const { data: orders } = await supabase
         .from('orders')
         .select('total_amount')
@@ -196,7 +221,7 @@ export const ProfileSection = () => {
         following: followingCount || 0,
         customers: customersCount || 0,
         views: totalViews,
-        likes: totalLikes,
+        likes: profileLikesCount || totalLikes,
         earned: totalEarned
       });
     } catch (error) {
@@ -215,6 +240,25 @@ export const ProfileSection = () => {
     setModalTab(tab);
     setShowFollowersModal(true);
   };
+
+  // Listen for live profile likes updates dispatched from Profile page
+  useEffect(() => {
+    const onProfileLikesUpdated = (e: Event) => {
+      try {
+        const detail = (e as CustomEvent).detail;
+        if (!detail) return;
+        // If the updated profile is the one currently shown, update likes stat
+        if (userData && detail.userId === userData.id) {
+          setStats(prev => ({ ...prev, likes: detail.likes || 0 }));
+        }
+      } catch (err) {
+        // ignore malformed events
+      }
+    };
+
+    window.addEventListener('profile-likes-updated', onProfileLikesUpdated as EventListener);
+    return () => window.removeEventListener('profile-likes-updated', onProfileLikesUpdated as EventListener);
+  }, [userData]);
 
   if (!userData) {
     return (
@@ -287,11 +331,18 @@ export const ProfileSection = () => {
                   {userData.heading}
                 </p>
               )}
-              {userData.verified && (
-                <Badge className="mt-2 bg-blue-100 text-blue-700 text-xs">
-                  Verified
-                </Badge>
-              )}
+              {(() => {
+                const badge = getVerificationBadge(undefined, stats.followers, (userData?.posts_count || 0));
+                if (badge) {
+                  return (
+                    <Badge variant="outline" className={`mt-2 text-xs px-1.5 py-0.5 ${badge.color.includes('blue') ? 'border-blue-200 text-blue-700 dark:text-blue-300 dark:border-blue-800' : ''}`} title={badge.tooltip}>
+                      {badge.icon}
+                      <span className="ml-1 font-medium">{badge.text}</span>
+                    </Badge>
+                  );
+                }
+                return null;
+              })()}
             </div>
             
             {userData.bio && (

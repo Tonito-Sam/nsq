@@ -17,6 +17,7 @@ export const ProfileSidebar = () => {
 		weeklyEarnings: 0,
 		newCustomers: 0,
 	});
+	const [profileLikes, setProfileLikes] = useState<number>(0);
 	const [recentConnections, setRecentConnections] = useState<any[]>([]);
 
 	useEffect(() => {
@@ -71,12 +72,19 @@ export const ProfileSidebar = () => {
 				);
 				const newCustomers = uniqueCustomers.size;
 
+				// Profile likes (canonical count)
+				const { count: likesCount } = await supabase
+					.from('profile_likes')
+					.select('*', { count: 'exact', head: true })
+					.eq('liked_profile_id', user.id);
+
 				setStats({
 					postReach,
 					newConnections: newConnections || 0,
 					weeklyEarnings,
 					newCustomers,
 				});
+				setProfileLikes(likesCount || 0);
 			} catch {
 				setStats({
 					postReach: 0,
@@ -84,6 +92,7 @@ export const ProfileSidebar = () => {
 					weeklyEarnings: 0,
 					newCustomers: 0,
 				});
+				setProfileLikes(0);
 			}
 		};
 		fetchStats();
@@ -121,6 +130,23 @@ export const ProfileSidebar = () => {
 		fetchRecentConnections();
 	}, [user]);
 
+	useEffect(() => {
+		const onProfileLikesUpdated = (e: Event) => {
+			try {
+				const detail = (e as CustomEvent).detail;
+				if (!detail) return;
+				if (detail.userId === user?.id) {
+					setProfileLikes(detail.likes || 0);
+				}
+			} catch (err) {
+				// ignore malformed events
+			}
+		};
+
+		window.addEventListener('profile-likes-updated', onProfileLikesUpdated as EventListener);
+		return () => window.removeEventListener('profile-likes-updated', onProfileLikesUpdated as EventListener);
+	}, [user]);
+
 	// Helper: fetch mutual connections (optional, can be improved for performance)
 	const getMutualConnections = (connectionId: string) => {
 		// This is a placeholder. For real mutuals, you would query followers where both user.id and connectionId follow the same people.
@@ -131,9 +157,12 @@ export const ProfileSidebar = () => {
 		<div className="w-80 space-y-6 lg:sticky lg:top-24 self-start">
 			{/* Profile Analytics (real data) */}
 			<Card className="p-6 dark:bg-[#161616] bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-900/10 dark:to-purple-900/10">
-				<h3 className="font-semibold text-lg mb-4 text-gray-900 dark:text-gray-100">
-					Profile Analytics
-				</h3>
+				<div className="flex items-center justify-between mb-2">
+					<h3 className="font-semibold text-lg text-gray-900 dark:text-gray-100">Profile Analytics</h3>
+					<Badge variant="outline" className="text-sm">
+						{profileLikes} Likes
+					</Badge>
+				</div>
 				<div className="grid grid-cols-2 gap-4">
 					<div className="flex flex-col items-center p-3 bg-white/50 dark:bg-gray-800/50 rounded-lg">
 						<Eye className="h-5 w-5 text-purple-500 mb-1" />

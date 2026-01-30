@@ -89,6 +89,41 @@ export const LiveChat = () => {
     // also try again when donation modal opens/closes
   }, [showDonationModal]);
 
+  // Notify VideoContainer that LiveChat is an overlay while mounted
+  useEffect(() => {
+    const sendOverlayEvent = (active: boolean) => {
+      try {
+        // persist current overlay state so late-mounted listeners can query it
+        try { (window as any).__videoOverlayActive = !!active; } catch (e) { /* ignore */ }
+        window.dispatchEvent(new CustomEvent('video-overlay-change', { detail: { overlayActive: active } }));
+      } catch (e) {
+        // older browsers may not support CustomEvent constructor
+        try { (window as any).__videoOverlayActive = !!active; } catch (err) { /* ignore */ }
+        const ev = document.createEvent('CustomEvent');
+        ev.initCustomEvent('video-overlay-change', false, false, { overlayActive: active });
+        window.dispatchEvent(ev);
+      }
+    };
+
+    // when LiveChat mounts, overlay is active
+    sendOverlayEvent(true);
+    // when LiveChat unmounts, notify that overlay is gone
+    return () => sendOverlayEvent(false);
+  }, []);
+
+  // Notify when donation modal opens/closes specifically
+  useEffect(() => {
+    const active = !!showDonationModal;
+    try { (window as any).__videoOverlayActive = active; } catch (e) { /* ignore */ }
+    try {
+      window.dispatchEvent(new CustomEvent('video-overlay-change', { detail: { overlayActive: active } }));
+    } catch (e) {
+      const ev = document.createEvent('CustomEvent');
+      ev.initCustomEvent('video-overlay-change', false, false, { overlayActive: active });
+      window.dispatchEvent(ev);
+    }
+  }, [showDonationModal]);
+
   // Quick reactions emojis
   const quickReactions: Reaction[] = [
     { emoji: '👍', name: 'Thumbs Up' },
@@ -739,8 +774,23 @@ export const LiveChat = () => {
           {isLoading ? (
             <div className="text-center py-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">Loading messages...</p>
-            </div>
+              <div className="mt-4 space-y-3">
+                <div className="flex items-start space-x-3 justify-center">
+                  <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-800 animate-pulse" />
+                  <div className="flex-1 space-y-2 py-1">
+                    <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-3/4 animate-pulse" />
+                    <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-1/2 animate-pulse" />
+                  </div>
+                </div>
+                <div className="flex items-start space-x-3 justify-center">
+                  <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-800 animate-pulse" />
+                  <div className="flex-1 space-y-2 py-1">
+                    <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-2/3 animate-pulse" />
+                    <div className="h-3 bg-gray-200 dark:bg-gray-800 rounded w-1/3 animate-pulse" />
+                  </div>
+                </div>
+              </div>
+           </div>
           ) : messages.length === 0 ? (
             <div className="text-center py-12 text-gray-500 dark:text-gray-400">
               <MessageCircle className="mx-auto h-12 w-12 mb-3 opacity-50" />

@@ -12,6 +12,11 @@ import { toast } from '@/hooks/use-toast';
 import { PostCard } from '@/components/PostCard';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
+import { getVerificationBadge } from '@/utils/verificationUtils';
+import SkeletonCard from '@/components/skeletons/SkeletonCard';
+import SkeletonAvatar from '@/components/skeletons/SkeletonAvatar';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
+import SkeletonMedia from '@/components/skeletons/SkeletonMedia';
 
 interface UserProfile {
   id: string;
@@ -196,6 +201,11 @@ const Profile = () => {
           hasLiked: false 
         }));
 
+        // Notify other UI parts that profile likes changed
+        try {
+          window.dispatchEvent(new CustomEvent('profile-likes-updated', { detail: { userId: userData.id, likes: Math.max(0, stats.likes - 1) } }));
+        } catch (e) {}
+
         toast({ 
           title: 'Profile Unliked', 
           description: `You unliked ${userData.username || 'this user'}'s profile.` 
@@ -224,6 +234,11 @@ const Profile = () => {
           hasLiked: true 
         }));
 
+        // Notify other UI parts that profile likes changed
+        try {
+          window.dispatchEvent(new CustomEvent('profile-likes-updated', { detail: { userId: userData.id, likes: stats.likes + 1 } }));
+        } catch (e) {}
++
         toast({ 
           title: 'Profile Liked!', 
           description: `You liked ${userData.username || 'this user'}'s profile.` 
@@ -459,9 +474,26 @@ const Profile = () => {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a] transition-colors">
         <Header />
-        <div className="max-w-7xl mx-auto">
-          <div className="flex items-center justify-center h-64">
-            <div className="text-lg text-gray-500 dark:text-gray-400">Loading profile...</div>
+        <div className="max-w-7xl mx-auto px-4 py-8">
+          {/* Profile header skeleton */}
+          <div className="flex items-center gap-6 mb-6">
+            <SkeletonAvatar size={96} />
+            <div className="flex-1 space-y-3">
+              <SkeletonLine width="40%" height="1.25rem" />
+              <SkeletonLine width="30%" height="1rem" />
+              <div className="flex items-center gap-4 mt-2">
+                <SkeletonLine width="6rem" height="2rem" />
+                <SkeletonLine width="6rem" height="2rem" />
+                <SkeletonLine width="6rem" height="2rem" />
+              </div>
+            </div>
+          </div>
+
+          {/* Posts grid skeleton */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <SkeletonCard key={i} />
+            ))}
           </div>
         </div>
       </div>
@@ -486,7 +518,7 @@ const Profile = () => {
       <Header />
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row">
         {/* Main Content */}
-        <main className="flex-1 px-4 py-6 min-w-0 lg:max-w-4xl">
+        <main className="flex-1 px-4 py-6 min-w-0 lg:max-w-5xl">
           <Card className="overflow-hidden dark:bg-[#161616] mb-6">
             <div 
               className="h-48 bg-gradient-to-r from-purple-600 via-yellow-400 to-purple-600 relative"
@@ -537,9 +569,17 @@ const Profile = () => {
                   {userData.heading && (
                     <p className="text-blue-600 dark:text-blue-400 font-medium mt-1">{userData.heading}</p>
                   )}
-                  {userData.verified && (
-                    <Badge className="mt-2 bg-blue-100 text-blue-700">Verified</Badge>
-                  )}
+                  {(() => {
+                    // Use metric-only badges for profile header (do not render manual 'Verified' here)
+                    const badge = getVerificationBadge(undefined, stats.followers, posts.length || (userData as any).posts_count || 0);
+                    if (!badge) return null;
+                    return (
+                      <Badge className={`mt-2 text-xs px-2 py-1 flex items-center gap-1 ${badge.color}`} title={badge.tooltip}>
+                        {badge.icon}
+                        {badge.text}
+                      </Badge>
+                    );
+                  })()}
                   {userData.bio && (
                     <p className="mt-3 text-gray-700 dark:text-gray-300">{userData.bio}</p>
                   )}

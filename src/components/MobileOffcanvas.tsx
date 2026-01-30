@@ -38,6 +38,7 @@ import { Badge } from '@/components/ui/badge';
 import CreateGroupModalFull from './CreateGroupModalFull';
 import { FollowersModal } from './FollowersModal';
 import { CustomersModal, ViewsModal, LikesModal, EarningsModal } from './ProfileStatsModals';
+import { getVerificationBadge } from '@/utils/verificationUtils';
 
 interface MobileOffcanvasProps {
   open: boolean;
@@ -66,7 +67,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
   const [showViewsModal, setShowViewsModal] = useState(false);
   const [showLikesModal, setShowLikesModal] = useState(false);
   const [showEarningsModal, setShowEarningsModal] = useState(false);
-  const [currentEventIndex, setCurrentEventIndex] = useState(0); // Fix: add missing state for currentEventIndex
+  const [currentEventIndex, setCurrentEventIndex] = useState(0);
 
   useEffect(() => {
     if (user) {
@@ -90,14 +91,14 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
     fetchMobileEvents();
   }, []);
 
-  // Slider logic for mobile events (same as EventsSidebar)
+  // Slider logic for mobile events
   useEffect(() => {
     if (mobileEvents.length > 1) {
       const interval = setInterval(() => {
         setCurrentEventIndex((prev: number) =>
           prev >= mobileEvents.length - 1 ? 0 : prev + 1
         );
-      }, 10000); // 10 seconds
+      }, 10000);
       return () => clearInterval(interval);
     }
   }, [mobileEvents.length]);
@@ -168,12 +169,24 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
 
       const totalEarned = orders?.reduce((sum, order) => sum + (Number(order.total_amount) || 0), 0) || 0;
 
+      // Fetch profile likes count from profile_likes table
+      let profileLikesCount = 0;
+      try {
+        const { count: pLikesCount, error: pErr } = await supabase
+          .from('profile_likes')
+          .select('*', { count: 'exact', head: true })
+          .eq('liked_profile_id', user.id);
+        if (!pErr) profileLikesCount = pLikesCount || 0;
+      } catch (e) {
+        console.warn('Error fetching profile likes for offcanvas:', e);
+      }
+
       setStats({
         followers: followersCount || 0,
         following: followingCount || 0,
         customers: customersCount || 0,
         views: totalViews,
-        likes: totalLikes,
+        likes: profileLikesCount || totalLikes,
         earned: totalEarned
       });
     } catch (error) {
@@ -236,10 +249,50 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
     setShowFollowersModal(true);
   };
 
+  useEffect(() => {
+    const onProfileLikesUpdated = (e: any) => {
+      try {
+        if (!e || !e.detail) return;
+        const { userId, likes } = e.detail;
+        if (userId === user?.id || userId === userData?.id) {
+          setStats(prev => ({ ...prev, likes: likes }));
+        }
+      } catch (err) {
+        // ignore
+      }
+    };
+
+    window.addEventListener('profile-likes-updated', onProfileLikesUpdated as EventListener);
+    return () => window.removeEventListener('profile-likes-updated', onProfileLikesUpdated as EventListener);
+  }, [userData, user]);
+
+  // Notify other parts of the app when the mobile offcanvas is opened/closed
+  useEffect(() => {
+    try {
+      window.dispatchEvent(new CustomEvent('mobile-offcanvas-opened', { detail: { open } }));
+    } catch (e) {
+      // ignore
+    }
+  }, [open]);
+
+  // Also notify when the offcanvas is about to open/close
+  const handleOpenChange = (newOpen: boolean) => {
+    // Notify before the actual change for smoother transitions
+    try {
+      window.dispatchEvent(new CustomEvent('mobile-offcanvas-changing', { 
+        detail: { willBeOpen: newOpen } 
+      }));
+    } catch (e) {
+      // ignore
+    }
+    
+    onOpenChange(newOpen);
+  };
+
   if (!user) {
     return (
-      <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent side="left" className="w-80 bg-white dark:bg-[#1a1a1a] p-0">
+      <Sheet open={open} onOpenChange={handleOpenChange}>
+        <SheetContent side="left" className="w-80 bg-white dark:bg-[#1a1a1a] p-0 z-[60]">
           <SheetHeader className="p-4">
             <SheetTitle>Menu</SheetTitle>
           </SheetHeader>
@@ -256,13 +309,16 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
 
   return (
     <>
-      <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent side="left" className="w-80 bg-white dark:bg-[#1a1a1a] p-0 overflow-y-auto max-h-screen flex flex-col">
+      <Sheet open={open} onOpenChange={handleOpenChange}>
+        <SheetContent 
+          side="left" 
+          className="w-80 bg-white dark:bg-[#1a1a1a] p-0 overflow-y-auto max-h-screen flex flex-col z-[60]"
+        >
           <div className="p-4 space-y-6 flex-1">
-            {/* Profile Section - Clickable elements and modals */}
+            {/* Profile Section */}
             <div className="w-full">
               <div className="overflow-hidden dark:bg-[#161616] dark:border-gray-700 bg-white border border-gray-200 rounded-lg">
-                {/* Cover Photo (Clickable) */}
+                {/* Cover Photo */}
                 <div
                   className="h-32 bg-gradient-to-r from-purple-600 via-yellow-400 to-purple-600 relative cursor-pointer"
                   style={{
@@ -274,7 +330,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
                   title="View Profile"
                 />
                 <div className="p-6 text-center relative">
-                  {/* Profile Picture (Clickable) */}
+                  {/* Profile Picture */}
                   <div className="relative -mt-12 mb-2 cursor-pointer" onClick={() => navigate(`/profile/${userData?.username}`)} title="View Profile">
                     <Avatar className="h-20 w-20 mx-auto border-4 border-white shadow-lg">
                       <AvatarImage 
@@ -286,7 +342,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
                       </AvatarFallback>
                     </Avatar>
                   </div>
-                  {/* Full Name & Username (Clickable) */}
+                  {/* Full Name & Username */}
                   <h3
                     className="font-semibold text-lg mt-3 text-gray-900 dark:text-gray-100 cursor-pointer"
                     onClick={() => navigate(`/profile/${userData?.username}`)}
@@ -305,6 +361,35 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
                   >
                     @{userData?.username || 'user'}
                   </p>
+                  {/* Verification badge */}
+                  <div className="mt-2 flex items-center justify-center gap-2">
+                    {(() => {
+                      const badge = getVerificationBadge(userData?.verification_level, stats.followers, (userData?.posts_count || 0));
+                      if (badge) {
+                        return (
+                          <div className={`text-xs px-2 py-1 rounded-full ${badge.color} flex items-center gap-1`} title={badge.tooltip}>
+                            {badge.icon}
+                            <span className="font-medium">{badge.text}</span>
+                          </div>
+                        );
+                      }
+                      if (userData?.verified) {
+                        const b = getVerificationBadge('verified', stats.followers, (userData?.posts_count || 0));
+                        return (
+                          <div className={`text-xs px-2 py-1 rounded-full ${b?.color}`} title={b?.tooltip}>
+                            {b?.icon}
+                            <span className="font-medium">{b?.text}</span>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+                    {/* Profile Likes */}
+                    <div className="text-xs px-2 py-1 rounded-full bg-pink-50 text-pink-700 dark:bg-pink-900/10 dark:text-pink-300 flex items-center gap-1">
+                      <Heart className="h-3 w-3 text-pink-600" />
+                      <span className="font-medium">{stats.likes}</span>
+                    </div>
+                  </div>
                   {userData?.heading && (
                     <div className="text-blue-600 dark:text-blue-400 font-medium text-sm mb-1 text-center w-full">{userData.heading}</div>
                   )}
@@ -362,7 +447,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
               </div>
             </div>
 
-            {/* Search Bar (moved here) */}
+            {/* Search Bar */}
             <div className="w-full mt-4">
               <SearchDropdown />
             </div>
@@ -445,12 +530,12 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
               </div>
             </div>
 
-            {/* Trending Card - moved directly under quick links */}
+            {/* Trending Card */}
             <div className="bg-white dark:bg-[#161616] rounded-lg p-4 shadow-sm border dark:border-gray-700 mt-4">
               <TrendingCard useRouterNavigate />
             </div>
 
-            {/* Suggested Friends with icon-only follow buttons for mobile */}
+            {/* Suggested Friends */}
             <div className="bg-white dark:bg-[#161616] rounded-lg p-4 shadow-sm border dark:border-gray-700">
               <div className="mb-4">
                 <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-purple-600 dark:text-purple-400">
@@ -460,7 +545,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
               <SuggestedFriends mobileView={true} />
             </div>
 
-            {/* Groups Section (Feed sidebar pattern) */}
+            {/* Groups Section */}
             <div>
               <div className="flex items-center justify-between mb-2 mt-6">
                 <h3 className="font-semibold text-lg">Groups</h3>
@@ -510,7 +595,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
                             size="sm" 
                             variant="ghost" 
                             className="opacity-0 group-hover:opacity-100 text-xs h-6 px-2"
-                            onClick={e => { e.stopPropagation(); /* handleLeaveGroup(group.id) */ }}
+                            onClick={e => { e.stopPropagation(); }}
                           >
                             Leave
                           </Button>
@@ -552,7 +637,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
                           size="sm" 
                           variant="outline" 
                           className="text-xs"
-                          onClick={e => { e.stopPropagation(); /* handleJoinGroup(group.id) */ }}
+                          onClick={e => { e.stopPropagation(); }}
                         >
                           Join
                         </Button>
@@ -563,7 +648,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
               </Card>
             </div>
           </div>
-          {/* Restore dark/light mode toggle and sign out card at the bottom */}
+          {/* Footer with theme toggle and sign out */}
           <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-4">
             <div className="flex items-center justify-between">
               <ModeToggle />
@@ -581,7 +666,7 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
       <ViewsModal open={showViewsModal} onOpenChange={setShowViewsModal} userId={userData?.id} />
       <LikesModal open={showLikesModal} onOpenChange={setShowLikesModal} userId={userData?.id} />
       <EarningsModal open={showEarningsModal} onOpenChange={setShowEarningsModal} userId={userData?.id} />
-      {/* Create Group Modal (shared with desktop) */}
+      {/* Create Group Modal */}
       <CreateGroupModalFull open={showCreateModal} onOpenChange={setShowCreateModal} onGroupCreated={() => { setShowCreateModal(false); fetchGroups(); }} />
     </>
   );

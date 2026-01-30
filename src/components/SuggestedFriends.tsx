@@ -6,6 +6,10 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
 import { getMediaUrl } from '@/utils/mediaUtils';
+import { getVerificationBadge } from '@/utils/verificationUtils';
+import SkeletonAvatar from '@/components/skeletons/SkeletonAvatar';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
+import SkeletonCard from '@/components/skeletons/SkeletonCard';
 
 interface SuggestedFriendsProps {
   mobileView?: boolean;
@@ -18,6 +22,8 @@ interface User {
   username: string;
   avatar_url?: string;
   verified?: boolean;
+  followers_count?: number;
+  posts_count?: number;
 }
 
 export const SuggestedFriends: React.FC<SuggestedFriendsProps> = ({ mobileView = false }) => {
@@ -67,7 +73,7 @@ export const SuggestedFriends: React.FC<SuggestedFriendsProps> = ({ mobileView =
 
       const { data, error } = await supabase
         .from('users')
-        .select('id, first_name, last_name, username, avatar_url, verified')
+        .select('id, first_name, last_name, username, avatar_url, verified, followers_count, posts_count')
         .not('id', 'in', `(${excludeIds.map(id => `"${id}"`).join(',')})`)
         .limit(mobileView ? 3 : 5);
 
@@ -154,13 +160,15 @@ export const SuggestedFriends: React.FC<SuggestedFriendsProps> = ({ mobileView =
         {Array.from({ length: mobileView ? 3 : 5 }).map((_, i) => (
           <div key={i} className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-full animate-pulse" />
+              <SkeletonAvatar size={40} />
               <div className="space-y-1">
-                <div className="w-20 h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
-                <div className="w-16 h-3 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+                <SkeletonLine width="5rem" height="1rem" />
+                <SkeletonLine width="4rem" height="0.75rem" />
               </div>
             </div>
-            <div className="w-16 h-8 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+            <div className="w-16 h-8">
+              <SkeletonLine width="100%" height="2rem" />
+            </div>
           </div>
         ))}
       </div>
@@ -214,7 +222,20 @@ export const SuggestedFriends: React.FC<SuggestedFriendsProps> = ({ mobileView =
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
                     {suggestedUser.first_name} {suggestedUser.last_name}
-                    {suggestedUser.verified && <span className="text-blue-500 ml-1">✓</span>}
+                    {(() => {
+                      const badge = getVerificationBadge(undefined, (suggestedUser as any).followers_count || 0, (suggestedUser as any).posts_count || 0);
+                      if (badge) {
+                        return (
+                          <span className={`ml-2 text-xs px-1 py-0.5 rounded ${badge.color}`} title={badge.tooltip}>
+                            {badge.icon}
+                            <span className="ml-1">{badge.text}</span>
+                          </span>
+                        );
+                      }
+
+                      // removed manual verified fallback: SuggestedFriends should only show metric-based badges
+                      return null;
+                    })()}
                   </p>
                   <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
                     @{suggestedUser.username}

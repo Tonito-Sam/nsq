@@ -1,3 +1,19 @@
+/**
+ * Feed Component - INFINITE SCROLL FIX APPLIED
+ * 
+ * Key Changes:
+ * 1. Added refs (hasNextPageRef, isFetchingNextPageRef) to track latest query state
+ * 2. Added isIntersecting state to trigger React's reactivity system
+ * 3. Separated intersection detection from fetch logic
+ * 4. Observer callback now has empty deps (stable) and only sets intersection state
+ * 5. Separate useEffect monitors intersection + reads latest values from refs to trigger fetch
+ * 
+ * This fixes the "stale closure" issue where the IntersectionObserver callback
+ * captured old values of hasNextPage and isFetchingNextPage.
+ * 
+ * See lines ~750-850 for the infinite scroll implementation.
+ */
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiUrl from '@/lib/api';
@@ -13,6 +29,7 @@ import { toast } from '@/hooks/use-toast';
 import { ArrowDown, Loader2, ArrowUp, ExternalLink, Info, Video, Play, Pause, Volume2, VolumeX, MoreVertical, ShoppingBag, Star } from 'lucide-react';
 import { LiveChat } from './LiveChat';
 import { Skeleton } from '@/components/ui/skeleton';
+import FeedSkeleton from '@/components/skeletons/FeedSkeleton';
 
 interface Post {
   id: string;
@@ -97,13 +114,11 @@ interface StoreProduct {
   created_at: string;
 }
 
-// Format a numeric amount using a store's base currency (fallback to ZAR)
 const formatCurrency = (amount: number, currency?: string) => {
   const curr = currency || 'ZAR';
   try {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency: curr }).format(amount);
   } catch (e) {
-    // Fallback: show currency code then amount
     return `${curr} ${amount.toFixed(2)}`;
   }
 };
@@ -113,8 +128,6 @@ const Feed: React.FC = () => {
   const desktopReelsRef = useRef<HTMLDivElement>(null);
   const mobileReelsRef = useRef<HTMLDivElement>(null);
   const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
-  const observerRef = useRef<IntersectionObserver | null>(null);
-  const loadMoreObserverRef = useRef<IntersectionObserver | null>(null);
   const desktopAutoplayRef = useRef<number | null>(null);
   const mobileAutoplayRef = useRef<number | null>(null);
   const feedContainerRef = useRef<HTMLDivElement>(null);
@@ -139,9 +152,6 @@ const Feed: React.FC = () => {
   const [mobileVisibleReels, setMobileVisibleReels] = useState<Reel[]>([]);
   const [storeProducts, setStoreProducts] = useState<StoreProduct[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasLoadedInitial, setHasLoadedInitial] = useState(false);
   
   const queryClient = useQueryClient();
   const { user } = useAuth() as any;
@@ -577,57 +587,6 @@ const Feed: React.FC = () => {
     }
   }, [playingReelId]);
 
-  // Intersection Observer for additional videos
-  useEffect(() => {
-    if (!reels.length) return;
-
-    observerRef.current = new IntersectionObserver(
-      (entries) => {
-        entries.forEach(entry => {
-          const videoElement = videoRefs.current.get(entry.target.id);
-          if (!videoElement) return;
-
-          const reelId = entry.target.id;
-          const isFirstFourDesktop = desktopVisibleReels.slice(0, 4).some(r => r.id === reelId);
-          const isFirstThreeMobile = mobileVisibleReels.slice(0, 3).some(r => r.id === reelId);
-
-          if (entry.isIntersecting && !isFirstFourDesktop && !isFirstThreeMobile) {
-            playOnlyVideo(reelId, videoElement);
-          } else if (!entry.isIntersecting && playingReelId === reelId) {
-            try { 
-              videoElement.pause(); 
-              videoElement.currentTime = 0; 
-              if (playingReelId === reelId) {
-                setPlayingReelId(null);
-              }
-            } catch (e) {}
-          }
-        });
-      },
-      {
-        threshold: 0.7,
-        rootMargin: '0px'
-      }
-    );
-
-    videoRefs.current.forEach((video, id) => {
-      if (video && observerRef.current) {
-        const isFirstFourDesktop = desktopVisibleReels.slice(0, 4).some(r => r.id === id);
-        const isFirstThreeMobile = mobileVisibleReels.slice(0, 3).some(r => r.id === id);
-        
-        if (!isFirstFourDesktop && !isFirstThreeMobile) {
-          observerRef.current.observe(video);
-        }
-      }
-    });
-
-    return () => {
-      if (observerRef.current) {
-        observerRef.current.disconnect();
-      }
-    };
-  }, [reels, desktopVisibleReels, mobileVisibleReels, playingReelId]);
-
   // Helper function to process media URLs
   const processPostMediaUrls = (post: any): any => {
     let media_urls: string[] | undefined = undefined;
@@ -650,15 +609,6 @@ const Feed: React.FC = () => {
     return { ...post, media_urls, media_url: (media_urls && media_urls.length > 0) ? media_urls[0] : post.media_url };
   };
 
-  // DEBOUNCE FUNCTION for smooth infinite scroll
-  const debounce = (func: Function, wait: number) => {
-    let timeout: NodeJS.Timeout;
-    return (...args: any[]) => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => func(...args), wait);
-    };
-  };
-
   // Optimized infinite query for posts
   const {
     data: postsData,
@@ -672,8 +622,7 @@ const Feed: React.FC = () => {
   } = useInfiniteQuery({
     queryKey: QUERY_KEYS.posts,
     queryFn: async ({ pageParam = 0 }) => {
-      console.debug('[Feed] fetching posts page:', pageParam);
-      setIsLoadingMore(true);
+      console.log('[Feed] Fetching page:', pageParam);
       
       try {
         const from = pageParam * PAGE_SIZE;
@@ -726,11 +675,11 @@ const Feed: React.FC = () => {
           .range(from, to);
 
         if (error) {
-          console.error('[Feed] error fetching posts page', pageParam, error);
+          console.error('[Feed] Error fetching posts:', error);
           throw error;
         }
 
-        console.debug(`[Feed] fetched ${Array.isArray(data) ? data.length : 0} posts for page ${pageParam}`);
+        console.log(`[Feed] Fetched ${data?.length || 0} posts for page ${pageParam}`);
 
         const processedPosts = await Promise.all(
           (data || []).map(async (post) => {
@@ -786,11 +735,6 @@ const Feed: React.FC = () => {
       } catch (error) {
         console.error('Failed to fetch posts:', error);
         throw error;
-      } finally {
-        setIsLoadingMore(false);
-        if (!hasLoadedInitial) {
-          setHasLoadedInitial(true);
-        }
       }
     },
     initialPageParam: 0,
@@ -822,13 +766,6 @@ const Feed: React.FC = () => {
 
   // Get all posts from pages
   const posts: Post[] = (postsData as any)?.pages?.flatMap((page: any) => page.posts) || [];
-
-  // Mark initial loading as done when we have data
-  useEffect(() => {
-    if ((postsData as any)?.pages && (postsData as any).pages.length > 0) {
-      setIsInitialLoading(false);
-    }
-  }, [postsData]);
 
   // Fetch ad campaigns from campaigns table
   useEffect(() => {
@@ -1018,42 +955,133 @@ const Feed: React.FC = () => {
     },
   });
 
-  // SMOOTH INFINITE SCROLL IMPLEMENTATION
+  // ============================================================================
+  // ROBUST INFINITE SCROLL IMPLEMENTATION - Fixed for stale closures
+  // ============================================================================
+  
+  // AGGRESSIVE DEBUG: Log component state
+  console.log('[Feed] Component rendered with:', {
+    hasNextPage,
+    isFetchingNextPage,
+    postsCount: posts.length,
+    timestamp: new Date().toLocaleTimeString()
+  });
+  
+  // State to track intersection
+  const [isIntersecting, setIsIntersecting] = useState(false);
+  
+  // Track latest values in refs to avoid stale closures
+  const hasNextPageRef = useRef(hasNextPage);
+  const isFetchingNextPageRef = useRef(isFetchingNextPage);
+
+  // Update refs whenever values change
   useEffect(() => {
-    if (!loadMoreRef.current || !hasNextPage || isFetchingNextPage) return;
+    hasNextPageRef.current = hasNextPage;
+    console.log('[InfiniteScroll] ✏️ hasNextPage updated to:', hasNextPage);
+  }, [hasNextPage]);
 
-    const debouncedFetchNextPage = debounce(() => {
-      if (hasNextPage && !isFetchingNextPage) {
-        console.debug('[Feed] Triggering fetchNextPage via intersection');
-        fetchNextPage();
-      }
-    }, 200);
+  useEffect(() => {
+    isFetchingNextPageRef.current = isFetchingNextPage;
+    console.log('[InfiniteScroll] ✏️ isFetchingNextPage updated to:', isFetchingNextPage);
+  }, [isFetchingNextPage]);
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const [entry] = entries;
-        if (entry.isIntersecting && hasNextPage && !isFetchingNextPage) {
-          debouncedFetchNextPage();
-        }
-      },
-      {
-        root: null,
-        rootMargin: '200px 0px',
-        threshold: 0.1,
-      }
-    );
+  // Stable intersection callback (no dependencies on query state)
+  const handleIntersection = useCallback((entries: IntersectionObserverEntry[]) => {
+    const [entry] = entries;
+    
+    console.log('[InfiniteScroll] 📍 Intersection event:', {
+      isIntersecting: entry.isIntersecting,
+      intersectionRatio: entry.intersectionRatio.toFixed(2),
+      targetVisible: entry.boundingClientRect.top < window.innerHeight,
+      timestamp: new Date().toLocaleTimeString()
+    });
+    
+    setIsIntersecting(entry.isIntersecting);
+  }, []); // Empty deps - truly stable
 
-    const currentRef = loadMoreRef.current;
-    if (currentRef) {
-      observer.observe(currentRef);
+  // Separate effect to trigger fetch based on intersection + latest query state
+  useEffect(() => {
+    const shouldFetch = 
+      isIntersecting && 
+      hasNextPageRef.current === true && 
+      !isFetchingNextPageRef.current;
+    
+    if (shouldFetch) {
+      console.log('[InfiniteScroll] ✅ TRIGGERING fetchNextPage', {
+        isIntersecting,
+        hasNextPage: hasNextPageRef.current,
+        isFetchingNextPage: isFetchingNextPageRef.current,
+        timestamp: new Date().toLocaleTimeString()
+      });
+      
+      fetchNextPage();
+    } else if (isIntersecting) {
+      console.log('[InfiniteScroll] ⏸️ Intersection detected but NOT fetching:', {
+        hasNextPage: hasNextPageRef.current,
+        isFetchingNextPage: isFetchingNextPageRef.current,
+        reason: hasNextPageRef.current === false 
+          ? '❌ No more pages available' 
+          : hasNextPageRef.current === undefined
+          ? '⚠️ hasNextPage is undefined'
+          : '⏳ Already fetching current page',
+        timestamp: new Date().toLocaleTimeString()
+      });
+    }
+  }, [isIntersecting, fetchNextPage]); // React when intersection changes
+
+  // Create IntersectionObserver and observe the sentinel
+  useEffect(() => {
+    console.log('[InfiniteScroll] 🔄 Creating new IntersectionObserver');
+    
+    const observer = new IntersectionObserver(handleIntersection, {
+      root: null, // Use viewport as root
+      rootMargin: '600px 0px', // Trigger 600px before sentinel becomes visible
+      threshold: [0, 0.1, 0.5, 1.0] // Multiple thresholds for better detection
+    });
+
+    const target = loadMoreRef.current;
+
+    console.log('[InfiniteScroll] 🎯 Sentinel element check:', {
+      exists: !!target,
+      element: target,
+      postsCount: posts.length,
+      hasNextPage,
+      isFetchingNextPage
+    });
+
+    if (target) {
+      console.log('[InfiniteScroll] 👀 Started observing sentinel element');
+      observer.observe(target);
+      
+      // FORCE check if already in viewport
+      setTimeout(() => {
+        const rect = target.getBoundingClientRect();
+        console.log('[InfiniteScroll] 🔍 Sentinel position check:', {
+          top: rect.top,
+          bottom: rect.bottom,
+          windowHeight: window.innerHeight,
+          isVisible: rect.top < window.innerHeight,
+          distance: rect.top - window.innerHeight
+        });
+      }, 500);
+    } else {
+      console.error('[InfiniteScroll] ❌ ERROR: Sentinel element (loadMoreRef) is NULL!');
     }
 
+    // Cleanup function
     return () => {
-      if (currentRef) {
-        observer.unobserve(currentRef);
+      if (target) {
+        console.log('[InfiniteScroll] 🔴 Unobserving sentinel element');
+        observer.unobserve(target);
       }
+      observer.disconnect();
+      console.log('[InfiniteScroll] 🔌 Observer disconnected');
     };
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [handleIntersection, posts.length]); // IMPORTANT: Also recreate when posts change!
+
+  // ============================================================================
+  // END INFINITE SCROLL IMPLEMENTATION
+  // ============================================================================
 
   // Reset scroll position when leaving and returning
   useEffect(() => {
@@ -1349,21 +1377,9 @@ const Feed: React.FC = () => {
     </div>
   );
 
-  if ((isInitialLoading || (postsLoading && posts.length === 0))) {
+  if (postsLoading && posts.length === 0) {
     return (
-      <div className="space-y-4">
-        {renderVideoContainerSkeleton()}
-        {renderMomentsSkeleton()}
-        {renderCreatePostSkeleton()}
-        <div>
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i}>{renderPostCardSkeleton()}</div>
-          ))}
-        </div>
-        {renderReelsSkeleton()}
-        {renderProductsSkeleton()}
-        {renderAdSkeleton()}
-      </div>
+      <FeedSkeleton count={4} />
     );
   }
 
@@ -1400,7 +1416,7 @@ const Feed: React.FC = () => {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      {/* MOBILE APP STYLE: Pull to refresh indicator */}
+      {/* Pull to refresh indicator */}
       <div 
         className={`fixed top-0 left-0 right-0 flex justify-center pt-2 transition-all duration-300 ease-out ${
           pullToRefresh.active ? 'opacity-100' : 'opacity-0 pointer-events-none -translate-y-4'
@@ -1454,7 +1470,9 @@ const Feed: React.FC = () => {
 
       {reelsLoading && (
         <div className="grid grid-cols-3 sm:grid-cols-4 gap-1 sm:gap-2 mb-6">
-          {[...Array(12)].map((_, i) => renderReelSkeleton())}
+          {[...Array(12)].map((_, i) => (
+            <div key={i}>{renderReelSkeleton()}</div>
+          ))}
         </div>
       )}
 
@@ -1495,6 +1513,7 @@ const Feed: React.FC = () => {
                 </div>
               </div>
             )}
+            
             {posts.map((post, idx) => (
               <React.Fragment key={post.id}>
                 {/* Render the organic post */}
@@ -1676,7 +1695,9 @@ const Feed: React.FC = () => {
                       {/* Products horizontal scroll */}
                       {productsLoading ? (
                         <div className="flex space-x-3 overflow-x-auto pb-4 px-2">
-                          {[...Array(6)].map((_, i) => renderProductSkeleton())}
+                          {[...Array(6)].map((_, i) => (
+                            <div key={i}>{renderProductSkeleton()}</div>
+                          ))}
                         </div>
                       ) : (
                         <>
@@ -1898,71 +1919,43 @@ const Feed: React.FC = () => {
         )}
       </div>
 
-      {/* MOBILE APP STYLE: Infinite scroll loading indicator */}
-    
-
-      {/* Smooth infinite scroll trigger */}
-      <div ref={loadMoreRef} className="h-16 w-full flex items-center justify-center pointer-events-none">
-   
+      {/* ============================================ */}
+{/* SIMPLE INFINITE SCROLL INDICATOR            */}
+{/* ============================================ */}
+<div 
+  ref={loadMoreRef} 
+  className="h-20 w-full flex items-center justify-center py-4"
+>
+  {isFetchingNextPage ? (
+    // Loading animation
+    <div className="flex items-center gap-2 text-gray-500">
+      <div className="flex gap-1">
+        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
       </div>
-
-      {/* Desktop-only loading pill (kept for larger viewports if needed) */}
-    
-
-      {/* MOBILE APP STYLE: End of feed indicator (Instagram/TikTok style) */}
-      {!hasNextPage && posts.length > 0 && (
-        <div className="py-8 flex flex-col items-center justify-center">
-          {/* Instagram-style indicator */}
-          <div className="relative w-full max-w-xs">
-            {/* Dashed line */}
-            <div className="flex items-center justify-center">
-              <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 dark:via-gray-600 to-transparent"></div>
-              <div className="px-4">
-                <div className="relative">
-                  {/* Outer circle */}
-                  <div className="w-12 h-12 border-2 border-gray-300 dark:border-gray-600 rounded-full flex items-center justify-center">
-                    {/* Inner checkmark */}
-                    <div className="w-7 h-7 relative">
-                      <div className="absolute top-1/2 left-0 w-1.5 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full transform -translate-y-1/2"></div>
-                      <div className="absolute top-1/2 left-1/3 w-1.5 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full transform -translate-y-1/2"></div>
-                      <div className="absolute top-1/2 left-2/3 w-1.5 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full transform -translate-y-1/2"></div>
-                      <div className="absolute top-1/2 right-0 w-1.5 h-1.5 bg-gray-300 dark:bg-gray-600 rounded-full transform -translate-y-1/2"></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 dark:via-gray-600 to-transparent"></div>
-            </div>
-            
-            {/* Text */}
-            <div className="text-center mt-5">
-              <p className="text-sm text-gray-600 dark:text-gray-400 font-medium">
-                You're all caught up
-              </p>
-           
-            </div>
-            
-            {/* Back to top button (Instagram-style) */}
-           
-          </div>
-        </div>
-      )}
-
-      {/* Alternative: TikTok-style loading indicator (desktop only) */}
-      {(isFetchingNextPage || isLoadingMore) && (
-        <div className="hidden sm:block py-5">
-          {/* TikTok-style dancing dots */}
-          <div className="flex justify-center items-center gap-2">
-            <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-            <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '100ms' }}></div>
-            <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '200ms' }}></div>
-            <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-          </div>
-          <div className="text-center mt-3">
-            <span className="text-sm text-gray-700 dark:text-gray-200">Loading more</span>
-          </div>
-        </div>
-      )}
+   
+    </div>
+  ) : hasNextPage ? (
+    // Subtle indicator that there's more content
+    <div className="text-center opacity-70">
+      <svg className="w-5 h-5 mx-auto mb-1 text-gray-400 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+      </svg>
+      <span className="text-xs text-gray-500">Scroll for more</span>
+    </div>
+  ) : posts.length > 0 ? (
+    // End of feed
+    <div className="text-center text-gray-400">
+      <div className="flex items-center justify-center gap-1 mb-1">
+        <div className="w-1 h-1 rounded-full bg-current"></div>
+        <div className="w-1 h-1 rounded-full bg-current"></div>
+        <div className="w-1 h-1 rounded-full bg-current"></div>
+      </div>
+      <span className="text-sm">All posts loaded</span>
+    </div>
+  ) : null}
+</div>
 
       {/* Reels Fullscreen Overlay */}
       {showReelsOverlay && selectedReel && (
@@ -1970,7 +1963,7 @@ const Feed: React.FC = () => {
           <div className="fixed inset-0 bg-black z-50">
             {/* Mobile app style top bar */}
             <div className="absolute top-0 left-0 right-0 z-10 p-4 bg-gradient-to-b from-black/90 to-transparent">
-              <div className="flex items-center justify-between">
+              <div className="flex itemscenter justify-between">
                 <button
                   onClick={handleReelClose}
                   className="text-white bg-black/60 rounded-full p-2.5 active:scale-95 transition-transform"
