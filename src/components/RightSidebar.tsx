@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { TrendingCard } from './TrendingCard';
 import { SuggestedFriends } from './SuggestedFriends';
 import { EventsSidebar } from './EventsSidebar';
@@ -6,6 +7,7 @@ import { LiveChat } from './LiveChat';
 
 export const RightSidebar = () => {
   const [isMobile, setIsMobile] = useState(false);
+  const location = useLocation();
 
   useEffect(() => {
     const checkMobile = () => {
@@ -18,7 +20,9 @@ export const RightSidebar = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  // Hide right sidebar on specific profile edit path to allow custom right column
   if (isMobile) return null;
+  if (location.pathname && location.pathname.startsWith('/profile/edit')) return null;
 
   return (
     <div className="w-80 p-4 space-y-6">

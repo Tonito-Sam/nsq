@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import leoProfanity from 'leo-profanity';
 import * as nsfwjs from 'nsfwjs';
 import * as tf from '@tensorflow/tfjs';
@@ -67,10 +68,12 @@ const UploadReels = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [caption, setCaption] = useState('');
   const [videoFiles, setVideoFiles] = useState<File[]>([]);
   const [videoPreviews, setVideoPreviews] = useState<string[]>([]);
+  const [sharedVideoUrl, setSharedVideoUrl] = useState<string | null>(null);
   const [portraitPreviewIndex, setPortraitPreviewIndex] = useState<number | null>(null);
   const [portraitApplied, setPortraitApplied] = useState<Record<number, boolean>>({});
   const [isSeries, setIsSeries] = useState(false);
@@ -219,6 +222,22 @@ const UploadReels = () => {
       urls.forEach(url => URL.revokeObjectURL(url));
     };
   }, [videoFiles]);
+
+  // If a shared video URL is provided via query param, use it as the preview/source
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(location.search);
+      const shared = params.get('shared_video_url');
+      if (shared) {
+        setSharedVideoUrl(shared);
+        setVideoPreviews(prev => {
+          prev.forEach(url => URL.revokeObjectURL(url));
+          return [shared];
+        });
+        setVideoFiles([]);
+      }
+    } catch (e) {}
+  }, [location.search]);
 
   async function hashFile(file: File): Promise<string> {
     const arrayBuffer = await file.arrayBuffer();
@@ -375,6 +394,40 @@ const UploadReels = () => {
       }
 
       let lastInsertedId: string | null = null;
+
+      // If we have a shared remote URL provided, create DB entry directly without re-upload
+      if (sharedVideoUrl) {
+        try {
+          const dbRes = await supabase.from('studio_videos').insert({
+            user_id: user.id,
+            channel_id: channel.id,
+            video_url: sharedVideoUrl,
+            caption,
+            categories: selectedCategories,
+            share_to_feeds: shareToFeeds,
+            likes: 0,
+            views: 0,
+            created_at: new Date().toISOString(),
+            duration: null,
+          }).select('id');
+          if (dbRes.error) throw dbRes.error;
+          if (dbRes.data && dbRes.data.length > 0) lastInsertedId = dbRes.data[0].id;
+          setUploadStatus('complete');
+          toast({ description: 'Video imported to Studio successfully!' });
+          setUploading(false);
+          setProgress(100);
+          setTimeout(() => {
+            if (lastInsertedId) navigate(`/studio?highlight=${lastInsertedId}`);
+            else navigate('/studio');
+          }, 800);
+          return;
+        } catch (err) {
+          toast({ description: `Failed to import shared video: ${err instanceof Error ? err.message : JSON.stringify(err)}`, variant: 'destructive' });
+          setUploading(false);
+          setUploadStatus('idle');
+          return;
+        }
+      }
 
       for (let i = 0; i < videoFiles.length; i++) {
         const videoFile = videoFiles[i];

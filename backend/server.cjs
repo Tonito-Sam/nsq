@@ -162,6 +162,24 @@ try {
   console.warn('⚠️ users route not available:', e?.message || e);
 }
 
+// Organizations route (org profiles & members)
+try {
+  const organizations = require('./routes/organizations');
+  app.use('/api/organizations', organizations);
+  console.log('✅ Mounted /api/organizations');
+} catch (e) {
+  console.warn('⚠️ organizations route not available:', e?.message || e);
+}
+
+// PWA share-target endpoint (accepts POST from installed PWA)
+try {
+  const shareTarget = require('./routes/share-target.cjs');
+  app.use('/share-target', shareTarget);
+  console.log('✅ Mounted /share-target');
+} catch (e) {
+  console.warn('⚠️ share-target route not available:', e?.message || e);
+}
+
 // Shows and episodes (studio_episodes + studio_shows)
 try {
   const shows = require('./routes/shows');

@@ -7,7 +7,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Header } from '@/components/Header';
-import { ProfileSidebar } from '@/components/ProfileSidebar';
+import ProfileRightSidebar from '@/components/ProfileRightSidebar';
 import { toast } from '@/hooks/use-toast';
 import { PostCard } from '@/components/PostCard';
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -883,9 +883,9 @@ const Profile = () => {
             </div>
           </Card>
         </main>
-        {/* Profile Sidebar - always on the right on large screens */}
+        {/* Profile Right Sidebar - simplified for profile page */}
         <aside className="hidden lg:block lg:w-80 lg:ml-8">
-          <ProfileSidebar />
+          <ProfileRightSidebar />
         </aside>
       </div>
       {/* Mobile Bottom Navigation */}

@@ -58,6 +58,7 @@ import WalletTopupResult from "./pages/WalletTopupResult";
 import UploadReels from "./pages/UploadReels";
 import RecordReel from "./pages/RecordReel";
 import RecordVideo from "./pages/RecordVideo";
+import ShareTarget from "./pages/ShareTarget";
 import LiveStream from "./pages/LiveStream2";
 import StudioSettings from "./pages/StudioSettings";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -248,6 +249,7 @@ const App = () => {
                     <Route path="/studio/record" element={<RecordReel />} />
                     <Route path="/studio/record-preview" element={<RecordVideo />} />
                     <Route path="/studio/settings" element={<StudioSettings />} />
+                    <Route path="/share" element={<ShareTarget />} />
                     <Route path="/wallet" element={<Wallet />} />
                     <Route path="/wallet/topup-result" element={<WalletTopupResult />} />
                     <Route path="/my-store" element={<MyStore />} />

@@ -14,9 +14,44 @@ import { useNavigate } from 'react-router-dom';
 
 export const Header = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [initialShare, setInitialShare] = useState<{ urls?: string[]; text?: string; type?: string } | null>(null);
   const [showMobileOffcanvas, setShowMobileOffcanvas] = useState(false);
   const navigate = useNavigate();
   const { user } = useAuth();
+
+  React.useEffect(() => {
+    const handler = (e: any) => {
+      const detail = e?.detail || null;
+      if (detail) {
+        setInitialShare({ urls: detail.urls, text: detail.text, type: detail.type });
+        setShowCreateModal(true);
+      }
+    };
+
+    const storageKey = 'nexsq:share';
+    const checkStorage = () => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        setInitialShare({ urls: parsed.urls || [], text: parsed.text || '', type: parsed.type || 'image' });
+        setShowCreateModal(true);
+        localStorage.removeItem(storageKey);
+      } catch (err) {
+        // ignore
+      }
+    };
+
+    window.addEventListener('nexsq-open-create-post', handler as EventListener);
+    window.addEventListener('storage', checkStorage);
+    // check immediately in case storage set before mount
+    checkStorage();
+
+    return () => {
+      window.removeEventListener('nexsq-open-create-post', handler as EventListener);
+      window.removeEventListener('storage', checkStorage);
+    };
+  }, []);
 
   return (
     <>
@@ -85,7 +120,9 @@ export const Header = () => {
 
       <CreatePostModal 
         open={showCreateModal}
-        onOpenChange={setShowCreateModal}
+        onOpenChange={(open) => { if (!open) setInitialShare(null); setShowCreateModal(open); }}
+        initialMediaUrls={initialShare?.urls}
+        initialContent={initialShare?.text}
       />
 
       <MobileOffcanvas

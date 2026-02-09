@@ -161,9 +161,11 @@ interface CreatePostModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   groupId?: string;
+  initialMediaUrls?: string[];
+  initialContent?: string;
 }
 
-export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModalProps) => {
+export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls, initialContent }: CreatePostModalProps) => {
   // --- AI UI State ---
   const [spamWarning, setSpamWarning] = useState<string | null>(null);
   const [hashtags, setHashtags] = useState<string[]>([]);
@@ -217,7 +219,22 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
   const { toast } = useToast();
   const [content, setContent] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [injectedMediaUrls, setInjectedMediaUrls] = useState<string[] | null>(null);
   const [postType, setPostType] = useState<'text' | 'image' | 'video' | 'event' | 'voice' | 'poll'>('text');
+
+  // Apply initial injected media/content when modal opens via share-target
+  useEffect(() => {
+    if (open) {
+      if (initialContent) setContent(initialContent);
+      if (initialMediaUrls && initialMediaUrls.length > 0) {
+        setInjectedMediaUrls(initialMediaUrls);
+        const hasVideo = initialMediaUrls.some(u => /\.(mp4|webm|mov)(\?|$)/i.test(u) || /video\//i.test(u));
+        setPostType(hasVideo ? 'video' : 'image');
+      }
+    } else {
+      setInjectedMediaUrls(null);
+    }
+  }, [open, initialContent, initialMediaUrls]);
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -1547,6 +1564,11 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
       let voiceNoteUrl = '';
       let bannerUrl = '';
 
+      // If modal was opened with injected media URLs from share-target, use them
+      if (injectedMediaUrls && injectedMediaUrls.length > 0) {
+        mediaUrl = injectedMediaUrls[0];
+      }
+
       // --- TEXT MODERATION ---
       const cleanContent = leoProfanity.clean(content.trim());
       const cleanPollQuestion = leoProfanity.clean(pollQuestion);
@@ -1604,6 +1626,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId }: CreatePostModal
         post_type: postType,
         privacy,
         media_url: mediaUrl || null,
+        media_urls: injectedMediaUrls && injectedMediaUrls.length > 0 ? injectedMediaUrls : null,
         voice_note_url: voiceNoteUrl || null,
         voice_duration: recordingDuration || null,
         location: location || null,
