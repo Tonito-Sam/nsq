@@ -2,7 +2,10 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { Camera, Edit3, Heart, Users, UserPlus, Eye, Upload, MessageCircle, Store, Radio } from 'lucide-react';
+import { Camera, Edit3, Heart, Users, UserPlus, Eye, Upload, MessageCircle, Store, Radio, Building2 } from 'lucide-react';
+import axios from 'axios';
+import apiUrl from '@/lib/api';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -58,6 +61,9 @@ const Profile = () => {
   const [followersModalOpen, setFollowersModalOpen] = useState(false);
   const [followersModalTab, setFollowersModalTab] = useState<'followers' | 'following'>('followers');
   const [liking, setLiking] = useState(false);
+  const [showOrgaDialog, setShowOrgaDialog] = useState(false);
+  const [profileOrgs, setProfileOrgs] = useState<any[]>([]);
+  const [profileOrgsLoading, setProfileOrgsLoading] = useState(false);
   const navigate = useNavigate();
   
   // Use refs to track previous values and prevent unnecessary reloads
@@ -624,7 +630,7 @@ const Profile = () => {
               {/* Responsive Action Buttons: Mobile = grid, Desktop = flex row */}
               <div className="mt-6 w-full">
                 {/* Mobile: 4-column grid, icons above labels, square buttons */}
-                <div className="grid grid-cols-4 gap-2 sm:hidden">
+                <div className="grid grid-cols-5 gap-2 sm:hidden">
                   {/* Message */}
                   <Button
                     asChild
@@ -736,6 +742,41 @@ const Profile = () => {
                     >
                       <Users className="h-7 w-7 mb-1" />
                       <span className="text-xs">Groups</span>
+                    </a>
+                  </Button>
+                  {/* Orga */}
+                  <Button
+                    asChild
+                    className="flex flex-col items-center justify-center gap-1 rounded-lg aspect-square w-full h-auto bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-white shadow-md transition-all duration-200 text-sm font-semibold p-0"
+                    disabled={!userData}
+                  >
+                    <a
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (!userData) return;
+                        if (isOwnProfile) {
+                          navigate('/profile/edit?tab=organizations');
+                          return;
+                        }
+                        // Load organizations for this profile and open dialog
+                        (async () => {
+                          try {
+                            setProfileOrgsLoading(true);
+                            const resp = await axios.get(apiUrl(`/api/organizations?user_id=${userData.id}`), { withCredentials: true });
+                            setProfileOrgs(resp.data || []);
+                            setShowOrgaDialog(true);
+                          } catch (err) {
+                            console.error('Failed to load organizations for profile', err);
+                            toast({ title: 'Error', description: 'Could not load organizations' });
+                          } finally {
+                            setProfileOrgsLoading(false);
+                          }
+                        })();
+                      }}
+                    >
+                      <Building2 className="h-7 w-7 mb-1" />
+                      <span className="text-xs">Orga</span>
                     </a>
                   </Button>
                 </div>
@@ -854,8 +895,72 @@ const Profile = () => {
                       <span className="hidden sm:inline">Groups</span>
                     </a>
                   </Button>
+                  {/* Orga Button (desktop) */}
+                  <Button
+                    asChild
+                    className="flex items-center justify-center gap-2 rounded-full px-6 py-2 w-full sm:w-auto bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 text-white shadow-md transition-all duration-200 text-base font-semibold"
+                    disabled={!userData}
+                  >
+                    <a
+                      href="#"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        if (!userData) return;
+                        if (isOwnProfile) {
+                          navigate('/profile/edit?tab=organizations');
+                          return;
+                        }
+                        try {
+                          setProfileOrgsLoading(true);
+                          const resp = await axios.get(apiUrl(`/api/organizations?user_id=${userData.id}`), { withCredentials: true });
+                          setProfileOrgs(resp.data || []);
+                          setShowOrgaDialog(true);
+                        } catch (err) {
+                          console.error('Failed to load organizations for profile', err);
+                          toast({ title: 'Error', description: 'Could not load organizations' });
+                        } finally {
+                          setProfileOrgsLoading(false);
+                        }
+                      }}
+                    >
+                      <Building2 className="h-5 w-5" />
+                      <span className="hidden sm:inline">Orga</span>
+                    </a>
+                  </Button>
                 </div>
               </div>
+              {/* Organizations Dialog for viewing another user's organizations */}
+              <Dialog open={showOrgaDialog} onOpenChange={setShowOrgaDialog}>
+                <DialogContent className="sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Organizations</DialogTitle>
+                    <DialogDescription>Organizations associated with this profile</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3">
+                    {profileOrgsLoading ? (
+                      <div className="py-8 text-center text-gray-500">Loading...</div>
+                    ) : profileOrgs.length === 0 ? (
+                      <div className="py-8 text-center text-gray-500">No organizations found</div>
+                    ) : (
+                      <div className="grid gap-3">
+                        {profileOrgs.map((org: any) => (
+                          <Card key={org.id} className="p-3">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="font-semibold">{org.name}</div>
+                                {org.description && <div className="text-sm text-gray-500">{org.description}</div>}
+                              </div>
+                              <Button size="sm" onClick={() => navigate(`/org/${org.slug || org.id}`)}>
+                                View
+                              </Button>
+                            </div>
+                          </Card>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
               {/* Conversation/Posts Container - Make scrollable and fill available space */}
               <div>
                 {/* Add margin-top to posts heading for clear separation */}
