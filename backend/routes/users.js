@@ -61,3 +61,37 @@ router.get('/search', async (req, res) => {
 });
 
 module.exports = router;
+
+// POST /api/users/delete
+// Body: { id: string, reason?: string }
+router.post('/delete', async (req, res) => {
+  const { id, reason } = req.body || {};
+  if (!id) return res.status(400).json({ error: 'missing user id' });
+  if (!SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return res.status(500).json({ error: 'server missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars' });
+  }
+
+  try {
+    // Delete from users table via REST API
+    const usersUrl = `${SUPABASE_URL.replace(/\/+$/,'')}/rest/v1/users?id=eq.${encodeURIComponent(id)}`;
+    await axios.delete(usersUrl, { headers: supabaseAuthHeaders() });
+
+    // Optionally store deletion reason in an audit table (best-effort)
+    try {
+      const auditUrl = `${SUPABASE_URL.replace(/\/+$/,'')}/rest/v1/user_deletion_reasons`;
+      await axios.post(auditUrl, { user_id: id, reason: reason || null, created_at: new Date().toISOString() }, { headers: supabaseAuthHeaders() });
+    } catch (auditErr) {
+      // ignore audit failures
+      console.warn('audit insert failed', auditErr && auditErr.response ? auditErr.response.data : auditErr.message || auditErr);
+    }
+
+    // Delete from Supabase Auth (admin)
+    const authUrl = `${SUPABASE_URL.replace(/\/+$/,'')}/auth/v1/admin/users/${encodeURIComponent(id)}`;
+    await axios.delete(authUrl, { headers: supabaseAuthHeaders() });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('users:delete error', err && err.response ? err.response.data : err.message || err);
+    return res.status(500).json({ error: 'failed to delete user' });
+  }
+});

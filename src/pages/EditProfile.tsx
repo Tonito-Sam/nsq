@@ -21,6 +21,7 @@ import Cropper from 'react-easy-crop';
 import BirthdaysAnniversariesCard from '@/components/BirthdaysAnniversariesCard';
 import type { EventItem } from '@/components/BirthdaysAnniversariesCard';
 import ParentalGuidanceCard from '@/components/ParentalGuidanceCard';
+import { OrganizationsTab } from '@/components/OrganizationsTab';
 import type { MinorAccount } from '@/components/ParentalGuidanceCard';
 
 interface UserData {
@@ -1074,6 +1075,11 @@ const EditProfile = () => {
             onSetIsAddingAccount={setIsAddingAccount}
             onSetNewAccount={setNewAccount}
           />
+
+          {/* Organizations management */}
+          <div>
+            <OrganizationsTab />
+          </div>
 
           {/* Bank Account Card */}
           <Card className="p-6 dark:bg-[#161616]">

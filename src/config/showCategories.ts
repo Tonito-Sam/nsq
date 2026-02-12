@@ -3,6 +3,7 @@ export const SHOW_CATEGORIES = [
   "Mic'd Breakfast Show",
   "Girls Talk",
   "Mid-Day Groove",
+  "Kickstart",
   "Perspective Inspiration",
   "Documentary",
   "Sermons",

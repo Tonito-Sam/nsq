@@ -1,7 +1,9 @@
 import axios from 'axios';
 import type { Organization, OrganizationMember, CreateOrganizationInput, UpdateOrganizationInput } from '@/types/organization';
+import apiUrl from '@/lib/api';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// Use centralized apiUrl helper so dev proxy and multiple env vars are respected
+const API = (path: string) => apiUrl(path.startsWith('/') ? path : `/${path}`);
 
 class OrganizationService {
   /**
@@ -9,7 +11,7 @@ class OrganizationService {
    */
   async getMyOrganizations(): Promise<Organization[]> {
     try {
-      const response = await axios.get(`${API_URL}/api/organizations`, {
+      const response = await axios.get(API('/api/organizations'), {
         withCredentials: true,
       });
       return response.data;
@@ -24,7 +26,7 @@ class OrganizationService {
    */
   async getOrganization(slug: string) {
     try {
-      const response = await axios.get(`${API_URL}/api/organizations/${slug}`, {
+      const response = await axios.get(API(`/api/organizations/${slug}`), {
         withCredentials: true,
       });
       return response.data;
@@ -39,7 +41,7 @@ class OrganizationService {
    */
   async createOrganization(input: CreateOrganizationInput): Promise<Organization> {
     try {
-      const response = await axios.post(`${API_URL}/api/organizations`, input, {
+      const response = await axios.post(API('/api/organizations'), input, {
         withCredentials: true,
       });
       return response.data;
@@ -54,7 +56,7 @@ class OrganizationService {
    */
   async updateOrganization(id: string, input: UpdateOrganizationInput): Promise<Organization> {
     try {
-      const response = await axios.patch(`${API_URL}/api/organizations/${id}`, input, {
+      const response = await axios.patch(API(`/api/organizations/${id}`), input, {
         withCredentials: true,
       });
       return response.data;
@@ -70,7 +72,7 @@ class OrganizationService {
   async addMember(orgId: string, userId: string, role: string = 'member'): Promise<OrganizationMember> {
     try {
       const response = await axios.post(
-        `${API_URL}/api/organizations/${orgId}/members`,
+        API(`/api/organizations/${orgId}/members`),
         { user_id: userId, role },
         { withCredentials: true }
       );
@@ -86,7 +88,7 @@ class OrganizationService {
    */
   async removeMember(orgId: string, userId: string): Promise<void> {
     try {
-      await axios.delete(`${API_URL}/api/organizations/${orgId}/members/${userId}`, {
+      await axios.delete(API(`/api/organizations/${orgId}/members/${userId}`), {
         withCredentials: true,
       });
     } catch (error) {
@@ -100,7 +102,7 @@ class OrganizationService {
    */
   async deleteOrganization(id: string): Promise<void> {
     try {
-      await axios.delete(`${API_URL}/api/organizations/${id}`, {
+      await axios.delete(API(`/api/organizations/${id}`), {
         withCredentials: true,
       });
     } catch (error) {

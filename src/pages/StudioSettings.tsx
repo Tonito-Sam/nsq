@@ -233,6 +233,7 @@ const StudioSettings = () => {
               <option value="Science">Science</option>
               <option value="Fiction">Fiction</option>
               <option value="TV & Film">TV & Film</option>
+              <option value="Kickstart">Kickstart</option>
               <option value="Arts">Arts</option>
               <option value="Leisure">Leisure</option>
               <option value="Government">Government</option>

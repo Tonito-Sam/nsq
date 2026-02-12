@@ -7,7 +7,6 @@ import { useShowContext } from '@/contexts/ShowContext';
 import { useViewTracking } from '@/hooks/useViewTracking';
 import { useLiveChatMessages } from '@/hooks/useLiveChatMessages';
 import VODLibrary, { VODEpisode } from '@/components/VODLibrary';
-import apiUrl from '@/lib/api';
 
 interface StudioShow {
   id: string;
@@ -21,8 +20,6 @@ interface StudioShow {
   is_live: boolean;
   is_active: boolean;
   created_at: string;
-  live_url?: string;
-  show_type?: string;
 }
 
 interface VideoContainerProps {
@@ -34,15 +31,6 @@ interface VideoContainerProps {
   onCurrentShowChange?: (index: number) => void;
 }
 
-interface MediaItem {
-  id: string;
-  type: 'show' | 'episode';
-  title?: string;
-  video_url?: string | null;
-  thumbnail_url?: string | null;
-  duration?: number;
-  raw?: any;
-}
 declare global {
   interface Window {
     YT: any;
@@ -69,11 +57,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const [portalMounted, setPortalMounted] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
-  // Playback queue for current show: includes the show main media and its episodes
-  const [episodesForCurrentShow, setEpisodesForCurrentShow] = useState<VODEpisode[]>([]);
-  const [mediaQueue, setMediaQueue] = useState<MediaItem[]>([]);
-  const [queueIndex, setQueueIndex] = useState<number>(0);
-  const [currentMedia, setCurrentMedia] = useState<MediaItem | null>(null);
   // NEW STATES FOR MODAL PLAYER
   const [playingEpisode, setPlayingEpisode] = useState<VODEpisode | null>(null);
   const [modalPlayerPlaying, setModalPlayerPlaying] = useState(false);
@@ -81,93 +64,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const [modalPlayerProgress, setModalPlayerProgress] = useState(0);
   const [modalPlayerDuration, setModalPlayerDuration] = useState(0);
   const [modalAwaitingUserPlay, setModalAwaitingUserPlay] = useState(false);
-  const [modalPlayerError, setModalPlayerError] = useState<string | null>(null);
-  const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
-  const [countdownActive, setCountdownActive] = useState(false);
-  const countdownIntervalRef = useRef<number | null>(null);
-  const startTimeoutRef = useRef<number | null>(null);
-  const [showStartPrompt, setShowStartPrompt] = useState(false);
-  const [liveEventActive, setLiveEventActive] = useState(false);
   const [isMobile, setIsMobile] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
-  // Detect whether LiveChat is present on the page so we can ensure the video remains visible above it
-  const [chatVisible, setChatVisible] = useState(false);
-
-  useEffect(() => {
-    const check = () => setChatVisible(Boolean(document.querySelector('[data-livechat]')));
-    check();
-    const mo = new MutationObserver(check);
-    mo.observe(document.body, { childList: true, subtree: true, attributes: true });
-    window.addEventListener('resize', check);
-    return () => { mo.disconnect(); window.removeEventListener('resize', check); };
-  }, []);
-
-  const computeItemsPerView = () => {
-    if (typeof window === 'undefined') return 2;
-    const w = window.innerWidth;
-    if (w < 360) return 1;
-    if (w >= 360 && w < 768) return 2; // phones
-    if (w >= 768 && w < 1024) return 3; // tablets
-    return 4; // desktop-ish (fallback)
-  };
-  const [mobileItemsPerView, setMobileItemsPerView] = useState<number>(computeItemsPerView());
-
-  // Ensure countdown interval is cleared on unmount
-  useEffect(() => {
-    return () => {
-      if (countdownIntervalRef.current) {
-        window.clearInterval(countdownIntervalRef.current);
-        countdownIntervalRef.current = null;
-      }
-      if (startTimeoutRef.current) {
-        window.clearTimeout(startTimeoutRef.current);
-        startTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  // Helper to start a countdown for a live item
-  const startCountdown = (ms: number, liveItem: MediaItem, show: StudioShow) => {
-    try {
-      if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
-      setCountdownActive(true);
-      setCountdownSeconds(Math.ceil(ms / 1000));
-      countdownIntervalRef.current = window.setInterval(() => {
-        setCountdownSeconds(prev => {
-          if (!prev) return 0;
-          if (prev <= 1) {
-            if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
-            setCountdownActive(false);
-            setCountdownSeconds(0);
-            setShowStartPrompt(true);
-            setMediaQueue([liveItem]);
-            setQueueIndex(0);
-            setCurrentMedia(liveItem);
-            setLiveEventActive(true);
-            try { sendLiveStartAnalytics(show); } catch (e) {}
-            try { window.dispatchEvent(new CustomEvent('live_event_started', { detail: { show } })); } catch (e) {}
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000) as unknown as number;
-    } catch (err) {
-      console.warn('startCountdown error', err);
-    }
-  };
-
-  const sendLiveStartAnalytics = async (show: StudioShow | null | undefined) => {
-    if (!show) return;
-    try {
-      const url = apiUrl('/api/analytics/live_start');
-      fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ showId: show.id, title: show.title, started_at: new Date().toISOString() })
-      }).catch(() => {});
-    } catch (e) {
-      // swallow analytics errors
-    }
-  };
   
   // keep a ref for the latest time to avoid stale closures when seeking on remount
   const videoCurrentTimeRef = useRef<number>(0);
@@ -183,170 +80,10 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const modalVideoRef = useRef<HTMLVideoElement>(null);
   const modalYoutubePlayerRef = useRef<any>(null);
   const modalPlayerContainerRef = useRef<HTMLDivElement>(null);
-  const mobileListRef = useRef<HTMLDivElement>(null);
-
-  // Mobile VOD state
-  const [vodEpisodes, setVodEpisodes] = useState<VODEpisode[]>([]);
-  const [currentScrollIndex, setCurrentScrollIndex] = useState(0);
-  const [isLoadingVOD, setIsLoadingVOD] = useState(false);
-  const [nowTick, setNowTick] = useState(0);
-
-  // Mobile catch-up grid renderer and data loader
-  const renderMobileCatchUpGrid = () => {
-    if (!isMobile) return null;
-    const itemsPerView = mobileItemsPerView; // responsive items per view
-    const horizontalPadding = 48; // account for modal padding
-    const cardWidth = Math.min((window.innerWidth - horizontalPadding) / itemsPerView, 420);
-
-    // Group episodes by show id to avoid title mismatches. Initialize keys
-    // from the parent `shows` prop so empty shows are included.
-    const grouped: Record<string, VODEpisode[]> = {};
-    if (Array.isArray(shows) && shows.length) {
-      shows.forEach(s => { if (s && s.id) grouped[s.id] = []; });
-    }
-
-    vodEpisodes.forEach(ep => {
-      const sid = (ep.show_id as any) || ep.show_title || 'other';
-      if (!grouped[sid]) grouped[sid] = [];
-      grouped[sid].push(ep);
-    });
-
-    const groups = Object.entries(grouped).sort((a, b) => {
-      // Attempt to sort by show title if available via shows prop
-      const aTitle = (Array.isArray(shows) && shows.find(s => s.id === a[0])?.title) || (a[1][0]?.show_title) || a[0];
-      const bTitle = (Array.isArray(shows) && shows.find(s => s.id === b[0])?.title) || (b[1][0]?.show_title) || b[0];
-      return String(aTitle).localeCompare(String(bTitle));
-    });
-
-    return (
-      <div className="mb-8 space-y-6">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-xl font-semibold text-white">Past Shows</h3>
-          <div className="flex items-center space-x-2 text-sm text-gray-400">
-            <span>Swipe horizontally within each show</span>
-            <ChevronRight size={16} />
-          </div>
-        </div>
-
-        {isLoadingVOD ? (
-          <div className="flex items-center justify-center w-full py-8">
-            <div className="text-gray-400">Loading...</div>
-          </div>
-        ) : (
-          groups.map(([showId, eps]) => {
-            const displayName = (Array.isArray(shows) && shows.find(s => s.id === showId)?.title) || (eps[0]?.show_title) || (showId === 'other' ? 'Other' : String(showId));
-            return (
-              <div key={showId} className="">
-                <div className="flex items-center justify-between mb-2 px-2">
-                  <h4 className="text-lg font-semibold text-white">{displayName}</h4>
-                  <span className="text-sm text-gray-400">{eps.length} episode{eps.length !== 1 ? 's' : ''}</span>
-                </div>
-
-                <div className="flex overflow-x-auto pb-4 -mx-4 px-4 mobile-snap-scroll scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch', scrollSnapType: 'x mandatory' }}>
-                  {eps.map((episode) => (
-                    <div
-                      key={episode.id}
-                      className="flex-shrink-0 mr-4 rounded-xl overflow-hidden bg-gray-800 border border-gray-700 transition-transform duration-200 hover:scale-[1.02] active:scale-[0.98] mobile-snap-item"
-                      style={{ width: cardWidth, scrollSnapAlign: 'start', maxWidth: 'calc(100vw - 3rem)' }}
-                      onClick={() => playEpisode(episode)}
-                    >
-                      <div className="relative aspect-video">
-                        <img src={episode.thumbnail_url || episode.show_thumbnail || '/placeholder.svg'} alt={episode.title} className="w-full h-full object-cover" loading="lazy" />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-                        <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">{episode.duration ? formatDuration(episode.duration) : 'N/A'}</div>
-                        {/* removed show-name badge to avoid covering thumbnail */}
-                      </div>
-                      <div className="p-3">
-                        <h4 className="text-sm font-semibold text-white mb-1 line-clamp-1">{episode.title}</h4>
-                        {episode.description && <p className="text-xs text-gray-300 line-clamp-2 mb-2">{episode.description}</p>}
-                        <div className="flex items-center justify-between text-xs text-gray-400">
-                          <span>{new Date(episode.created_at).toLocaleDateString()}</span>
-                          <button className="flex items-center space-x-1 text-purple-400 hover:text-purple-300">
-                            <Play size={12} />
-                            <span>Play</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-    );
-  };
-
-  // Fetch mobile VOD episodes when modal opens or on mount
-  useEffect(() => {
-    let mounted = true;
-    const controller = new AbortController();
-
-    const load = async () => {
-      try {
-        setIsLoadingVOD(true);
-        const url = apiUrl('/api/shows/past/all?page=1&limit=24');
-        try { console.debug('Mobile VOD fetch url:', { url }); } catch {}
-        const res = await fetch(url, { signal: controller.signal });
-        if (!res.ok) {
-          const txt = await res.text().catch(() => null);
-          console.warn('Mobile VOD fetch failed', res.status, txt, 'url=', url);
-          return;
-        }
-
-        let data: any = null;
-        try {
-          data = await res.json();
-        } catch (err) {
-          const txt = await res.text().catch(() => null);
-          console.warn('Mobile VOD fetch returned non-JSON response', txt, 'url=', url);
-          return;
-        }
-
-        if (!mounted) return;
-        setVodEpisodes(data.episodes || []);
-      } catch (err) {
-        console.warn('Failed to load mobile VOD list', err);
-      } finally {
-        if (mounted) setIsLoadingVOD(false);
-      }
-    };
-
-    if (isMobile && catchUpOpen) load();
-
-    return () => { 
-      mounted = false; 
-      controller.abort(); 
-      if (countdownIntervalRef.current) { window.clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
-    };
-  }, [isMobile, catchUpOpen]);
-
-  // Track horizontal scroll index for indicators
-  useEffect(() => {
-    const el = mobileListRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const scrollLeft = el.scrollLeft || 0;
-      const gap = 16; // matches card margin-right used in render
-      const childWidth = el.firstElementChild ? (el.firstElementChild as HTMLElement).getBoundingClientRect().width + gap : window.innerWidth / 2;
-      const itemsPerView = mobileItemsPerView;
-      const pageIndex = Math.round(scrollLeft / (childWidth * itemsPerView));
-      const pages = Math.max(1, Math.ceil((vodEpisodes.length || 1) / itemsPerView));
-      setCurrentScrollIndex(Math.min(Math.max(0, pageIndex), pages - 1));
-    };
-    el.addEventListener('scroll', onScroll, { passive: true } as any);
-    return () => el.removeEventListener('scroll', onScroll as any);
-  }, [vodEpisodes.length, mobileItemsPerView]);
 
   // Manage body scroll and portal mount/animation for Catch Up modal
   useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768);
-      setMobileItemsPerView(computeItemsPerView());
-    };
-    // keep `isMobile` and itemsPerView in sync when the viewport changes
-    window.addEventListener('resize', handleResize);
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
 
     if (catchUpOpen) {
       setPortalMounted(true);
@@ -523,14 +260,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     };
   }, []);
 
-  // tick every second to update upcoming events countdown UI
-  useEffect(() => {
-    const t = window.setInterval(() => setNowTick(n => n + 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  
-
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 
   const [shuffledShows, setShuffledShows] = useState<StudioShow[]>([]);
@@ -549,37 +278,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     setCurrentShowIndex(0);
     if (typeof onCurrentShowChange === 'function') onCurrentShowChange(0);
   }, [shows]);
-
-  // Auto-select a running live event when its scheduled_time has passed
-  useEffect(() => {
-    try {
-      // Don't override when parent explicitly selected a show
-      if (selectedShowId) return;
-      if (!Array.isArray(shuffledShows) || shuffledShows.length === 0) return;
-      // If a live event is already active we should not switch away
-      if (liveEventActive) return;
-
-      const now = Date.now();
-      let pickIndex = -1;
-      for (let i = 0; i < shuffledShows.length; i++) {
-        const s = shuffledShows[i];
-        if (!s) continue;
-        if (s.is_live) { pickIndex = i; break; }
-        if ((s as any).show_type === 'event' && s.live_url && s.scheduled_time) {
-          const st = new Date(s.scheduled_time).getTime();
-          if (!isNaN(st) && st <= now) { pickIndex = i; break; }
-        }
-      }
-
-      if (pickIndex >= 0 && pickIndex !== currentShowIndex) {
-        console.log('Auto-selecting running live event at index', pickIndex, shuffledShows[pickIndex]?.title);
-        setCurrentShowIndex(pickIndex);
-        if (typeof onCurrentShowChange === 'function') onCurrentShowChange(pickIndex);
-      }
-    } catch (err) {
-      console.warn('Auto-select live event error', err);
-    }
-  }, [shows, nowTick, selectedShowId, liveEventActive, shuffledShows, currentShowIndex, onCurrentShowChange]);
 
   // Accept external currentShowIndex if provided by parent (Feed)
   useEffect(() => {
@@ -608,65 +306,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     const minutes = Math.floor(duration / 60);
     const seconds = duration % 60;
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  };
-
-  const formatCountdown = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
-
-  // Try common fallback fields for media URL if `video_url` is missing
-  const resolveMediaUrl = (ep: VODEpisode) => {
-    const candidates = [
-      ep.video_url,
-      // common alt fields
-      (ep as any).source_url,
-      (ep as any).source,
-      (ep as any).file_url,
-      (ep as any).media_url,
-      (ep as any).url,
-    ];
-
-    for (const c of candidates) {
-      if (!c) continue;
-      if (typeof c === 'string' && c.trim().length > 0) {
-        try { console.debug('resolveMediaUrl: found direct candidate', { episodeId: ep.id, candidate: c }); } catch {}
-        return c.trim();
-      }
-    }
-
-    // Fallback: accept multiple possible show id keys and also nested show object
-    try {
-      const possibleShowIdKeys = ['show_id', 'showId', 'studio_show_id', 'studioShowId', 'show'];
-      let sid: any = null;
-      for (const k of possibleShowIdKeys) {
-        if ((ep as any)[k]) {
-          sid = (ep as any)[k];
-          break;
-        }
-      }
-
-      // If `show` is an object, try its video_url directly
-      if (sid && typeof sid === 'object' && sid.video_url) {
-        try { console.debug('resolveMediaUrl: using nested show.video_url', { episodeId: ep.id, video_url: sid.video_url }); } catch {}
-        return sid.video_url;
-      }
-
-      // Normalize id when `show` may be an object or id string
-      const showIdVal = sid && typeof sid === 'string' ? sid : ((ep as any).show_id || (ep as any).showId || (ep as any).studio_show_id || (ep as any).studioShowId || null);
-      if (showIdVal && Array.isArray(shows)) {
-        const parent = (shows as StudioShow[]).find(s => s.id === showIdVal || String(s.id) === String(showIdVal));
-        if (parent && parent.video_url && typeof parent.video_url === 'string' && parent.video_url.trim().length > 0) {
-          try { console.debug('resolveMediaUrl: falling back to parent show.video_url', { episodeId: ep.id, parentId: parent.id, video_url: parent.video_url }); } catch {}
-          return parent.video_url.trim();
-        }
-      }
-    } catch (err) {
-      try { console.warn('resolveMediaUrl: error during parent lookup', err); } catch {}
-    }
-
-    return null;
   };
 
   const getTimeStatus = (show: StudioShow) => {
@@ -721,196 +360,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     }
   }, [currentShow, viewCount, setCurrentShow, setViewerCount, setLikeCount]);
 
-  // When currentShow changes, fetch its episodes and build the playback queue
-  useEffect(() => {
-    let mounted = true;
-    const controller = new AbortController();
-
-    const loadEpisodes = async () => {
-      setEpisodesForCurrentShow([]);
-      setMediaQueue([]);
-      setQueueIndex(0);
-      setCurrentMedia(null);
-
-      if (!currentShow) return;
-
-      // If this is a one-off Live Event with a live_url, prefer the live_url
-      // and handle scheduled start time / countdown behavior.
-      if ((currentShow as any).show_type === 'event' && currentShow.live_url) {
-        try {
-          // clear any previous countdown
-          if (countdownIntervalRef.current) {
-            window.clearInterval(countdownIntervalRef.current);
-            countdownIntervalRef.current = null;
-          }
-
-          const startTime = currentShow.scheduled_time ? new Date(currentShow.scheduled_time).getTime() : null;
-          const now = Date.now();
-
-          const liveItem: MediaItem = { id: `live-${currentShow.id}`, type: 'show', title: currentShow.title, video_url: currentShow.live_url || null, thumbnail_url: currentShow.thumbnail_url || null, duration: currentShow.duration, raw: currentShow };
-
-          if (!startTime || now >= startTime) {
-            // start immediately
-            const queue = [liveItem];
-            setMediaQueue(queue);
-            setQueueIndex(0);
-            setCurrentMedia(queue[0]);
-            setLiveEventActive(true);
-            setCountdownActive(false);
-            setCountdownSeconds(null);
-            // Analytics + notify listeners that live started
-            try { sendLiveStartAnalytics(currentShow); } catch (e) {}
-            try { window.dispatchEvent(new CustomEvent('live_event_started', { detail: { show: currentShow } })); } catch (e) {}
-            return;
-          }
-
-          const msUntilStart = startTime - now;
-          const fiveMin = 5 * 60 * 1000;
-
-          // If start is within 5 minutes, begin countdown now
-          if (msUntilStart <= fiveMin) {
-            startCountdown(msUntilStart, liveItem, currentShow);
-            return;
-          }
-
-          // If start is further out, schedule a timeout to begin the 5-minute countdown
-          const timeToCountdown = msUntilStart - fiveMin;
-          if (startTimeoutRef.current) { window.clearTimeout(startTimeoutRef.current); startTimeoutRef.current = null; }
-          startTimeoutRef.current = window.setTimeout(() => {
-            // begin a 5-minute countdown
-            startCountdown(fiveMin, liveItem, currentShow);
-          }, timeToCountdown) as unknown as number;
-        } catch (err) {
-          console.warn('Live event handling error', err);
-        }
-      }
-      try {
-        // try preferred API route
-        const url = apiUrl(`/api/shows/${currentShow.id}/episodes?limit=200`);
-        const res = await fetch(url, { signal: controller.signal });
-        let data: any = null;
-        if (res.ok) {
-          try { data = await res.json(); } catch (err) { data = null; }
-        }
-
-        // Expect backend to return { episodes: [...] }. As a safe fallback accept a raw array.
-        if (!data) {
-          const url2 = apiUrl(`/api/studio_episodes?show_id=${currentShow.id}&limit=200`);
-          const res2 = await fetch(url2, { signal: controller.signal });
-          if (res2.ok) {
-            try { data = await res2.json(); } catch (err) { data = null; }
-          }
-        }
-
-        const epsRaw = (data && Array.isArray(data.episodes)) ? data.episodes : (Array.isArray(data) ? data : []);
-        const eps: VODEpisode[] = epsRaw.map((e: any) => ({ ...e } as VODEpisode));
-        if (!mounted) return;
-        setEpisodesForCurrentShow(eps);
-
-        // build queue: include show main media first (if present), then episodes
-        const queue: MediaItem[] = [];
-        if (currentShow.video_url) {
-          queue.push({ id: `show-${currentShow.id}`, type: 'show', title: currentShow.title, video_url: currentShow.video_url || null, thumbnail_url: currentShow.thumbnail_url || null, duration: currentShow.duration, raw: currentShow });
-        }
-
-        // sort episodes by episode_number if available
-        const sortedEps = eps.slice().sort((a: any, b: any) => {
-          const na = Number(a.episode_number ?? a.episodeNumber ?? 0) || 0;
-          const nb = Number(b.episode_number ?? b.episodeNumber ?? 0) || 0;
-          return na - nb;
-        });
-
-        for (const ep of sortedEps) {
-          const resolved = resolveMediaUrl(ep) || (ep.video_url || null);
-          queue.push({ id: `ep-${ep.id}`, type: 'episode', title: ep.title, video_url: resolved, thumbnail_url: ep.thumbnail_url || ep.show_thumbnail || null, duration: ep.duration, raw: ep });
-        }
-
-        setMediaQueue(queue);
-        setQueueIndex(0);
-        setCurrentMedia(queue[0] || null);
-      } catch (err) {
-        console.warn('Failed to load episodes for show', currentShow?.id, err);
-      }
-    };
-
-    loadEpisodes();
-
-    return () => { mounted = false; controller.abort(); };
-  }, [currentShow]);
-
-  // Clear or schedule clearing of liveEventActive when event ends or when show changes
-  useEffect(() => {
-    if (!currentShow) {
-      setLiveEventActive(false);
-      return;
-    }
-
-    // If the current show is not an event, ensure the flag is false
-    if ((currentShow as any).show_type !== 'event') {
-      setLiveEventActive(false);
-      return;
-    }
-
-    // If there's an end_time, schedule clearing when it passes
-    if (currentShow.end_time) {
-      try {
-        const endTs = new Date(currentShow.end_time).getTime();
-        const now = Date.now();
-        if (now >= endTs) {
-          setLiveEventActive(false);
-          return;
-        }
-        const id = window.setTimeout(() => setLiveEventActive(false), endTs - now) as unknown as number;
-        return () => { window.clearTimeout(id); };
-      } catch (err) {
-        setLiveEventActive(false);
-      }
-    }
-  }, [currentShow]);
-
-  // Keep currentMedia in sync with queueIndex/mediaQueue
-  useEffect(() => {
-    if (!mediaQueue || mediaQueue.length === 0) {
-      setCurrentMedia(null);
-      return;
-    }
-    const idx = Math.min(Math.max(0, queueIndex), mediaQueue.length - 1);
-    setCurrentMedia(mediaQueue[idx] || null);
-  }, [mediaQueue, queueIndex]);
-
-  // Ensure native video element is assigned the currentMedia.src and attempt autoplay on mobile
-  useEffect(() => {
-    if (!currentMedia || !currentMedia.video_url) return;
-    // skip iframe-based sources
-    if (isYouTubeUrl(currentMedia.video_url) || isVimeoUrl(currentMedia.video_url)) return;
-
-    const v = videoRef.current;
-    if (!v) return;
-
-    try {
-      // if src already set, avoid redundant operations
-      if (!v.src || v.src !== (currentMedia.video_url || '')) {
-        v.pause();
-        v.src = currentMedia.video_url || '';
-        try { v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', ''); } catch (e) {}
-        try { v.crossOrigin = 'anonymous'; } catch (e) {}
-        v.load();
-        // ensure muted for autoplay policies
-        v.muted = true;
-        const p = v.play();
-        if (p && typeof (p as any).then === 'function') {
-          (p as any).then(() => {
-            console.debug('[VideoContainer] native video autoplay succeeded', currentMedia.id);
-          }).catch((err: any) => {
-            console.warn('[VideoContainer] native video play() rejected', currentMedia.id, err);
-          });
-        }
-      }
-    } catch (err) {
-      console.warn('[VideoContainer] failed to set native video src/play', err);
-    }
-  }, [currentMedia]);
-
   useEffect(() => {
     if (window.YT && window.YT.Player) {
       setYtReady(true);
@@ -932,62 +381,15 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   }, []);
 
   const moveToNextShow = () => {
-    // Prevent automatic advance while a live event is active
-    if (liveEventActive) {
-      console.log('moveToNextShow blocked: live event active');
-      return;
-    }
-
     const nextIndex = (currentShowIndex + 1) % sortedShows.length;
     setCurrentShowIndex(nextIndex);
     if (typeof onCurrentShowChange === 'function') onCurrentShowChange(nextIndex);
   };
 
-  const advanceQueueOrNextShow = () => {
-    // If there is a queue for this show, advance within it.
-    // If the show's scheduled `end_time` hasn't passed, loop within the queue.
-    try {
-      // If a live event is active, do not automatically advance to the next show
-      if (liveEventActive) {
-        console.log('advanceQueueOrNextShow blocked: live event active');
-        return;
-      }
-      const now = Date.now();
-      const endTime = currentShow && currentShow.end_time ? new Date(currentShow.end_time).getTime() : null;
-
-      if (mediaQueue && mediaQueue.length > 0) {
-        // If we're not at the last item, just advance
-        if (queueIndex < mediaQueue.length - 1) {
-          const next = queueIndex + 1;
-          setQueueIndex(next);
-          setCurrentMedia(mediaQueue[next] || null);
-          return;
-        }
-
-        // At last item of this show's queue. If end_time is in the future, loop back to start.
-        if (endTime && now <= endTime) {
-          setQueueIndex(0);
-          setCurrentMedia(mediaQueue[0] || null);
-          return;
-        }
-
-        // If no end_time or it's passed, move to next show
-        moveToNextShow();
-        return;
-      }
-
-      // No media in queue -> advance to next show
-      moveToNextShow();
-    } catch (err) {
-      console.warn('advanceQueueOrNextShow error', err);
-      moveToNextShow();
-    }
-  };
-
   useEffect(() => {
-    if (!currentMedia || !ytReady || !isYouTubeUrl(currentMedia.video_url || '')) return;
+    if (!currentShow || !ytReady || !isYouTubeUrl(currentShow.video_url || '')) return;
 
-    const videoId = extractYouTubeID(currentMedia.video_url || '');
+    const videoId = extractYouTubeID(currentShow.video_url || '');
     if (!videoId) return;
 
     if (youtubePlayerRef.current) {
@@ -999,7 +401,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       youtubePlayerRef.current = null;
     }
 
-    const playerId = `youtube-player-${currentMedia.id}`;
+    const playerId = `youtube-player-${currentShow.id}`;
     const playerElement = document.getElementById(playerId);
     
     if (playerElement) {
@@ -1053,8 +455,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             }
 
             if (event.data === 0) {
-              console.log('YouTube media ended, advancing queue');
-              advanceQueueOrNextShow();
+              console.log('Video ended, moving to next show');
+              moveToNextShow();
             }
           },
           onReady: (event: any) => {
@@ -1108,7 +510,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         youtubeTimePollRef.current = null;
       }
     };
-  }, [currentMedia, ytReady, muted]);
+  }, [currentShow, ytReady, muted]);
 
   // When the currentShow changes, try to load any persisted time for native videos as well
   useEffect(() => {
@@ -1136,9 +538,9 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   }, [currentShow]);
 
   const handleVideoEnded = () => {
-    console.log('Regular video ended, advancing media queue or moving to next show');
+    console.log('Regular video ended, moving to next show');
     setIsVideoPlaying(false);
-    advanceQueueOrNextShow();
+    moveToNextShow();
   };
 
   const handleVideoPlay = () => {
@@ -1338,24 +740,10 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
   // MODAL PLAYER FUNCTIONS
   const playEpisode = useCallback((episode: VODEpisode) => {
-    console.log('playEpisode selected:', episode.id, episode.title, 'video_url=', episode.video_url);
-    setModalPlayerError(null);
-    // Resolve a usable media URL (fallbacks) and attach it to the episode we store
-    const resolved = resolveMediaUrl(episode);
-    try { console.debug('Resolved episode media URL:', { episodeId: episode.id, resolved }); } catch {}
-    if (!resolved) {
-      console.warn('No media URL available for episode', episode.id, episode);
-      setPlayingEpisode({ ...episode, video_url: '' });
-      setCatchUpOpen(true);
-      setModalPlayerError('No media URL found for this episode.');
-      return;
-    }
-
-    const epWithUrl = { ...episode, video_url: resolved } as VODEpisode;
     // Ensure modal is open so DOM nodes mount
     setCatchUpOpen(true);
 
-    setPlayingEpisode(epWithUrl);
+    setPlayingEpisode(episode);
     setModalPlayerPlaying(false);
     setModalPlayerProgress(0);
 
@@ -1428,62 +816,49 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       tryCreate();
     };
 
-    const isYouTube = epWithUrl.video_url && isYouTubeUrl(epWithUrl.video_url);
-    const isVimeo = epWithUrl.video_url && isVimeoUrl(epWithUrl.video_url);
+    // On mobile, defer actual autoplay until the user taps the modal play button
+    const isYouTube = episode.video_url && isYouTubeUrl(episode.video_url);
+    const isVimeo = episode.video_url && isVimeoUrl(episode.video_url);
 
-    // For mobile behave like desktop: attempt muted autoplay/init when possible.
-    // If autoplay is blocked or the DOM node isn't yet mounted, fall back to
-    // showing the user-play overlay (`modalAwaitingUserPlay`) so the user can
-    // explicitly start playback.
+    if (isMobile) {
+      // Ensure video src is set for native players so the user can tap to play
+      if (!isYouTube && modalVideoRef.current) {
+        modalVideoRef.current.src = episode.video_url || '';
+        modalVideoRef.current.load();
+      }
+      // Show awaiting user play overlay
+      setModalAwaitingUserPlay(true);
+      return;
+    }
 
-    if (epWithUrl.video_url && isYouTubeUrl(epWithUrl.video_url)) {
-      const videoId = extractYouTubeID(epWithUrl.video_url);
+    if (episode.video_url && isYouTubeUrl(episode.video_url)) {
+      const videoId = extractYouTubeID(episode.video_url);
       if (videoId) initModalYouTube(videoId);
-    } else if (epWithUrl.video_url && isVimeoUrl(epWithUrl.video_url)) {
+    } else if (episode.video_url && isVimeoUrl(episode.video_url)) {
       // vimeo iframe includes autoplay params in renderModalPlayer
-    } else if (epWithUrl.video_url) {
-      // Native video: try to set src and start playback (muted) immediately.
-      // If the modal video element isn't mounted yet, retry until it becomes available
-      // and then attempt playback. If play is blocked, show the user-play overlay.
-      const trySetAndPlay = () => {
+    } else if (episode.video_url) {
+      // Native video: set src and attempt to load/play after mount
+      setTimeout(() => {
         try {
-          if (!modalVideoRef.current) throw new Error('modal video element not mounted');
-
-          modalVideoRef.current.pause();
-          modalVideoRef.current.src = epWithUrl.video_url || '';
-          modalVideoRef.current.load();
-          console.log('Modal native video src set to', epWithUrl.video_url);
-          modalVideoRef.current.muted = shouldMute;
-          const p = modalVideoRef.current.play();
-          if (p && typeof (p as any).then === 'function') {
-            (p as any).then(() => {
-              setModalPlayerPlaying(true);
-              setModalAwaitingUserPlay(false);
-            }).catch((err: any) => {
-              console.warn('Modal native video play rejected:', err);
-              setModalPlayerError('Playback was blocked by the browser or the media failed to start.');
-              setModalPlayerPlaying(false);
-              setModalAwaitingUserPlay(true);
-            });
-          } else {
-            setModalPlayerPlaying(!modalVideoRef.current.paused);
-            setModalAwaitingUserPlay(false);
+          if (modalVideoRef.current) {
+            modalVideoRef.current.pause();
+            modalVideoRef.current.src = episode.video_url || '';
+            modalVideoRef.current.load();
+            modalVideoRef.current.muted = shouldMute;
+            const p = modalVideoRef.current.play();
+            if (p && typeof (p as any).then === 'function') {
+              (p as any).then(() => setModalPlayerPlaying(true)).catch((err: any) => {
+                console.warn('Modal native video play rejected:', err);
+                setModalPlayerPlaying(false);
+              });
+            } else {
+              setModalPlayerPlaying(!modalVideoRef.current.paused);
+            }
           }
         } catch (err) {
-          // Retry until element mounts, but don't loop forever
-          console.warn('Mobile modal: retrying set/play, reason:', err);
-          setTimeout(() => {
-            // If still no element after a short while, show user-play overlay
-            if (!modalVideoRef.current) {
-              setModalAwaitingUserPlay(true);
-            } else {
-              trySetAndPlay();
-            }
-          }, 200);
+          console.warn('Error starting modal native video', err);
         }
-      };
-
-      trySetAndPlay();
+      }, 150);
     }
   }, [modalPlayerMuted, modalPlayerPlaying]);
 
@@ -1508,39 +883,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       }
     }
   }, [playingEpisode, modalPlayerMuted]);
-
-  // Ensure native modal video `src` is set when modal mounts on mobile (deferred until DOM available)
-  useEffect(() => {
-    if (!playingEpisode) return;
-    if (!isMobile) return;
-    const isYouTube = playingEpisode.video_url && isYouTubeUrl(playingEpisode.video_url);
-
-    if (isYouTube) return; // YouTube handled separately
-
-    let mounted = true;
-    const trySet = () => {
-      if (!mounted) return;
-      if (modalVideoRef.current) {
-        try {
-          if (modalVideoRef.current.src !== (playingEpisode.video_url || '')) {
-            modalVideoRef.current.src = playingEpisode.video_url || '';
-            modalVideoRef.current.load();
-            console.log('Mobile modal: set native video src to', playingEpisode.video_url);
-          }
-        } catch (err) {
-          console.warn('Mobile modal: failed to set video src', err);
-        }
-      } else {
-        // retry shortly until the element mounts (DOM may not be ready yet)
-        setTimeout(trySet, 200);
-      }
-    };
-
-    // Only set src if we're awaiting a user play (deferred flow)
-    if (modalAwaitingUserPlay) trySet();
-
-    return () => { mounted = false; };
-  }, [playingEpisode, isMobile, modalAwaitingUserPlay]);
 
   const handleModalPlayerPlayPause = useCallback(() => {
     if (modalYoutubePlayerRef.current) {
@@ -1592,7 +934,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   };
 
   const renderVideoPlayer = (isFullscreenMode: boolean = false) => {
-    if (!currentMedia || !currentMedia.video_url) {
+    if (!currentShow?.video_url) {
       return (
         <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
           <Play className="h-16 w-16 text-gray-400" />
@@ -1600,30 +942,29 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       );
     }
 
-    if (isYouTubeUrl(currentMedia.video_url)) {
+    if (isYouTubeUrl(currentShow.video_url)) {
       return (
         <div
-          id={`youtube-player-${currentMedia.id}`}
+          id={`youtube-player-${currentShow.id}`}
           className="w-full h-full"
           style={{
             position: isFullscreenMode ? 'absolute' : 'relative',
             top: 0,
             left: 0,
             width: '100%',
-            height: '100%',
-            zIndex: chatVisible ? 60 : undefined
+            height: '100%'
           }}
         />
       );
     }
 
-    if (isVimeoUrl(currentMedia.video_url)) {
+    if (isVimeoUrl(currentShow.video_url)) {
       return (
         <iframe
           ref={vimeoRef}
           className="w-full h-full"
-          src={`https://player.vimeo.com/video/${extractVimeoID(currentMedia.video_url)}?autoplay=1&muted=${muted ? 1 : 0}&controls=1&api=1&player_id=vimeoPlayer&playsinline=1`}
-          title={currentMedia.title}
+          src={`https://player.vimeo.com/video/${extractVimeoID(currentShow.video_url)}?autoplay=1&muted=${muted ? 1 : 0}&controls=1&api=1&player_id=vimeoPlayer&playsinline=1`}
+          title={currentShow.title}
           allow="autoplay; fullscreen; picture-in-picture"
           allowFullScreen
           style={{
@@ -1631,8 +972,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             top: 0,
             left: 0,
             width: '100%',
-            height: '100%',
-            zIndex: chatVisible ? 60 : undefined
+            height: '100%'
           }}
         />
       );
@@ -1641,15 +981,15 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     return (
       <div className="relative w-full h-full">
         <video
-          key={`${currentMedia.id}-${isFullscreenMode ? 'fullscreen' : 'normal'}`}
+          key={`${currentShow.id}-${isFullscreenMode ? 'fullscreen' : 'normal'}`}
           ref={videoRef}
           className="w-full h-full object-cover"
-          poster={currentMedia.thumbnail_url || '/placeholder.svg'}
+          poster={currentShow.thumbnail_url || '/placeholder.svg'}
           controls
           muted={muted}
           playsInline
           preload="metadata"
-          onEnded={() => { setIsVideoPlaying(false); advanceQueueOrNextShow(); }}
+          onEnded={handleVideoEnded}
           onPlay={handleVideoPlay}
           onPause={handleVideoPause}
           onTimeUpdate={handleVideoTimeUpdate}
@@ -1660,8 +1000,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             left: 0,
             width: '100%',
             height: '100%',
-            objectFit: 'cover',
-            zIndex: chatVisible ? 60 : undefined
+            objectFit: 'cover'
           }}
           onLoadedMetadata={() => {
             // Restore video time if transitioning between modes (with retries)
@@ -1675,11 +1014,11 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             'x-webkit-airplay': 'allow',
           })}
         >
-          <source src={currentMedia.video_url || ''} type="video/mp4" />
-          <source src={currentMedia.video_url || ''} type="video/webm" />
+          <source src={currentShow.video_url} type="video/mp4" />
+          <source src={currentShow.video_url} type="video/webm" />
           Your browser does not support the video tag.
         </video>
-        {!isYouTubeUrl(currentMedia.video_url) && (
+        {!isYouTubeUrl(currentShow.video_url) && (
           <button
             onClick={handleMuteToggle}
             className={`absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full transition-colors ${isFullscreenMode ? 'z-20' : 'z-10'}`}
@@ -1761,24 +1100,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
               }}
               onLoadedMetadata={(e) => {
                 setModalPlayerDuration(e.currentTarget.duration);
-                setModalPlayerError(null);
-              }}
-              onError={async (e) => {
-                console.warn('Modal video element error event', e);
-                const url = playingEpisode.video_url || '';
-                try {
-                  const head = await fetch(url, { method: 'HEAD' });
-                  if (!head.ok) {
-                    const txt = await head.text().catch(() => null);
-                    setModalPlayerError(`Media HEAD failed: ${head.status} ${head.statusText} - ${txt}`);
-                    console.warn('Media HEAD response', head.status, head.statusText, txt);
-                  } else {
-                    setModalPlayerError('Media failed to load (unknown reason).');
-                  }
-                } catch (err) {
-                  console.warn('Error while HEADing media URL', err);
-                  setModalPlayerError(String(err));
-                }
               }}
               autoPlay={!isMobile}
             />
@@ -1810,12 +1131,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
           )}
 
           {/* Modal player controls */}
-            {modalPlayerError && (
-              <div className="absolute top-4 left-4 right-4 p-3 bg-red-900/80 text-red-100 rounded-md z-30">
-                <strong className="font-semibold">Playback Error:</strong>
-                <div className="text-sm mt-1">{modalPlayerError}</div>
-              </div>
-            )}
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 hover:opacity-100 transition-opacity duration-300">
             <div className="absolute bottom-0 left-0 right-0 p-4">
               {/* Progress bar */}
@@ -1901,10 +1216,10 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
   return (
     <div ref={videoContainerRef} className={videoWrapperClass} style={videoWrapperStyle}>
-      <Card className={isFullscreen ? "w-full h-full m-0 p-0 bg-transparent border-none shadow-none" : "mb-4 shadow-md dark:shadow-none"}>
+      <Card className={isFullscreen ? "w-full h-full m-0 p-0 bg-transparent border-none shadow-none" : "mb-4"}>
         <CardContent className={isFullscreen ? "p-0 w-full h-full" : "p-0"}>
           <div className={isFullscreen ? "relative w-full h-full" : "relative aspect-video rounded-lg overflow-hidden bg-black"}>
-            {currentMedia?.video_url || currentShow?.video_url ? (
+            {currentShow?.video_url ? (
               renderVideoPlayer(isFullscreen)
             ) : currentShow?.thumbnail_url ? (
               <div className="relative w-full h-full">
@@ -1972,43 +1287,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                 </div>
               )}
 
-              {/* Countdown banner for scheduled Live Events */}
-              {countdownActive && countdownSeconds !== null && (
-                <div className={`absolute top-4 right-4 z-${isFullscreen ? '20' : '10'} pointer-events-auto`}>
-                  <div className="flex items-center space-x-2 bg-yellow-500 text-black px-3 py-1 rounded-full">
-                    <Clock className="w-4 h-4" />
-                    <span className="font-semibold">Live starts in {formatCountdown(countdownSeconds)}</span>
-                  </div>
-                </div>
-              )}
-              {/* Prompt to open live when it starts (user click may be required to autoplay/unmute) */}
-              {showStartPrompt && (
-                <div className={`absolute top-4 right-4 z-${isFullscreen ? '20' : '10'} pointer-events-auto`}>
-                  <div className="flex items-center space-x-2 bg-green-600 text-white px-3 py-1 rounded-full">
-                    <span className="font-semibold">Live has started</span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowStartPrompt(false);
-                        // Try to unmute and play
-                        try {
-                          if (videoRef.current) {
-                            videoRef.current.muted = false;
-                            videoRef.current.play().catch(() => {});
-                          }
-                          if (youtubePlayerRef.current && youtubePlayerRef.current.playVideo) {
-                            try { youtubePlayerRef.current.unMute(); youtubePlayerRef.current.playVideo(); } catch (e) {}
-                          }
-                        } catch (err) {}
-                      }}
-                      className="ml-2 bg-white text-black px-3 py-1 rounded text-sm font-semibold"
-                    >
-                      Watch Live
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {currentShow && (
                 <div className={`absolute bottom-4 left-4 px-3 py-1 rounded-full text-sm font-medium z-${isFullscreen ? '20' : '10'} ${getTimeStatus(currentShow).className} pointer-events-auto`}>
                   {currentShow.is_live && <Eye className="inline w-4 h-4 mr-1" />}
@@ -2016,30 +1294,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                   {getTimeStatus(currentShow).text}
                 </div>
               )}
-
-              {/* Small quick-toggle button so users can reveal the mobile overlay without touching the video (avoids YouTube controls) */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  // clear any existing auto-hide timer
-                  if (overlayTimeoutRef.current) {
-                    clearTimeout(overlayTimeoutRef.current as any);
-                    overlayTimeoutRef.current = null;
-                  }
-
-                  // show overlay and auto-hide after a short duration
-                  setShowOverlay(true);
-                  overlayTimeoutRef.current = setTimeout(() => {
-                    setShowOverlay(false);
-                    overlayTimeoutRef.current = null;
-                  }, 3500) as unknown as NodeJS.Timeout;
-                }}
-                className="sm:hidden absolute bottom-20 right-3 z-40 bg-black/60 hover:bg-black/80 text-white p-2 rounded-full pointer-events-auto"
-                aria-label="Show stats"
-                title="Show stats"
-              >
-                <Eye className="w-4 h-4" />
-              </button>
 
               {/* Mobile Overlay Bar */}
               <div className={`sm:hidden absolute bottom-16 right-2 flex flex-col space-y-2 z-${isFullscreen ? '20' : '10'} pointer-events-auto`}>
@@ -2058,7 +1312,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
               </div>
 
               {/* Mute toggle for YouTube in overlays */}
-              {isYouTubeUrl(currentMedia?.video_url || currentShow?.video_url || '') && (
+              {isYouTubeUrl(currentShow?.video_url || '') && (
                 <button
                   onClick={(e) => { e.stopPropagation(); handleMuteToggle(); }}
                   className={`absolute bottom-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full transition-colors z-${isFullscreen ? '20' : '10'} pointer-events-auto`}
@@ -2098,35 +1352,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                     </div>
                   </div>
                 )}
-                {/* Upcoming live event (single compact pill under description) */}
-                {(() => {
-                  if (!Array.isArray(shows)) return null;
-                  const upcoming = shows
-                    .filter(s => s.show_type === 'event' && s.scheduled_time)
-                    .map(s => ({ show: s, startsIn: Math.max(0, Math.ceil((new Date(s.scheduled_time!).getTime() - Date.now()) / 1000)) }))
-                    .filter(x => x.startsIn > 0)
-                    .sort((a, b) => a.startsIn - b.startsIn);
-                  if (upcoming.length === 0) return null;
-                  const next = upcoming[0].show as StudioShow;
-                  const startsIn = upcoming[0].startsIn;
-                  // If the next upcoming is the currently playing show and it's live, hide the pill
-                  const showIsNowPlaying = currentShow && String(currentShow.id) === String(next.id) && (currentShow.is_live || (currentShow.scheduled_time && new Date(currentShow.scheduled_time).getTime() <= Date.now()));
-                  if (showIsNowPlaying) return null;
-                  return (
-                    <div className="mt-3">
-                      <div className="inline-flex items-center gap-3 bg-gradient-to-r from-indigo-600 to-pink-500 text-white px-3 py-2 rounded-lg shadow-md">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-md bg-white/20 flex items-center justify-center text-sm font-semibold">{next.title?.substring(0,1) || 'E'}</div>
-                          <div className="text-sm font-semibold">{next.title}</div>
-                        </div>
-                        <div className="text-xs bg-white/20 px-2 py-1 rounded">
-                          <Clock className="inline w-4 h-4 mr-1" />
-                          {startsIn > 3600 ? `${Math.ceil(startsIn/3600)}h` : formatCountdown(startsIn)}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
                 {/* IMPROVED CATCH UP BUTTON - matches description badge height */}
                 <div className="flex items-center">
                   <button
@@ -2160,7 +1385,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
           )}
           {/* Enhanced Modal */}
           {portalMounted && currentShow && createPortal(
-            <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 pointer-events-auto"> 
+            <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 pointer-events-auto">
               {/* Backdrop */}
               <div 
                 className={`absolute inset-0 bg-black/90 backdrop-blur-md transition-opacity duration-300 ${modalVisible ? 'opacity-100' : 'opacity-0'}`}
@@ -2179,19 +1404,13 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                       <h2 className="text-2xl font-bold text-white">Catch Up</h2>
                       <p className="text-sm text-gray-400 mt-1">Watch all past shows you've missed</p>
                     </div>
-                    <div className="flex items-center space-x-4">
-                      {/* Logo: white for dark mode, dark for light mode */}
-                      <div className="w-36 h-10 flex items-center justify-end">
-                        <img src="/uploads/one%20studio-white.png" alt="oneStudio" className="h-8 object-contain" />
-                      </div>
-                      <button
-                        onClick={() => setCatchUpOpen(false)}
-                        className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded-lg"
-                        aria-label="Close modal"
-                      >
-                        <X size={24} />
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => setCatchUpOpen(false)}
+                      className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-800 rounded-lg"
+                      aria-label="Close modal"
+                    >
+                      <X size={24} />
+                    </button>
                   </div>
                 </div>
 
@@ -2211,18 +1430,12 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                         </div>
                       </div>
                       
-                      {isMobile ? (
-                        renderMobileCatchUpGrid()
-                      ) : (
-                        <VODLibrary 
-                          showId={""}
-                          showAllPastShows={true}
-                          defaultViewMode="by-category"
-                          shows={shows}
-                          onEpisodeSelect={playEpisode}
-                          playingEpisodeId={playingEpisode?.id}
-                        />
-                      )}
+                      <VODLibrary 
+                        showId={""}
+                        showAllPastShows={true}
+                        onEpisodeSelect={playEpisode}
+                        playingEpisodeId={playingEpisode?.id}
+                      />
                     </div>
 
                     {/* Pagination Controls */}

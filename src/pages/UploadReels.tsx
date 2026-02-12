@@ -99,6 +99,7 @@ const UploadReels = () => {
   const CATEGORY_OPTIONS = [
     'All', 'Tech', 'Comedy', 'Sports', 'Education', 'Inspiration',
     'Music', 'Gaming', 'Food', 'Fitness', 'Lifestyle', 'Art',
+    'Kickstart',
   ];
 
   // Pause any playing videos on the page to avoid background playback when uploading

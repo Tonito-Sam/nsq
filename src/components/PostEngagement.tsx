@@ -81,7 +81,7 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
 
   return (
     <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800">
-      <div className="flex items-center space-x-2 md:space-x-4">
+      <div className="flex items-center space-x-2 md:space-x-4 flex-wrap">
         <ReactionPicker
           onReact={onReaction}
           currentReaction={selectedReaction ?? undefined}
@@ -138,7 +138,7 @@ export const PostEngagement: React.FC<PostEngagementProps> = ({
         </div>
         {/* Boost button (show when onBoost handler provided) */}
         {onBoost && (
-          <div className="ml-3">
+          <div className="ml-3 flex-shrink-0">
             <Button
               variant="ghost"
               size="sm"

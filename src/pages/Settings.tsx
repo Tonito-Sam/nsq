@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
 import { Settings as SettingsIcon, Bell, Shield, User, Palette, Globe } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
@@ -13,6 +15,8 @@ const Settings = () => {
   const { user, signOut } = useAuth();
   const [deleting, setDeleting] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = React.useState(false);
+  const [deleteReason, setDeleteReason] = React.useState('');
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">
@@ -162,28 +166,62 @@ const Settings = () => {
                 <strong>Danger Zone:</strong> Deleting your account is permanent and cannot be undone.
               </div>
               {deleteError && <div className="text-destructive text-xs mb-2">{deleteError}</div>}
-              <Button variant="destructive" className="w-full" disabled={deleting} onClick={async () => {
-                if (!user) return;
-                if (!window.confirm('Are you sure you want to delete your account? This action cannot be undone.')) return;
-                setDeleting(true);
-                setDeleteError(null);
-                try {
-                  // Delete user from Supabase auth and users table
-                  // 1. Delete from users table (if exists)
-                  await supabase.from('users').delete().eq('id', user.id);
-                  // 2. Delete from auth (requires service role or admin API)
-                  const { error } = await supabase.auth.admin.deleteUser(user.id);
-                  if (error) throw error;
-                  await signOut();
-                  window.location.href = '/auth';
-                } catch (err: any) {
-                  setDeleteError(err.message || 'Failed to delete account. Please contact support.');
-                } finally {
-                  setDeleting(false);
-                }
-              }}>
+              <Button variant="destructive" className="w-full" disabled={deleting} onClick={() => setShowDeleteModal(true)}>
                 {deleting ? 'Deleting Account...' : 'Delete Account'}
               </Button>
+
+              <Dialog open={showDeleteModal} onOpenChange={setShowDeleteModal}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Delete Account</DialogTitle>
+                    <DialogDescription>This will permanently delete your account. Please tell us why (optional).</DialogDescription>
+                  </DialogHeader>
+
+                  <div className="mt-2">
+                    <Label htmlFor="delete-reason">Reason for deleting (optional)</Label>
+                    <Textarea id="delete-reason" value={deleteReason} onChange={e => setDeleteReason(e.target.value)} rows={4} />
+                  </div>
+
+                  <DialogFooter>
+                    <div className="flex w-full gap-2">
+                      <Button variant="secondary" onClick={() => setShowDeleteModal(false)}>Cancel</Button>
+                      <Button variant="destructive" className="ml-auto" disabled={deleting} onClick={async () => {
+                        if (!user) return;
+                        setDeleting(true);
+                        setDeleteError(null);
+                        try {
+                          // Call backend endpoint that uses service role to delete auth user and users table
+                          const resp = await fetch('/api/users/delete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ id: user.id, reason: deleteReason })
+                          });
+                          if (!resp.ok) {
+                            const body = await resp.json().catch(() => ({}));
+                            throw new Error(body && body.error ? body.error : 'Deletion failed');
+                          }
+
+                          // Also attempt to remove any client-side profile rows (best-effort)
+                          try {
+                            await supabase.from('users').delete().eq('id', user.id);
+                          } catch (e) {
+                            // ignore client-side deletion errors
+                          }
+
+                          await signOut();
+                          // Redirect to external about page as requested
+                          window.location.href = 'https://nexsq.com/about';
+                        } catch (err: any) {
+                          setDeleteError(err.message || 'Failed to delete account. Please contact support.');
+                        } finally {
+                          setDeleting(false);
+                          setShowDeleteModal(false);
+                        }
+                      }}>Confirm Delete</Button>
+                    </div>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </CardContent>
           </Card>
         </div>

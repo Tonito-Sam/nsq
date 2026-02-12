@@ -86,6 +86,7 @@ const RecordReel = () => {
   const CATEGORY_OPTIONS = [
     'All', 'Tech', 'Comedy', 'Sports', 'Education', 'Inspiration',
     'Music', 'Gaming', 'Food', 'Fitness', 'Lifestyle', 'Art',
+    'Kickstart',
   ];
 
   // ADDED: Audience options

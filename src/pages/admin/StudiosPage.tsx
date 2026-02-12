@@ -697,35 +697,21 @@ const StudiosPage = () => {
   // Handle new episode form changes
   const handleNewEpisodeChange = (e: any) => {
     const { name, value, type, files, checked } = e.target;
-    if (type === 'file') {
-      setNewEpisodeForm((f:any) => ({ 
-        ...f, 
-        [name]: files[0],
-        // Clear URL when file is selected
+    if (type === 'checkbox') {
+      setNewEpisodeForm((f: any) => ({ ...f, [name]: checked }));
+    } else if (type === 'file') {
+      setNewEpisodeForm((f: any) => ({
+        ...f,
+        [name]: files && files[0] ? files[0] : undefined,
         ...(name === 'video_file' && { video_url: '' }),
-        ...(name === 'thumbnail_file' && { thumbnail_url: '' })
-      }));
-    } else if (type === 'checkbox') {
-      setNewEpisodeForm((f:any) => ({ ...f, [name]: checked }));
-    } else if (name === 'video_type' || name === 'thumbnail_type') {
-      setNewEpisodeForm((f:any) => ({ 
-        ...f, 
-        [name]: value,
-        // Clear file when switching to URL
-        ...(name === 'video_type' && value === 'url' && { video_file: null }),
-        ...(name === 'thumbnail_type' && value === 'url' && { thumbnail_file: null })
+        ...(name === 'thumbnail_file' && { thumbnail_url: '' }),
       }));
     } else {
-      setNewEpisodeForm((f:any) => ({ ...f, [name]: value }));
+      setNewEpisodeForm((f: any) => ({ ...f, [name]: value }));
     }
   };
 
-  // Validate episode form
-  const validateEpisodeForm = () => {
-    if (!newEpisodeForm.title?.trim()) {
-      toast({ title: 'Error', description: 'Episode title is required', variant: 'destructive' });
-      return false;
-    }
+  const validateEpisodeForm = (): boolean => {
     if (newEpisodeForm.video_type === 'url' && !newEpisodeForm.video_url?.trim()) {
       toast({ title: 'Error', description: 'Video URL is required', variant: 'destructive' });
       return false;
@@ -1118,6 +1104,7 @@ const StudiosPage = () => {
                           "Fanalysis",
                           "Mic'd Breakfast Show",
                           "Girls Talk",
+                          "Kickstart",
                           "Mid-Day Groove",
                           "Perspective Inspiration",
                           "Documentary",

@@ -15,7 +15,28 @@ const linkPreview = require('./routes/link-preview');
 const organizationsRoutes = require('./routes/organizations');
 
 const app = express();
-app.use(cors());
+
+// CORS: allow credentials and only permit configured origins (do not use '*')
+// Set env var CORS_ALLOWED_ORIGINS to a comma-separated list, e.g.:
+// CORS_ALLOWED_ORIGINS=http://localhost:3000
+const allowed = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+app.use(cors({
+	origin: function(origin, callback) {
+		// allow non-browser requests (e.g. curl, server-to-server) with no origin
+		if (!origin) return callback(null, true);
+		if (allowed.length === 0) {
+			// if no allowed list provided, default to allowing same-host frontend during development
+			// (best-effort) — permit localhost:3000
+			const devDefault = ['http://localhost:3000'];
+			if (devDefault.includes(origin)) return callback(null, true);
+			return callback(new Error('Not allowed by CORS'));
+		}
+		if (allowed.indexOf(origin) !== -1) return callback(null, true);
+		return callback(new Error('Not allowed by CORS'));
+	},
+	credentials: true,
+}));
+
 app.use(express.json());
 
 app.use('/api/aramex', aramexRoutes);
