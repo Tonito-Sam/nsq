@@ -1,9 +1,15 @@
 // backend/cors.cjs
 module.exports = function (req, res, next) {
-  // Allowed origins can be provided as a comma-separated env var.
-  // Allow the Vite dev server as well as the older port used by some local setups.
-  const raw = process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000';
-  const allowed = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  // Keep the production app origins enabled and allow deployments to add their own origins.
+  const defaults = [
+    'https://nexsq.com',
+    'https://www.nexsq.com',
+    'http://localhost:8080',
+    'http://127.0.0.1:8080',
+    'http://localhost:3000',
+  ];
+  const configured = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const allowed = [...new Set([...defaults, ...configured])];
   const origin = req.headers.origin;
 
   if (origin) {
