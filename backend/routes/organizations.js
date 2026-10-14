@@ -42,19 +42,37 @@ async function isSlugUnique(slug, excludeId = null) {
 
 // GET /api/organizations - List organizations for current user
 router.get('/', async (req, res) => {
-  const userId = req.user?.id;
-  if (!userId) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  const userId = typeof req.query.user_id === 'string' ? req.query.user_id : req.user?.id;
+  if (!userId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+    return res.status(400).json({ error: 'A valid user ID is required' });
   }
 
   try {
-    // Get organizations where user is owner or member
-    const url = `${SUPABASE_URL}/rest/v1/organization_members?select=organization_id,organizations(*)&user_id=eq.${userId}`;
-    const resp = await axios.get(url, { headers: supabaseAuthHeaders() });
-    const members = Array.isArray(resp.data) ? resp.data : [];
-    
-    const orgs = members.map(m => m.organizations).filter(Boolean);
-    return res.json(orgs);
+    const fields = 'id,owner_id,name,slug,description,logo_url,cover_photo_url,website,location,industry,verified,members_count,followers_count,created_at,updated_at';
+    const organizations = new Map();
+
+    const ownedResponse = await axios.get(
+      `${SUPABASE_URL}/rest/v1/organizations?select=${fields}&owner_id=eq.${encodeURIComponent(userId)}&order=created_at.desc`,
+      { headers: supabaseAuthHeaders() }
+    );
+    for (const organization of Array.isArray(ownedResponse.data) ? ownedResponse.data : []) {
+      organizations.set(organization.id, organization);
+    }
+
+    try {
+      const memberResponse = await axios.get(
+        `${SUPABASE_URL}/rest/v1/organization_members?select=organization_id,organizations(${fields})&user_id=eq.${encodeURIComponent(userId)}`,
+        { headers: supabaseAuthHeaders() }
+      );
+      const memberRows = Array.isArray(memberResponse.data) ? memberResponse.data : [];
+      for (const row of memberRows) {
+        if (row.organizations?.id) organizations.set(row.organizations.id, row.organizations);
+      }
+    } catch (membershipError) {
+      console.warn('Could not load organization memberships:', membershipError.message);
+    }
+
+    return res.json([...organizations.values()]);
   } catch (err) {
     console.error('Error listing organizations:', err.message);
     return res.status(500).json({ error: 'Failed to list organizations' });

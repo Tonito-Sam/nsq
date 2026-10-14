@@ -1,8 +1,8 @@
 // backend/cors.cjs
 module.exports = function (req, res, next) {
   // Allowed origins can be provided as a comma-separated env var.
-  // In development, default to http://localhost:3000 so the frontend dev server works.
-  const raw = process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:3000';
+  // Allow the Vite dev server as well as the older port used by some local setups.
+  const raw = process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000';
   const allowed = raw.split(',').map((s) => s.trim()).filter(Boolean);
   const origin = req.headers.origin;
 

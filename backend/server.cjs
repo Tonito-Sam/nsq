@@ -1,11 +1,13 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const path = require('path');
+const { startWhatsAppOrderNotificationWorker } = require('./utils/whatsappOrderNotifications');
+const { startPlatformSpecialDayWorker } = require('./utils/platformSpecialDays');
 
 // Load env variables from backend/.env
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
-console.log('✅ LIVEPEER_API_KEY:', process.env.LIVEPEER_API_KEY);
+console.log('✅ LIVEPEER_API_KEY:', process.env.LIVEPEER_API_KEY ? '(configured)' : '(not set)');
 
 // Log Supabase env status (masked) to help debug invalid-api-key issues in dev
 try {
@@ -20,13 +22,19 @@ try {
 
 // Init app
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3001;
 
 // Custom CORS middleware (for dev, allows all origins)
 app.use(require('./cors.cjs')); // ✅ moved here (AFTER app is created)
 
 // Parse JSON
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buffer) => {
+    if (req.originalUrl.split('?')[0] === '/api/payments/paystack/itn') {
+      req.rawBody = Buffer.from(buffer);
+    }
+  },
+}));
 
 // ROUTES
 const livepeerRoutes = require('./routes/livepeer.cjs');
@@ -81,6 +89,14 @@ try {
   console.log('✅ Mounted /api/stores');
 } catch (e) {
   console.warn('⚠️ stores route not available:', e?.message || e);
+}
+
+try {
+  const identity = require('./routes/identity');
+  app.use('/api/identity', identity);
+  console.log('✅ Mounted /api/identity');
+} catch (e) {
+  console.warn('⚠️ identity route not available:', e?.message || e);
 }
 
 // Health probe (checks Supabase connectivity)
@@ -189,6 +205,14 @@ try {
   console.warn('⚠️ shows route not available:', e?.message || e);
 }
 
+try {
+  const studioSettings = require('./routes/studio-settings');
+  app.use('/api/studio-settings', studioSettings);
+  console.log('✅ Mounted /api/studio-settings');
+} catch (e) {
+  console.warn('⚠️ studio-settings route not available:', e?.message || e);
+}
+
 // Payments (dev-safe webhooks for Flutterwave / Paystack)
 try {
   const payments = require('./routes/payments');
@@ -196,6 +220,22 @@ try {
   console.log('✅ Mounted /api/payments');
 } catch (e) {
   console.warn('⚠️ payments route not available:', e?.message || e);
+}
+
+try {
+  const walletRoutes = require('./routes/wallet');
+  app.use('/api/wallet', walletRoutes);
+  console.log('✅ Mounted /api/wallet');
+} catch (e) {
+  console.warn('⚠️ wallet route not available:', e?.message || e);
+}
+
+try {
+  const shippingRoutes = require('./routes/shipping');
+  app.use('/api/shipping', shippingRoutes);
+  console.log('✅ Mounted /api/shipping');
+} catch (e) {
+  console.warn('⚠️ shipping route not available:', e?.message || e);
 }
 
 // Link preview proxy (fetches OG metadata and favicon)
@@ -225,3 +265,6 @@ const server = app.listen(PORT, () => {
   }
   console.log('ℹ️ PID:', process.pid);
 });
+
+startWhatsAppOrderNotificationWorker();
+startPlatformSpecialDayWorker();
