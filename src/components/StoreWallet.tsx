@@ -5,6 +5,11 @@ import { Badge } from '@/components/ui/badge';
 import { DollarSign, TrendingUp, Download, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import CreateVirtualCard from '@/components/CreateVirtualCard';
+import { useAuth } from '@/hooks/useAuth';
+import { useToast } from '@/hooks/use-toast';
+import apiUrl from '@/lib/api';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
 
 interface StoreWalletProps {
   storeId?: string;
@@ -16,12 +21,25 @@ interface Transaction {
   id: string;
   type: 'credit' | 'debit';
   amount: number;
+  currency: string;
   description: string;
   date: string;
   status: 'completed' | 'pending' | 'failed';
 }
 
+interface StoreWalletAccount {
+  currency: string;
+  available_balance: number;
+  held_balance: number;
+  total_earned: number;
+}
+
 export const StoreWallet: React.FC<StoreWalletProps> = ({ storeId, storeCurrency, storeName }) => {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [accounts, setAccounts] = useState<StoreWalletAccount[]>([]);
+  const [payoutAmount, setPayoutAmount] = useState('');
+  const [payoutCurrency, setPayoutCurrency] = useState(storeCurrency || 'USD');
   const [walletData, setWalletData] = useState({
     balance: 0,
     pendingBalance: 0,
@@ -39,121 +57,70 @@ export const StoreWallet: React.FC<StoreWalletProps> = ({ storeId, storeCurrency
 
   const fetchWalletData = async () => {
     if (!storeId) return;
+    try {
+      const [{ data: accountRows, error: accountError }, { data: entries, error: entriesError }] = await Promise.all([
+        supabase.from('store_wallet_accounts').select('currency,available_balance,held_balance,total_earned').eq('store_id', storeId),
+        supabase.from('wallet_ledger_entries').select('id,entry_type,direction,amount,currency,reference,created_at').eq('store_id', storeId).order('created_at', { ascending: false }).limit(50),
+      ]);
+      if (accountError) throw accountError;
+      if (entriesError) throw entriesError;
 
-    // Fetch wallet data from orders/payments
-    // 1. Get all completed orders for this store
-    const { data: orders, error: ordersError } = await supabase
-      .from('orders')
-      .select('total_amount, status, created_at, id, customer_id')
-      .eq('store_id', storeId);
-    if (ordersError) return setLoading(false);
-    // 2. Get all payouts/withdrawals for this store
-    const { data: payouts } = await supabase
-      .from('store_payouts')
-      .select('amount, status, created_at, id');
-    // 3. Calculate balances
-    const completedOrders = (orders || []).filter(o => o.status === 'completed');
-    const pendingOrders = (orders || []).filter(o => o.status === 'pending');
-    const totalEarnings = completedOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
-    const pendingBalance = pendingOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
-    const payoutsTotal = (payouts || []).reduce((sum, p) => sum + Number(p.amount), 0);
-    const balance = totalEarnings - payoutsTotal;
-    // 4. Build transaction history
-    const allowedStatuses = ['completed', 'pending', 'failed'] as const;
-    const transactions = [
-      ...(completedOrders.map(o => ({
-        id: o.id,
-        type: 'credit' as const,
-        amount: Number(o.total_amount),
-        description: `Payment for Order #${o.id}`,
-        date: o.created_at,
-        status: 'completed' as const
-      })) || []),
-      ...(pendingOrders.map(o => ({
-        id: o.id + '-pending',
-        type: 'credit' as const,
-        amount: Number(o.total_amount),
-        description: `Payment for Order #${o.id}`,
-        date: o.created_at,
-        status: 'pending' as const
-      })) || []),
-      ...(payouts || []).map(p => ({
-        id: p.id,
-        type: 'debit' as const,
-        amount: Number(p.amount),
-        description: 'Withdrawal',
-        date: p.created_at,
-        status: allowedStatuses.includes(p.status) ? p.status as typeof allowedStatuses[number] : 'pending'
-      }))
-    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const currentAccounts = (accountRows || []) as StoreWalletAccount[];
+      setAccounts(currentAccounts);
+      const preferredCurrency = currentAccounts.find(account => account.currency === storeCurrency)?.currency || currentAccounts[0]?.currency;
+      if (preferredCurrency && !currentAccounts.some(account => account.currency === payoutCurrency)) setPayoutCurrency(preferredCurrency);
+      const account = currentAccounts.find(item => item.currency === payoutCurrency) || currentAccounts.find(item => item.currency === preferredCurrency);
+      const transactions = (entries || []).map(entry => ({
+        id: entry.id,
+        type: (entry.direction === 'credit' || entry.direction === 'release' ? 'credit' : 'debit') as 'credit' | 'debit',
+        amount: Number(entry.amount),
+        currency: entry.currency,
+        description: `${String(entry.entry_type).replaceAll('_', ' ')} · ${String(entry.reference).slice(0, 12)}`,
+        date: entry.created_at,
+        status: (entry.direction === 'hold' ? 'pending' : 'completed') as 'pending' | 'completed' | 'failed',
+      }));
 
-    setWalletData({ balance, pendingBalance, totalEarnings, transactions });
-    setLoading(false);
+      setWalletData({
+        balance: Number(account?.available_balance || 0),
+        pendingBalance: Number(account?.held_balance || 0),
+        totalEarnings: Number(account?.total_earned || 0),
+        transactions,
+      });
+    } catch (error) {
+      console.error('Error fetching store wallet ledger:', error);
+      toast({ title: 'Wallet unavailable', description: 'Could not load the store ledger. Apply the wallet migration and try again.', variant: 'destructive' });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleWithdraw = async () => {
-    setWithdrawLoading(true);
-    // 1. Fetch store payout settings
-    const { data: storeSettings } = await supabase
-      .from('user_stores')
-      .select('business_bank_name, business_account_number, business_account_type, business_branch_code, business_account_holder, store_paypal_email, owner_id')
-      .eq('id', storeId)
-      .single();
-    let payoutMethod = null;
-    let payoutDetails = null;
-    if (storeSettings) {
-      if (storeSettings.business_account_type === 'business' && storeSettings.business_bank_name && storeSettings.business_account_number) {
-        payoutMethod = 'bank';
-        payoutDetails = {
-          bank_name: storeSettings.business_bank_name,
-          account_number: storeSettings.business_account_number,
-          branch_code: storeSettings.business_branch_code,
-          account_holder: storeSettings.business_account_holder
-        };
-      } else if (storeSettings.store_paypal_email) {
-        payoutMethod = 'paypal';
-        payoutDetails = { paypal_email: storeSettings.store_paypal_email };
-      }
-    }
-    // 2. If not set, fallback to user's personal bank/paypal
-    if (!payoutMethod && storeSettings?.owner_id) {
-      const { data: userBank } = await supabase
-        .from('user_bank_accounts')
-        .select('bank_name, account_number, branch_code, account_holder, account_type')
-        .eq('user_id', storeSettings.owner_id)
-        .eq('is_active', true)
-        .single();
-      const { data: user } = await supabase
-        .from('users')
-        .select('paypal_email')
-        .eq('id', storeSettings.owner_id)
-        .single();
-      if (userBank && userBank.account_type === 'personal') {
-        payoutMethod = 'bank';
-        payoutDetails = userBank;
-      } else if (user && user.paypal_email) {
-        payoutMethod = 'paypal';
-        payoutDetails = { paypal_email: user.paypal_email };
-      }
-    }
-    // 3. Block if neither is set
-    if (!payoutMethod) {
-      alert('No payout method set. Please add a business bank account or PayPal in Store Settings or your profile.');
-      setWithdrawLoading(false);
+    const amount = Number(payoutAmount);
+    const account = accounts.find(item => item.currency === payoutCurrency);
+    if (!storeId || !user || !account || !Number.isFinite(amount) || amount <= 0 || amount > account.available_balance) {
+      toast({ title: 'Invalid payout amount', description: 'Enter an amount within the available balance.', variant: 'destructive' });
       return;
     }
-    // 4. Record payout (simulate for now)
-    await supabase.from('store_payouts').insert({
-      store_id: storeId,
-      amount: walletData.balance,
-      method: payoutMethod,
-      details: payoutDetails,
-      status: 'pending',
-      created_at: new Date().toISOString()
-    });
-    alert('Withdrawal request submitted!');
-    fetchWalletData();
-    setWithdrawLoading(false);
+
+    setWithdrawLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please sign in again to request a payout.');
+      const response = await fetch(apiUrl(`/api/wallet/stores/${storeId}/payouts`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ amount, currency: payoutCurrency }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Payout request failed');
+      toast({ title: 'Payout held for review', description: 'Funds are reserved while NexSq reviews the beneficiary and payout request.' });
+      setPayoutAmount('');
+      await fetchWalletData();
+    } catch (error) {
+      toast({ title: 'Payout request failed', description: (error as Error).message, variant: 'destructive' });
+    } finally {
+      setWithdrawLoading(false);
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -187,7 +154,7 @@ export const StoreWallet: React.FC<StoreWalletProps> = ({ storeId, storeCurrency
           </div>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">Available Balance</h3>
           <p className="text-3xl font-bold text-gray-900 dark:text-gray-100">
-            {storeCurrency} {walletData.balance.toLocaleString()}
+            {payoutCurrency} {walletData.balance.toLocaleString()}
           </p>
         </Card>
 
@@ -199,7 +166,7 @@ export const StoreWallet: React.FC<StoreWalletProps> = ({ storeId, storeCurrency
           </div>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">Pending Balance</h3>
           <p className="text-3xl font-bold text-gray-900 dark:text-gray-100">
-            {storeCurrency} {walletData.pendingBalance.toLocaleString()}
+            {payoutCurrency} {walletData.pendingBalance.toLocaleString()}
           </p>
           <p className="text-sm text-gray-500">Processing 3-5 business days</p>
         </Card>
@@ -212,17 +179,38 @@ export const StoreWallet: React.FC<StoreWalletProps> = ({ storeId, storeCurrency
           </div>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">Total Earnings</h3>
           <p className="text-3xl font-bold text-gray-900 dark:text-gray-100">
-            {storeCurrency} {walletData.totalEarnings.toLocaleString()}
+            {payoutCurrency} {walletData.totalEarnings.toLocaleString()}
           </p>
           <p className="text-sm text-gray-500">All time</p>
         </Card>
       </div>
 
       {/* Withdraw Button moved below the cards */}
-      <div className="flex justify-end">
-        <Button size="lg" onClick={handleWithdraw} disabled={withdrawLoading}>
+      <div className="flex flex-col sm:flex-row justify-end gap-3">
+        <Select value={payoutCurrency} onValueChange={setPayoutCurrency}>
+          <SelectTrigger className="sm:w-40" aria-label="Payout currency">
+            <SelectValue placeholder="Currency" />
+          </SelectTrigger>
+          <SelectContent>
+            {accounts.map(account => (
+              <SelectItem key={account.currency} value={account.currency}>{account.currency}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          type="number"
+          min="0.01"
+          max={accounts.find(account => account.currency === payoutCurrency)?.available_balance || 0}
+          step="0.01"
+          value={payoutAmount}
+          onChange={event => setPayoutAmount(event.target.value)}
+          placeholder="Payout amount"
+          aria-label="Payout amount"
+          className="sm:max-w-52"
+        />
+        <Button size="lg" onClick={handleWithdraw} disabled={withdrawLoading || !accounts.length || !payoutAmount}>
           <Download className="h-4 w-4 mr-2" />
-          {withdrawLoading ? 'Processing...' : 'Withdraw'}
+          {withdrawLoading ? 'Submitting...' : 'Request Payout'}
         </Button>
       </div>
 
@@ -263,7 +251,7 @@ export const StoreWallet: React.FC<StoreWalletProps> = ({ storeId, storeCurrency
                 <p className={`font-semibold ${
                   transaction.type === 'credit' ? 'text-green-600' : 'text-red-600'
                 }`}>
-                  {transaction.type === 'credit' ? '+' : '-'}{storeCurrency} {transaction.amount.toLocaleString()}
+                  {transaction.type === 'credit' ? '+' : '-'}{transaction.currency} {transaction.amount.toLocaleString()}
                 </p>
                 <Badge className={getStatusColor(transaction.status)}>
                   {transaction.status}

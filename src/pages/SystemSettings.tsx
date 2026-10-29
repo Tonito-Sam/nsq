@@ -9,6 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Header } from '@/components/Header';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
+import SkeletonCard from '@/components/skeletons/SkeletonCard';
+import SkeletonAvatar from '@/components/skeletons/SkeletonAvatar';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
@@ -280,8 +283,18 @@ const SystemSettings = () => {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">
         <Header />
-        <div className="flex items-center justify-center py-20">
-          <div className="text-gray-600 dark:text-gray-400">Loading...</div>
+        <div className="max-w-7xl mx-auto px-4 py-8">
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <SkeletonAvatar size={56} />
+              <div className="flex-1">
+                <SkeletonLine width="40%" />
+                <SkeletonLine width="30%" className="mt-2" />
+              </div>
+            </div>
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
         </div>
         <MobileBottomNav />
       </div>

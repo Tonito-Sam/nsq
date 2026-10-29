@@ -1,4 +1,5 @@
 ﻿import React, { useState, useRef, useEffect } from 'react';
+import { LinkPreviewCard } from '@/components/LinkPreviewCard';
 // --- AI Helpers and imports only ---
 import axios from 'axios';
 import { extractHashtagsFromText as extractHashtagsUtil, escapeRegExp } from '@/utils/hashtagUtils';
@@ -1380,11 +1381,9 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
           const hentai = probs['Hentai'] || 0;
           const sexy = probs['Sexy'] || 0;
 
-          // Blocking logic:
-          // - Block if Porn or Hentai probability is clearly high (>= 0.7)
-          // - Block if combined Porn+Hentai is very high (>= 0.8)
-          // - Do NOT block for "Sexy" alone to reduce false positives on swimwear/short sleeves
-          const nsfw = (porn >= 0.7) || (hentai >= 0.7) || ((porn + hentai) >= 0.8);
+          // Use a conservative threshold: this classifier can mistake clothed gym
+          // photos for explicit content, and its scores are not proof of nudity.
+          const nsfw = (porn >= 0.95) || (hentai >= 0.95);
           // Keep a debug log for future tuning. Only log in non-production to
           // avoid noisy output in production while ensuring `sexy` is referenced
           // so the TypeScript `noUnusedLocals` rule does not complain.
@@ -1444,7 +1443,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
           const porn = probs['Porn'] || 0;
           const hentai = probs['Hentai'] || 0;
           // Use the same stricter rules as image scanning to reduce false positives
-          nsfwFound = (porn >= 0.7) || (hentai >= 0.7) || ((porn + hentai) >= 0.8);
+          nsfwFound = (porn >= 0.95) || (hentai >= 0.95);
         }
         resolve(nsfwFound);
       };
@@ -2019,6 +2018,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
               </div>
             )}
           </div>
+          <LinkPreviewCard content={content} />
 
           {/* Voice-to-Text - Enhanced */}
           <div className="flex items-center justify-between p-3 bg-gradient-to-r from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 rounded-xl">

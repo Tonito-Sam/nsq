@@ -10,6 +10,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/use-toast';
+import apiUrl from '@/lib/api';
 
 const generateCardNumber = () => {
   // Generate a 16-digit card number starting with 4 (Visa-like)
@@ -48,10 +49,11 @@ const CreateVirtualCard = ({ storeName, storeId }: { storeName?: string; storeId
   const [isBack, setIsBack] = useState(false);
   const [showSensitive, setShowSensitive] = useState(false);
   const [otpModal, setOtpModal] = useState(false);
-  const [otp, setOtp] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otpInput, setOtpInput] = useState('');
   const [otpError, setOtpError] = useState('');
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
   const [hasCard, setHasCard] = useState(false);
 
   useEffect(() => {
@@ -114,25 +116,59 @@ const CreateVirtualCard = ({ storeName, storeId }: { storeName?: string; storeId
     }
   };
   const sendOtp = async () => {
-    // Generate 6-digit OTP
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setOtp(code);
-    setOtpSent(true);
+    setOtpSending(true);
     setOtpError('');
-    // Send OTP to user email (simulate with toast)
-    toast({ title: 'OTP Sent', description: `OTP sent to ${user?.email}. (Simulated: ${code})` });
-    // In production, send via backend/email provider
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please sign in again to request an OTP.');
+
+      const response = await fetch(apiUrl('/api/virtual-card-otp/start'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not send the OTP email.');
+
+      setOtpSent(true);
+      setOtpInput('');
+      toast({ title: 'OTP Sent', description: `A verification code was sent to ${user?.email}.` });
+    } catch (error) {
+      setOtpError((error as Error).message || 'Could not send the OTP email.');
+    } finally {
+      setOtpSending(false);
+    }
   };
-  const checkOtp = () => {
-    if (otpInput === otp) {
+
+  const checkOtp = async () => {
+    setOtpVerifying(true);
+    setOtpError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please sign in again to verify the OTP.');
+
+      const response = await fetch(apiUrl('/api/virtual-card-otp/verify'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ code: otpInput }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Invalid or expired OTP.');
+
       setShowSensitive(true);
       setOtpModal(false);
       setIsBack(true);
       setOtpError('');
-      setOtp('');
       setOtpInput('');
-    } else {
-      setOtpError('Invalid OTP. Please try again.');
+    } catch (error) {
+      setOtpError((error as Error).message || 'Could not verify the OTP.');
+    } finally {
+      setOtpVerifying(false);
     }
   };
 
@@ -188,19 +224,24 @@ const CreateVirtualCard = ({ storeName, storeId }: { storeName?: string; storeId
                     <DialogTitle>Enter OTP to View CVV & PIN</DialogTitle>
                   </DialogHeader>
                   <div className="space-y-3">
-                    <p className="text-gray-600 dark:text-gray-400 text-sm">For your security, enter the OTP sent to your email to view sensitive card details.</p>
-                    <Button onClick={sendOtp} disabled={otpSent} className="w-full">{otpSent ? 'OTP Sent' : 'Send OTP'}</Button>
+                    <p className="text-gray-600 dark:text-gray-400 text-sm">For your security, request a code sent to your account email to view sensitive card details.</p>
+                    <Button onClick={sendOtp} disabled={otpSending} className="w-full">
+                      {otpSending ? 'Sending...' : otpSent ? 'Resend OTP' : 'Send OTP'}
+                    </Button>
                     <Input
                       placeholder="Enter OTP"
                       value={otpInput}
-                      onChange={e => setOtpInput(e.target.value)}
+                      onChange={e => setOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
                       className="w-full"
+                      inputMode="numeric"
                       maxLength={6}
                     />
                     {otpError && <div className="text-red-600 text-sm">{otpError}</div>}
                   </div>
                   <DialogFooter>
-                    <Button onClick={checkOtp} className="w-full">Verify OTP</Button>
+                    <Button onClick={checkOtp} disabled={otpVerifying || otpInput.length !== 6} className="w-full">
+                      {otpVerifying ? 'Verifying...' : 'Verify OTP'}
+                    </Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>

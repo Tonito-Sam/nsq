@@ -492,15 +492,23 @@ export const Moments = () => {
                                   width: '90%',
                                   wordBreak: 'break-word',
                                   background: firstMoment.moment_bg || 'linear-gradient(135deg, #8b5cf6 0%, #d946ef 100%)',
-                                  padding: '4px',
+                                  padding: '5px 4px',
                                   borderRadius: '7px',
                                   display: 'flex',
+                                  flexDirection: 'column',
                                   alignItems: 'center',
                                   justifyContent: 'center',
+                                  gap: '2px',
                                   height: '90%',
                                 }}
                                 className="line-clamp-3"
                               >
+                                {(firstMoment.moment_special_icon || firstMoment.moment_special_name) && (
+                                  <span className="flex max-w-full items-center gap-1 text-[9px] leading-tight">
+                                    {firstMoment.moment_special_icon && <span>{firstMoment.moment_special_icon}</span>}
+                                    {firstMoment.moment_special_name && <span className="truncate">{firstMoment.moment_special_name}</span>}
+                                  </span>
+                                )}
                                 {firstMoment.content}
                               </span>
                             ) : null}

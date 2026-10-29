@@ -12,6 +12,8 @@ import { ShareModal } from './ShareModal';
 import { PollCard } from './PollCard';
 import { EditPostModal } from './EditPostModal';
 import { EventCard } from './EventCard';
+import { LinkPreviewCard } from './LinkPreviewCard';
+import type { PlatformCelebrationSlide } from '@/lib/platformCelebrationGroups';
 
 interface PostCardProps {
   post: {
@@ -65,6 +67,7 @@ interface PostCardProps {
     moment_special_message?: string | null;
     moment_special_icon?: string | null;
     moment_special_name?: string | null;
+    special_day_events?: PlatformCelebrationSlide[];
     is_custom_special_day?: boolean | null;
     moment_special_id?: string | null;
     // Sponsored flag added by ad-serving integration
@@ -409,10 +412,12 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
                 momentSpecialMessage={post.moment_special_message}
                 momentSpecialIcon={post.moment_special_icon}
                 momentSpecialName={post.moment_special_name}
+                specialDayEvents={post.special_day_events}
                 isCustomSpecialDay={post.is_custom_special_day}
                 momentSpecialId={post.moment_special_id}
             />
           )}
+          <LinkPreviewCard content={post.content || ''} />
           {/* PostEngagement with share modal handler */}
           <PostEngagement 
             selectedReaction={userReaction}

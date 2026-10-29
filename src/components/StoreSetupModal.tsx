@@ -12,6 +12,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/components/ui/use-toast';
 import { countries } from '@/utils/countries';
+import { getCurrencyByCountry } from '@/utils/currencyByCountry';
 
 interface StoreSetupModalProps {
   onClose: () => void;
@@ -62,16 +63,6 @@ export const StoreSetupModal: React.FC<StoreSetupModalProps> = ({ onClose, onSuc
     'Self Delivery',
     'Other'
   ];
-
-  const getCurrencyByCountry = (countryCode: string) => {
-    const currencyMap: Record<string, string> = {
-      'US': 'USD', 'NG': 'NGN', 'GB': 'GBP', 'CA': 'CAD', 
-      'AU': 'AUD', 'DE': 'EUR', 'FR': 'EUR', 'IT': 'EUR',
-      'ES': 'EUR', 'NL': 'EUR', 'JP': 'JPY', 'CN': 'CNY',
-      'IN': 'INR', 'BR': 'BRL', 'MX': 'MXN', 'ZA': 'ZAR'
-    };
-    return currencyMap[countryCode] || 'USD';
-  };
 
   const handleCountryChange = (countryCode: string) => {
     setFormData(prev => ({

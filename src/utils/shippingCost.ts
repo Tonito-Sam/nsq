@@ -52,12 +52,13 @@ export const calculateShippingCost = async (
   }
 
   // If API rate but no API key, return error
-  if (settings.cost_type === 'api' && !settings.api_key) {
+  const backendManagedPartner = ['courierguy', 'shiplogic'].includes(settings.partner_code);
+  if (settings.cost_type === 'api' && !settings.api_key && !backendManagedPartner) {
     return { cost: null, error: 'API key required for live rates', partner };
   }
 
   // Calculate live rate via API
-  if (settings.cost_type === 'api' && settings.api_key) {
+  if (settings.cost_type === 'api' && (settings.api_key || backendManagedPartner)) {
     return await fetchLiveShippingRate(partner, settings.api_key, collection, delivery, parcel);
   }
 
@@ -75,34 +76,30 @@ const fetchLiveShippingRate = async (
     console.log(`Fetching live rate for ${partner.name}...`, { collection, delivery, parcel });
 
     if (partner.code === 'courierguy' || partner.code === 'shiplogic') {
-      // Ship Logic API for The Courier Guy
-      const response = await fetch('https://api.shiplogic.com/v2/rates', {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Sign in to calculate shipping');
+      const response = await fetch(apiUrl('/api/shipping/courierguy/rates'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          collection: { address: collection },
-          delivery: { address: delivery },
-          parcels: [parcel]
-        })
+          collection,
+          delivery,
+          parcel,
+        }),
       });
 
       if (!response.ok) {
-        throw new Error(`Ship Logic API error: ${response.status}`);
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || `CourierGuy rate error: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('Ship Logic response:', data);
-
-      if (Array.isArray(data) && data.length > 0 && data[0].total) {
-        return { cost: Number(data[0].total), partner };
-      } else if (data.rates && Array.isArray(data.rates) && data.rates.length > 0 && data.rates[0].total) {
-        return { cost: Number(data.rates[0].total), partner };
-      } else {
-        return { cost: null, error: 'No rates found from Ship Logic', partner };
-      }
+      const quote = data.quotes?.[0];
+      if (!quote || !Number.isFinite(Number(quote.amount))) return { cost: null, error: 'No CourierGuy rates found', partner };
+      return { cost: Number(quote.amount), partner: { ...partner, name: quote.service || partner.name } };
     } else if (partner.code === 'fedex') {
       // FedEx sandbox API integration
       const fedexAuth = btoa('l7a5966ad47ff9496688bf25021f88acab:39aef17e89044c76b20077e71c48edaa');
@@ -219,9 +216,9 @@ export const initializeDefaultShippingForStore = async (storeId: string) => {
       .upsert({
         store_id: storeId,
         partner_code: 'courierguy',
-        cost_type: 'flat',
-        flat_rate: 50,  // Default ZAR 50 flat rate
-        api_key: 'sandbox-courierguy-key'  // Default sandbox key for testing
+        cost_type: 'api',
+        flat_rate: 0,
+        api_key: '',
       });
 
     if (error) throw error;
@@ -231,14 +228,13 @@ export const initializeDefaultShippingForStore = async (storeId: string) => {
   }
 };
 
-function isValidShippingSettings(obj: any): obj is { partner_code: string; cost_type: string; flat_rate: number; api_key: string } {
+function isValidShippingSettings(obj: any): obj is { partner_code: string; cost_type: string; flat_rate: number } {
   return (
     obj &&
     typeof obj === 'object' &&
     typeof obj.partner_code === 'string' &&
     typeof obj.cost_type === 'string' &&
-    typeof obj.flat_rate === 'number' &&
-    typeof obj.api_key === 'string'
+    typeof obj.flat_rate === 'number'
   );
 }
 
@@ -247,7 +243,7 @@ export const getShippingSettingsForStore = async (storeId: string): Promise<Ship
     // Get store's shipping settings from store_shipping_settings table
     const { data: storeSettings, error: storeError } = await supabase
       .from('store_shipping_settings')
-      .select('partner_code, cost_type, flat_rate, api_key')
+      .select('partner_code, cost_type, flat_rate')
       .eq('store_id', storeId)
       .single();
 
@@ -258,9 +254,9 @@ export const getShippingSettingsForStore = async (storeId: string): Promise<Ship
       // Return default settings
       return {
         partner_code: 'courierguy',
-        cost_type: 'flat',
-        flat_rate: 50,
-        api_key: 'sandbox-courierguy-key'  // Default sandbox key
+        cost_type: 'api',
+        flat_rate: 0,
+        api_key: '',
       };
     }
     // storeSettings is guaranteed to have the required properties here
@@ -268,7 +264,7 @@ export const getShippingSettingsForStore = async (storeId: string): Promise<Ship
       partner_code: storeSettings.partner_code,
       cost_type: storeSettings.cost_type as 'flat' | 'api',
       flat_rate: storeSettings.flat_rate,
-      api_key: storeSettings.api_key || 'sandbox-api-key'  // Fallback sandbox key
+      api_key: ''
     };
   } catch (error) {
     console.error('Error getting shipping settings:', error);

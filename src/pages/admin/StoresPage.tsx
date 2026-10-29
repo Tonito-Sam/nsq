@@ -757,11 +757,13 @@ const StoresPage = () => {
                   className="gap-2"
                 >
                   {uploadingFiles ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" />Uploading</span>
                   ) : (
-                    <Upload className="h-4 w-4" />
+                    <>
+                      <Upload className="h-4 w-4" />
+                      Upload Files
+                    </>
                   )}
-                  {uploadingFiles ? 'Uploading...' : 'Upload Files'}
                 </Button>
                 <p className="text-xs text-muted-foreground mt-2">
                   Max file size: 50MB • PDF, DOC, Images, ZIP, TXT

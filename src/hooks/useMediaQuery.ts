@@ -11,10 +11,14 @@ export function useMediaQuery(query: string): boolean {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
     const mediaQueryList = window.matchMedia(query);
-    const listener = (event: MediaQueryListEvent) => setMatches(event.matches);
-    mediaQueryList.addEventListener('change', listener);
-    setMatches(mediaQueryList.matches);
-    return () => mediaQueryList.removeEventListener('change', listener);
+    const updateMatches = () => setMatches(mediaQueryList.matches);
+    mediaQueryList.addEventListener('change', updateMatches);
+    window.addEventListener('resize', updateMatches, { passive: true });
+    updateMatches();
+    return () => {
+      mediaQueryList.removeEventListener('change', updateMatches);
+      window.removeEventListener('resize', updateMatches);
+    };
   }, [query]);
 
   return matches;

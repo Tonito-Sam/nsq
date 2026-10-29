@@ -1,6 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
+import apiUrl from '@/lib/api';
 
-export type PaymentGateway = 'paystack' | 'flutterwave' | 'mpesa' | 'applepay' | 'googlepay';
+export type PaymentGateway = 'paystack' | 'payfast' | 'flutterwave' | 'mpesa' | 'applepay' | 'googlepay';
 
 const PAYSTACK_COUNTRIES = [
   'ZA', 'NA', 'BW', 'SZ', 'LS', 'ZW',
@@ -16,25 +17,18 @@ export const getAvailableGateways = (
   _sellerCurrency: string
 ): PaymentGateway[] => {
   const availableGateways: PaymentGateway[] = [];
+  const env = (import.meta as any).env || {};
 
-  if (PAYSTACK_COUNTRIES.includes(buyerCountry)) {
+  if (env.VITE_PAYSTACK_PUBLIC_KEY && PAYSTACK_COUNTRIES.includes(buyerCountry)) {
     availableGateways.push('paystack');
   }
 
-  if (FLUTTERWAVE_CURRENCIES.includes(buyerCurrency)) {
+  if (buyerCountry === 'ZA') {
+    availableGateways.push('payfast');
+  }
+
+  if (env.VITE_FLUTTERWAVE_PUBLIC_KEY && FLUTTERWAVE_CURRENCIES.includes(buyerCurrency)) {
     availableGateways.push('flutterwave');
-  }
-
-  if (['KE', 'TZ', 'UG'].includes(buyerCountry) && ['KES', 'TZS', 'UGX'].includes(buyerCurrency)) {
-    availableGateways.push('mpesa');
-  }
-
-  if (availableGateways.length === 0 || ['US', 'GB', 'CA', 'AU'].includes(buyerCountry)) {
-    availableGateways.push('applepay', 'googlepay');
-  }
-
-  if (availableGateways.length === 0) {
-    availableGateways.push('paystack', 'flutterwave');
   }
 
   return availableGateways;
@@ -49,43 +43,9 @@ interface PaymentInitParams {
   sellerCurrency: string;
   email: string;
   reference: string;
+  accessToken?: string;
   metadata?: Record<string, any>;
 }
-
-// Create order in orders table
-const createOrder = async (payment: any) => {
-  try {
-    console.log('Creating order for payment:', payment);
-    
-    const orderData = {
-      user_id: payment.metadata.user_id,
-      store_id: payment.metadata.cart_items?.[0]?.product?.store_id || 'demo-store',
-      total_amount: payment.amount,
-      currency: payment.currency,
-      status: 'pending',
-      payment_method: payment.gateway,
-      payment_reference: payment.reference,
-      shipping_address: JSON.stringify(payment.metadata.shipping_info),
-    };
-
-    const { data, error } = await supabase
-      .from('orders')
-      .insert(orderData)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Error creating order:', error);
-      return { data: null, error };
-    }
-
-    console.log('Order created successfully:', data);
-    return { data, error: null };
-  } catch (error) {
-    console.error('Error creating order:', error);
-    return { data: null, error };
-  }
-};
 
 // Update order status after payment
 const updateOrderStatus = async (orderId: string, status: string, paymentReference: string) => {
@@ -136,12 +96,13 @@ export const initializePayment = async (
   params: PaymentInitParams
 ) => {
   try {
-    console.log('Initializing payment:', { gateway, params });
+    console.log('Initializing payment:', { gateway, amount: params.amount, currency: params.currency, reference: params.reference });
     const payment = {
       amount: params.amount,
       currency: params.currency,
       gateway,
       reference: params.reference,
+      accessToken: params.accessToken,
       buyer_country: params.buyerCountry,
       buyer_currency: params.buyerCurrency,
       seller_country: params.sellerCountry,
@@ -156,6 +117,8 @@ export const initializePayment = async (
     switch (gateway) {
       case 'paystack':
         return await initiatePaystackPayment(payment);
+      case 'payfast':
+        return await initiatePayfastPayment(payment);
       case 'flutterwave':
         return await initiateFlutterwavePayment(payment);
       case 'mpesa':
@@ -171,6 +134,51 @@ export const initializePayment = async (
     console.error('Payment initialization error:', error);
     throw error;
   }
+};
+
+const initiatePayfastPayment = async (payment: any) => {
+  if (!payment.accessToken) throw new Error('Please sign in again before paying with PayFast');
+
+  const params = new URLSearchParams(window.location.search);
+  params.set('payfast', 'return');
+  params.set('ref', payment.reference);
+  const returnUrl = `${window.location.origin}/checkout?${params.toString()}`;
+  const cancelParams = new URLSearchParams({ payfast: 'cancelled', ref: payment.reference });
+  const cancelUrl = `${window.location.origin}/checkout?${cancelParams.toString()}`;
+  const response = await fetch(apiUrl('/api/payments/payfast/init'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${payment.accessToken}`,
+    },
+    body: JSON.stringify({
+      amount: payment.amount,
+      currency: payment.currency,
+      email: payment.metadata.email,
+      reference: payment.reference,
+      metadata: payment.metadata,
+      accessToken: payment.accessToken,
+      returnUrl,
+      cancelUrl,
+      notifyUrl: new URL(apiUrl('/api/payments/payfast/itn'), window.location.origin).toString(),
+    }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'Could not start PayFast checkout');
+
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = result.action;
+  Object.entries(result.fields || {}).forEach(([name, value]) => {
+    if (value === undefined || value === null || value === '') return;
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.value = String(value);
+    form.appendChild(input);
+  });
+  document.body.appendChild(form);
+  form.submit();
 };
 
 const loadScript = (src: string): Promise<void> => {
@@ -199,7 +207,8 @@ const getErrorMessage = (err: unknown): string => {
 };
 
 const initiatePaystackPayment = async (payment: any) => {
-  const publicKey = 'pk_test_3938f9ab976e2169387773568933a96aba7d1e7c';
+  const publicKey = (import.meta as any).env?.VITE_PAYSTACK_PUBLIC_KEY;
+  if (!publicKey) throw new Error('Paystack is not configured');
   await loadScript('https://js.paystack.co/v1/inline.js');
 
   const config = {
@@ -214,12 +223,16 @@ const initiatePaystackPayment = async (payment: any) => {
     })(),
     currency: payment.currency,
     ref: payment.reference,
-    metadata: payment.metadata,
+    metadata: {
+      ...payment.metadata,
+      expected_amount: payment.amount,
+      expected_currency: payment.currency,
+    },
     callback: (response: any) => {
       (async () => {
         try {
           console.log('Paystack payment successful:', response);
-          const verification = await verifyPayment(response.reference);
+          const verification = await verifyPayment(response.reference, 'paystack', payment.amount, payment.currency, payment);
           if (isWalletTopup(response.reference)) {
             // WALLET TOP-UP FLOW
             if (verification.status === 'success') {
@@ -231,14 +244,14 @@ const initiatePaystackPayment = async (payment: any) => {
           }
           // STORE ORDER FLOW
           if (verification.status === 'success') {
-            const { data: order, error: orderError } = await createOrder(payment);
-            if (orderError) {
-              alert('Order creation failed: ' + getErrorMessage(orderError));
+            const orderId = verification.order_ids?.[0];
+            if (!orderId) {
+              alert('Payment was verified, but the order could not be created. Please contact support with your payment reference.');
               window.location.href = `/order-summary?status=failed&ref=${response.reference}`;
               return;
             }
             await clearCart(payment.metadata.user_id);
-            window.location.href = `/order-summary/${order.id}?status=paid`;
+            window.location.href = `/order-summary/${orderId}?status=paid`;
           } else {
             window.location.href = `/order-summary?status=failed&ref=${response.reference}`;
           }
@@ -270,7 +283,8 @@ const initiatePaystackPayment = async (payment: any) => {
 };
 
 const initiateFlutterwavePayment = async (payment: any) => {
-  const publicKey = 'FLWPUBK_TEST-f0f544d73230c7ef7cc67ffdcd0aa5d0-X';
+  const publicKey = (import.meta as any).env?.VITE_FLUTTERWAVE_PUBLIC_KEY;
+  if (!publicKey) throw new Error('Flutterwave is not configured');
   await loadScript('https://checkout.flutterwave.com/v3.js');
 
   const config = {
@@ -294,7 +308,7 @@ const initiateFlutterwavePayment = async (payment: any) => {
       (async () => {
         try {
           console.log('Flutterwave payment successful:', response);
-          const verification = await verifyPayment(response.transaction_id);
+          const verification = await verifyPayment(response.transaction_id, 'flutterwave', payment.amount, payment.currency, payment);
           if (isWalletTopup(payment.reference)) {
             // WALLET TOP-UP FLOW
             if (verification.status === 'success') {
@@ -306,14 +320,14 @@ const initiateFlutterwavePayment = async (payment: any) => {
           }
           // STORE ORDER FLOW
           if (verification.status === 'success') {
-            const { data: order, error: orderError } = await createOrder(payment);
-            if (orderError) {
-              alert('Order creation failed: ' + getErrorMessage(orderError));
+            const orderId = verification.order_ids?.[0];
+            if (!orderId) {
+              alert('Payment was verified, but the order could not be created. Please contact support with your payment reference.');
               window.location.href = `/order-summary?status=failed&ref=${response.transaction_id}`;
               return;
             }
             await clearCart(payment.metadata.user_id);
-            window.location.href = `/order-summary/${order.id}?status=paid`;
+            window.location.href = `/order-summary/${orderId}?status=paid`;
           } else {
             window.location.href = `/order-summary?status=failed&ref=${response.transaction_id}`;
           }
@@ -343,7 +357,7 @@ const initiateMpesaPayment = async (payment: any) => {
   alert(`M-Pesa STK Push sent to your phone for ${payment.currency} ${payment.amount}. Check your phone and enter your PIN.`);
   
   setTimeout(async () => {
-    const verification = await verifyPayment(payment.reference);
+    const verification = await verifyPayment(payment.reference, payment.gateway, payment.amount, payment.currency);
     
     // Update order status
     await updateOrderStatus(
@@ -391,7 +405,7 @@ const initiateApplePayPayment = async (payment: any) => {
       console.log('Apple Pay payment authorized:', event);
       
       try {
-        const verification = await verifyPayment(payment.reference);
+        const verification = await verifyPayment(payment.reference, payment.gateway, payment.amount, payment.currency);
         
         // Update order status
         await updateOrderStatus(
@@ -491,7 +505,7 @@ const initiateGooglePayPayment = async (payment: any) => {
     const paymentData = await paymentsClient.loadPaymentData(paymentDataRequest);
     console.log('Google Pay payment successful:', paymentData);
     
-    const verification = await verifyPayment(payment.reference);
+    const verification = await verifyPayment(payment.reference, payment.gateway, payment.amount, payment.currency);
     
     // Update order status
     await updateOrderStatus(
@@ -517,26 +531,30 @@ const initiateGooglePayPayment = async (payment: any) => {
   };
 };
 
-export const verifyPayment = async (reference: string) => {
-  try {
-    console.log('Verifying payment:', reference);
-    
-    // For demo purposes, return success
-    const verification = {
-      status: 'success',
-      reference: reference,
-      message: 'Payment verified successfully'
-    };
+export const verifyPayment = async (
+  reference: string,
+  gateway: PaymentGateway,
+  amount: number,
+  currency: string,
+  payment?: any
+) => {
+  const response = await fetch(apiUrl('/api/payments/verify'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      reference,
+      gateway,
+      amount,
+      currency,
+      metadata: payment?.metadata,
+      accessToken: payment?.accessToken,
+    }),
+  });
+  const result = await response.json().catch(() => ({}));
 
-    console.log('Payment verification result:', verification);
-    return verification;
-  } catch (error) {
-    console.error('Payment verification error:', error);
-    return {
-      status: 'failed',
-      reference: reference,
-      message: 'Payment verification failed',
-      error: error
-    };
+  if (!response.ok) {
+    throw new Error(result.error || 'Payment verification failed');
   }
+
+  return result;
 };

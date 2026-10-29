@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
-import { Search, ChevronDown, X, Video, Grid3x3, Flame, Loader2 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Search, ChevronDown, X, Video, Grid3x3, Flame, Upload, Tv } from 'lucide-react';
+import { ProfileDropdown } from '@/components/header/ProfileDropdown';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/hooks/useAuth';
 
 interface StudioHeaderProps {
   categories: { name: string; icon: React.ElementType }[];
@@ -9,6 +12,10 @@ interface StudioHeaderProps {
   activeTab: 'all' | 'trending';
   setActiveTab: (tab: 'all' | 'trending') => void;
   navigate: (path: string) => void;
+  onSearch: (query: string, type: 'all' | 'creators' | 'channels' | 'videos') => void;
+  showCreateChannel?: boolean;
+  onCreateChannel?: () => void;
+  className?: string;
 }
 
 const StudioHeader: React.FC<StudioHeaderProps> = ({ 
@@ -17,59 +24,74 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
   setSelectedCategory, 
   activeTab, 
   setActiveTab,
-  navigate 
+  navigate,
+  onSearch,
+  showCreateChannel = false,
+  onCreateChannel,
+  className,
 }) => {
   const [showCategoriesDropdown, setShowCategoriesDropdown] = useState(false);
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchLoading, setSearchLoading] = useState(false);
   const [searchType, setSearchType] = useState<'all' | 'creators' | 'channels' | 'videos'>('all');
-  const routerNavigate = useNavigate();
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
+  const [approvedShowId, setApprovedShowId] = useState<string | null>(null);
+  const { user } = useAuth();
 
-  const handleSearch = async (e: React.FormEvent) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchProfileAvatar = async () => {
+      setProfileAvatarUrl('');
+      if (!user) return;
+
+      const { data } = await supabase
+        .from('users')
+        .select('avatar_url')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (!cancelled) setProfileAvatarUrl(data?.avatar_url || '');
+    };
+
+    void fetchProfileAvatar();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchApprovedShow = async () => {
+      setApprovedShowId(null);
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('studio_show_applications' as any)
+        .select('approved_show_id')
+        .eq('applicant_id', user.id)
+        .eq('status', 'approved')
+        .not('approved_show_id', 'is', null)
+        .order('reviewed_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!cancelled && !error) setApprovedShowId(data?.approved_show_id || null);
+    };
+
+    void fetchApprovedShow();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!searchQuery.trim()) return;
-    
-    setSearchLoading(true);
-    
-    try {
-      console.log('Searching for:', searchQuery, 'type:', searchType);
-      
-      // Navigate to search results page with query parameters
-      const searchParams = new URLSearchParams({
-        q: searchQuery.trim(),
-        type: searchType
-      }).toString();
-      
-      // You can navigate to a dedicated search page or filter the current page
-      // Option 1: Navigate to search results page
-      // navigate(`/studio/search?${searchParams}`);
-      
-      // Option 2: Reload current page with search filter (if you want to search within current videos)
-      // This depends on your implementation
-      
-      // For now, let's just log and close modal
-      console.log('Redirecting to search with:', searchQuery);
-      
-      // Wait a bit to show loading state
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Close modal
-      setShowSearchModal(false);
-      setSearchQuery('');
-      
-      // Here you would typically implement the actual search
-      // For example, if you have a search API endpoint:
-      // const response = await fetch(`/api/search?q=${encodeURIComponent(searchQuery)}&type=${searchType}`);
-      // const results = await response.json();
-      // Then display results...
-      
-    } catch (error) {
-      console.error('Search error:', error);
-    } finally {
-      setSearchLoading(false);
-    }
+    const query = searchQuery.trim();
+    if (!query) return;
+    onSearch(query, searchType);
+    setShowSearchModal(false);
   };
 
   const handleClearSearch = () => {
@@ -97,13 +119,12 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
   };
 
   return (
-    <div className="pointer-events-auto relative">
+    <div className={`pointer-events-auto relative ${className ?? ''}`}>
       {/* Search Modal Overlay - Fixed position with very high z-index */}
-      {showSearchModal && (
+      {showSearchModal && createPortal(
         <div 
           className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={(e) => {
-            // Close when clicking outside modal
             if (e.target === e.currentTarget) {
               setShowSearchModal(false);
             }
@@ -118,7 +139,6 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
               <button
                 onClick={() => setShowSearchModal(false)}
                 className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                disabled={searchLoading}
               >
                 <X className="w-5 h-5 text-gray-500" />
               </button>
@@ -157,9 +177,8 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
                   }
                   autoFocus
                   className="w-full pl-12 pr-10 py-3 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none text-gray-900 dark:text-white disabled:opacity-50"
-                  disabled={searchLoading}
                 />
-                {searchQuery && !searchLoading && (
+                {searchQuery && (
                   <button
                     type="button"
                     onClick={handleClearSearch}
@@ -167,11 +186,6 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
                   >
                     <X className="w-4 h-4" />
                   </button>
-                )}
-                {searchLoading && (
-                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-                    <Loader2 className="w-4 h-4 text-purple-600 animate-spin" />
-                  </div>
                 )}
               </div>
               
@@ -194,17 +208,10 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
               
               <button
                 type="submit"
-                disabled={!searchQuery.trim() || searchLoading}
+                disabled={!searchQuery.trim()}
                 className="w-full py-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-semibold rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                {searchLoading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Searching...
-                  </>
-                ) : (
-                  'Search'
-                )}
+                Search
               </button>
               
               {/* Tips */}
@@ -213,7 +220,8 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Main Header - Transparent with high but lower z-index */}
@@ -224,13 +232,18 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
         <div className="max-w-7xl mx-auto">
           {/* First Row: Logo + Brand + Dropdown */}
           <div className="flex items-center justify-between mb-3">
-            {/* Left: Favicon */}
+            {/* Mobile icon; full brand logo on tablets and desktop */}
             <button 
               onClick={() => navigate('/')} 
               className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity z-[110] relative"
               aria-label="Home"
             >
-              <img src="/favicon.ico" alt="Home" className="h-7 w-7 rounded-md" />
+              <img src="/favicon.ico" alt="NexSq" className="h-7 w-7 rounded-md md:hidden" />
+              <img
+                src="/uploads/3a993d3c-2671-42a3-9e99-587f4e3a7462.png"
+                alt="NexSq"
+                className="hidden h-8 w-auto max-w-[150px] object-contain md:block"
+              />
             </button>
 
             {/* Middle: Brand */}
@@ -242,18 +255,64 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
               </span>
             </div>
 
-            {/* Right: Dropdown Icon */}
-            <button
-              onClick={() => setShowCategoriesDropdown(!showCategoriesDropdown)}
-              className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-white/10 transition-colors z-[110] relative"
-              aria-label="Categories"
-            >
-              <ChevronDown className="w-5 h-5 text-gray-700 dark:text-white" />
-            </button>
+            <div className="flex items-center gap-1 z-[110] relative">
+              <button
+                type="button"
+                onClick={() => navigate('/studio/upload')}
+                className="hidden lg:inline-flex h-9 w-9 items-center justify-center rounded-full hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                aria-label="Upload a reel"
+                title="Upload a reel"
+              >
+                <Upload className="w-4 h-4 text-gray-700 dark:text-white" />
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/studio/record?duration=90')}
+                className="hidden lg:inline-flex h-9 w-9 items-center justify-center rounded-full hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                aria-label="Record a reel"
+                title="Record a reel"
+              >
+                <Video className="w-4 h-4 text-gray-700 dark:text-white" />
+              </button>
+              {approvedShowId && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/tv/${approvedShowId}`)}
+                  className="hidden lg:inline-flex h-9 w-9 items-center justify-center rounded-full text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-white/10 transition-colors"
+                  aria-label="Open your approved TV show"
+                  title="Open your approved TV show"
+                >
+                  <Tv className="w-4 h-4" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSearchModal(true);
+                  setSearchQuery('');
+                  setSearchType('all');
+                }}
+                className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                aria-label="Search"
+                title="Search Studio"
+              >
+                <Search className="w-5 h-5 text-gray-700 dark:text-white" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCategoriesDropdown(!showCategoriesDropdown)}
+                className="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-white/10 transition-colors"
+                aria-label="Categories"
+                title="Categories"
+              >
+                <ChevronDown className="w-5 h-5 text-gray-700 dark:text-white" />
+              </button>
+              <ProfileDropdown profileAvatarUrl={profileAvatarUrl} />
+            </div>
           </div>
 
           {/* Second Row: Tabs - Clean underline style */}
-          <div className="flex items-center justify-center mb-1 relative z-[110]">
+          <div className="flex items-center justify-between gap-2 mb-1 relative z-[110]">
             <div className="flex items-center gap-6">
               <button
                 onClick={() => setActiveTab('all')}
@@ -299,23 +358,17 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
                 }`} />
               </button>
             </div>
+            {showCreateChannel && (
+              <button
+                type="button"
+                onClick={onCreateChannel}
+                className="shrink-0 rounded-md bg-purple-700 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-purple-800"
+              >
+                Create Channel
+              </button>
+            )}
           </div>
 
-          {/* Third Row: Search Icon - At the far right */}
-          <div className="flex justify-end -mt-8">
-              <button
-              onClick={() => {
-                console.log('Search button clicked');
-                setShowSearchModal(true);
-                setSearchQuery('');
-                setSearchType('all');
-              }}
-              className="p-1.5 rounded-full hover:bg-white/10 transition-colors z-[110] relative"
-              aria-label="Search"
-            >
-              <Search className="w-5 h-5 text-gray-700 dark:text-white" />
-            </button>
-          </div>
         </div>
 
         {/* Categories Dropdown */}

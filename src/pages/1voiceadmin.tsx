@@ -7,7 +7,7 @@ export default function OneVoiceAdmin() {
   const { privilege, loading } = useUserPrivilege();
   const [tab, setTab] = useState('users');
 
-  if (loading) return <div className="p-6 text-gray-500">Loading...</div>;
+  if (loading) return (<div className="p-6"><SkeletonLine width="40%" /></div>);
   if (privilege !== 'admin')
     return <div className="p-6 text-red-600 font-bold">Access denied. Admins only.</div>;
 

@@ -98,6 +98,7 @@ const Cart = () => {
       }
 
       let fetchedItems: any[] = [];
+      setStoreShipping({});
       if (error) {
         console.error('[Cart] initial cart fetch error', error);
         // Attempt fallback: fetch simple cart rows then fetch products separately
@@ -135,7 +136,7 @@ const Cart = () => {
         const sp = (item as any).store_products;
         return Array.isArray(sp) ? sp[0]?.store_id : sp?.store_id;
       }).filter(Boolean))) as string[];
-      await calculateShippingForStores(uniqueStoreIds);
+      await calculateShippingForStores(uniqueStoreIds, fetchedItems as CartItem[]);
 
     } catch (error) {
       console.error('Error fetching cart:', error);
@@ -155,11 +156,11 @@ const Cart = () => {
     }
   };
 
-  const calculateShippingForStores = async (storeIds: string[]) => {
+  const calculateShippingForStores = async (storeIds: string[], items: CartItem[]) => {
     // helper: a store only needs shipping if it has at least one physical product
     // treat anything that includes 'digital' or 'download' as non-physical (consistent with Checkout.tsx)
     const isStoreHasPhysical = (storeId: string) => {
-      return cartItems.some(item => {
+      return items.some(item => {
         const sp = (item as any).store_products;
         const prod = Array.isArray(sp) ? sp[0] : sp;
         const sid = prod?.store_id;
@@ -263,14 +264,19 @@ const Cart = () => {
   };
 
   const getTotalShipping = () => {
-    return Object.values(storeShipping).reduce((sum, shipping) => {
-      return sum + (shipping.cost || 0);
+    const currentStoreIds = new Set(cartItems.map(item => {
+      const product = Array.isArray(item.store_products) ? item.store_products[0] : item.store_products;
+      return product?.store_id;
+    }).filter(Boolean));
+
+    return Object.entries(storeShipping).reduce((sum, [storeId, shipping]) => {
+      return currentStoreIds.has(storeId) ? sum + (shipping.cost || 0) : sum;
     }, 0);
   };
 
   const getServiceFee = () => {
     const subtotal = getSubtotal();
-    return Number((subtotal * 0.005).toFixed(2));
+    return Number((subtotal * 0.02).toFixed(2));
   };
 
   const getTotal = () => {
@@ -442,7 +448,7 @@ const Cart = () => {
                 <div className="flex items-center justify-between">
                   <span className="flex items-center gap-2">
                     <Percent className="h-4 w-4 text-purple-700" /> 
-                    Service Fee (0.5%)
+                    Service Fee (2%)
                   </span>
                   <span className="font-medium">ZAR {getServiceFee().toLocaleString()}</span>
                 </div>

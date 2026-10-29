@@ -11,6 +11,7 @@ import RouteTracker from '@/components/RouteTracker';
 
 // Pages
 import Index from "./pages/Index";
+import CatchUp from "./pages/CatchUp";
 import Auth from "./pages/Auth";
 import Profile from "./pages/Profile";
 import EditProfile from "./pages/EditProfile";
@@ -61,6 +62,7 @@ import RecordVideo from "./pages/RecordVideo";
 import ShareTarget from "./pages/ShareTarget";
 import LiveStream from "./pages/LiveStream2";
 import StudioSettings from "./pages/StudioSettings";
+import StudioShowPage from "./pages/StudioShowPage";
 import ForgotPassword from "./pages/ForgotPassword";
 import GroupDetails from "./pages/groups/[groupId]";
 import StorePage from "./pages/store/[store_id]";
@@ -77,6 +79,8 @@ import StoresPage from './pages/admin/StoresPage';
 import ReportsPage from './pages/admin/ReportsPage';
 import WithdrawalsPage from './pages/admin/WithdrawalsPage';
 import TransfersPage from './pages/admin/TransfersPage';
+import IdentityReviewsPage from './pages/admin/IdentityReviewsPage';
+import StorePayoutReviewsPage from './pages/admin/StorePayoutReviewsPage';
 import TicketsPage from './pages/admin/TicketsPage';
 import AnnouncementsPage from './pages/admin/AnnouncementsPage';
 import RevenuePage from './pages/admin/RevenuePage';
@@ -237,6 +241,7 @@ const App = () => {
                     
                     {/* Protected Routes */}
                     <Route path="/" element={<Index />} />
+                    <Route path="/catch-up" element={<CatchUp />} />
                     {/* Dynamic profile route for other users */}
                     <Route path="/profile/:username" element={<Profile />} />
                     <Route path="/profile" element={<Profile />} />
@@ -249,6 +254,7 @@ const App = () => {
                     <Route path="/studio/record" element={<RecordReel />} />
                     <Route path="/studio/record-preview" element={<RecordVideo />} />
                     <Route path="/studio/settings" element={<StudioSettings />} />
+                    <Route path="/tv/:showId" element={<StudioShowPage />} />
                     <Route path="/share" element={<ShareTarget />} />
                     <Route path="/wallet" element={<Wallet />} />
                     <Route path="/wallet/topup-result" element={<WalletTopupResult />} />
@@ -266,6 +272,7 @@ const App = () => {
                     <Route path="/reel/:reelId" element={<ReelViewPage />} />
                     <Route path="/post/:postId" element={<PostViewPage />} />
                     <Route path="/messages" element={<Messages />} />
+                    <Route path="/messages/:conversationId" element={<Messages />} />
                     <Route path="/notifications" element={<Notifications />} />
                     <Route path="/groups" element={<Groups />} />
                     <Route path="/groups/:groupId" element={<GroupDetails />} />
@@ -297,6 +304,8 @@ const App = () => {
                       <Route path="reports" element={<ReportsPage />} />
                       <Route path="withdrawals" element={<WithdrawalsPage />} />
                       <Route path="transfers" element={<TransfersPage />} />
+                      <Route path="identity-reviews" element={<IdentityReviewsPage />} />
+                      <Route path="store-payouts" element={<StorePayoutReviewsPage />} />
                       <Route path="tickets" element={<TicketsPage />} />
                       <Route path="announcements" element={<AnnouncementsPage />} />
                       <Route path="revenue" element={<RevenuePage />} />

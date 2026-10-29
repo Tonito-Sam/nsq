@@ -1,12 +1,15 @@
 import type { Config } from "tailwindcss";
+import animate from "tailwindcss-animate";
 
 export default {
 	darkMode: ["class"],
 	content: [
-		"./pages/**/*.{ts,tsx}",
-		"./components/**/*.{ts,tsx}",
-		"./app/**/*.{ts,tsx}",
-		"./src/**/*.{ts,tsx}",
+		"./index.html",
+		"./pages/**/*.{js,ts,jsx,tsx,html}",
+		"./components/**/*.{js,ts,jsx,tsx,html}",
+		"./app/**/*.{js,ts,jsx,tsx,html}",
+		"./src/**/*.{js,ts,jsx,tsx,html}",
+		"!./src/**/node_modules/**",
 	],
 	prefix: "",
 	theme: {
@@ -84,15 +87,26 @@ export default {
 					to: {
 						height: '0'
 					}
+				},
+				'fade-slide-in': {
+					'0%': {
+						opacity: '0',
+						transform: 'translateY(16px) scale(0.98)'
+					},
+					'100%': {
+						opacity: '1',
+						transform: 'translateY(0) scale(1)'
+					}
 				}
 			},
 			animation: {
 				'accordion-down': 'accordion-down 0.2s ease-out',
-				'accordion-up': 'accordion-up 0.2s ease-out'
+				'accordion-up': 'accordion-up 0.2s ease-out',
+				'fade-slide-in': 'fade-slide-in 0.7s ease-out'
 			}
 		}
 	},
-	plugins: [require("tailwindcss-animate")],
+	plugins: [animate],
 } satisfies Config;
 
 

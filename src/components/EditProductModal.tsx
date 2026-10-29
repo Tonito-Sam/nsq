@@ -19,6 +19,9 @@ interface Product {
   files: string[];
   is_active: boolean;
   is_on_sale?: boolean;
+  sale_price?: number | null;
+  sale_starts?: string | null;
+  sale_ends?: string | null;
   is_deals_of_day?: boolean;
   created_at: string;
   store_id: string;
@@ -66,12 +69,12 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     setForm(prev => {
       if (!prev) return prev;
       
-      if (name === 'price') {
+      if (name === 'price' || name === 'sale_price') {
         // Handle price conversion safely
-        const numericValue = value === '' ? 0 : parseFloat(value);
+        const numericValue = value === '' ? null : parseFloat(value);
         return { 
           ...prev, 
-          [name]: isNaN(numericValue) ? 0 : numericValue 
+          [name]: numericValue === null ? null : (isNaN(numericValue) ? 0 : numericValue)
         };
       } else {
         return { ...prev, [name]: value };
@@ -97,6 +100,10 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     
     if (form && (form.price < 0 || isNaN(form.price))) {
       newErrors.price = 'Price must be a valid number';
+    }
+
+    if (form?.is_on_sale && (!form.sale_price || form.sale_price <= 0 || form.sale_price >= form.price)) {
+      newErrors.sale_price = 'Sale price must be greater than zero and lower than the regular price';
     }
     
     setErrors(newErrors);
@@ -208,6 +215,47 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               <Switch checked={!!form.is_deals_of_day} onCheckedChange={(val) => setForm(prev => prev ? ({ ...prev, is_deals_of_day: !!val }) : prev)} />
             </div>
           </div>
+
+          {form.is_on_sale && (
+            <div className="space-y-3 rounded-md border p-4">
+              <div className="space-y-2">
+                <Label htmlFor="sale_price">Sale Price</Label>
+                <Input
+                  id="sale_price"
+                  name="sale_price"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={form.sale_price ?? ''}
+                  onChange={handleChange}
+                  className={errors.sale_price ? 'border-red-500' : ''}
+                />
+                {errors.sale_price && <p className="text-sm text-red-500">{errors.sale_price}</p>}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="sale_starts">Sale Starts (Optional)</Label>
+                  <Input
+                    id="sale_starts"
+                    name="sale_starts"
+                    type="datetime-local"
+                    value={form.sale_starts?.slice(0, 16) || ''}
+                    onChange={handleChange}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sale_ends">Sale Ends (Optional)</Label>
+                  <Input
+                    id="sale_ends"
+                    name="sale_ends"
+                    type="datetime-local"
+                    value={form.sale_ends?.slice(0, 16) || ''}
+                    onChange={handleChange}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Diagnostic: owner and last-updated (read-only) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">

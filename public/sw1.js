@@ -21,7 +21,26 @@ self.addEventListener('activate', function(event) {
   );
 });
 self.addEventListener('fetch', function(event) {
+  const url = event.request.url;
+  const shouldSkipDevRequest = url.includes('@vite/client') ||
+                               url.includes('@react-refresh') ||
+                               url.includes('/src/') ||
+                               url.includes('/favicon') ||
+                               url.includes('/@vite');
+
+  if (shouldSkipDevRequest) {
+    return;
+  }
+
   event.respondWith(
-    caches.match(event.request).then(function(cached) { return cached || fetch(event.request); })
+    caches.match(event.request).then(function(cached) {
+      if (cached) {
+        return cached;
+      }
+      return fetch(event.request).catch(function(err) {
+        console.warn('SW fetch failed for', event.request.url, err);
+        return caches.match('/index.html') || Promise.reject(err);
+      });
+    })
   );
 });

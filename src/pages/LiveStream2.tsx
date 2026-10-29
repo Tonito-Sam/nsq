@@ -577,7 +577,11 @@ const LiveStream = () => {
                     <AvatarFallback>{userData?.username?.[0]?.toUpperCase() || '?'}</AvatarFallback>
                   )}
                 </Avatar>
-                <span className="text-white font-semibold text-sm">{userData?.username || 'Loading...'}</span>
+                {userData?.username ? (
+                  <span className="text-white font-semibold text-sm">{userData.username}</span>
+                ) : (
+                  <span className="inline-block align-middle"><svg className="animate-pulse h-4 w-24 bg-gray-200 dark:bg-gray-800 rounded" /></span>
+                )}
               </div>
 
               {/* Channel Badge */}

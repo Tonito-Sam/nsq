@@ -309,10 +309,8 @@ const SoundBankManager: React.FC = () => {
                     className="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium"
                   >
                     {uploading ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Uploading...
-                      </>
-                    ) : (
+                        <span className="inline-flex items-center gap-2"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Uploading</span>
+                      ) : (
                       <>
                         <Upload className="mr-2 h-4 w-4" /> Upload to Storage
                       </>

@@ -7,14 +7,17 @@ import { RightSidebar } from './RightSidebar';
 import { MobileNav } from './MobileNav';
 import { MobileBottomNav } from './MobileBottomNav';
 import { useAuth } from '@/hooks/useAuth';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
+import SkeletonCard from '@/components/skeletons/SkeletonCard';
 
 interface LayoutProps {
   children: React.ReactNode;
   hideSidebar?: boolean;
   hideRightSidebar?: boolean;
+  embedded?: boolean;
 }
 
-export const Layout: React.FC<LayoutProps> = ({ children, hideSidebar = false, hideRightSidebar = false }) => {
+export const Layout: React.FC<LayoutProps> = ({ children, hideSidebar = false, hideRightSidebar = false, embedded = false }) => {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -35,8 +38,14 @@ export const Layout: React.FC<LayoutProps> = ({ children, hideSidebar = false, h
   // Show loading state while checking auth
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-black flex items-center justify-center">
-        <div className="text-gray-500 dark:text-gray-400">Loading...</div>
+      <div className="min-h-screen bg-gray-50 dark:bg-black flex items-center justify-center p-6">
+        <div className="w-full max-w-4xl">
+          <div className="flex items-center gap-4 mb-4">
+            <SkeletonLine width="20%" />
+            <SkeletonLine width="30%" />
+          </div>
+          <SkeletonCard />
+        </div>
       </div>
     );
   }
@@ -44,6 +53,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, hideSidebar = false, h
   // Don't render anything if no user (will redirect)
   if (!user) {
     return null;
+  }
+
+  if (embedded) {
+    return <div className="w-full min-w-0">{children}</div>;
   }
 
   return (

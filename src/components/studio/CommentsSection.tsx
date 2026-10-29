@@ -2,6 +2,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Input } from '@/components/ui/input';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
+import SkeletonCard from '@/components/skeletons/SkeletonCard';
 import { 
   Send, 
   MessageCircle, 
@@ -88,7 +90,6 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
 }) => {
   const { user } = useAuth();
   const currentUser: any = user || (userData && (userData.user || userData));
-  if (!show) return null;
   
   const [comments, setComments] = useState<Comment[]>(initialComments);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -103,7 +104,6 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
   const openerRef = useRef<HTMLButtonElement | null>(null);
   const replyInputRef = useRef<HTMLInputElement>(null);
   const mainInputRef = useRef<HTMLInputElement>(null);
-  const lastPostedTextRef = useRef<string | null>(null);
   const [pickerPos, setPickerPos] = useState<{ left: number; top: number } | null>(null);
   const commentsContainerRef = useRef<HTMLDivElement>(null);
   
@@ -582,7 +582,6 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
   // Handle main comment submission with Enter key
   const postCommentLocal = () => {
     if (!newComment.trim() || posting) return;
-    lastPostedTextRef.current = newComment.trim();
     handlePostComment();
   };
 
@@ -593,31 +592,7 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
     }
   };
 
-  // After posting completes, if we captured a lastPostedText, append an optimistic comment
-  useEffect(() => {
-    if (!posting && lastPostedTextRef.current) {
-      const text = lastPostedTextRef.current;
-      lastPostedTextRef.current = null;
-      const tempComment: Comment = {
-        id: `temp-${Date.now()}`,
-        user_id: currentUser?.id || '',
-        user: normalizeUser(currentUser),
-        comment: text,
-        created_at: new Date().toISOString(),
-        likes_count: 0,
-        is_liked: false,
-        replies_count: 0,
-        replies: []
-      };
-      setComments(prev => [...prev, tempComment]);
-      // Scroll to bottom after adding
-      setTimeout(() => {
-        if (commentsContainerRef.current) {
-          commentsContainerRef.current.scrollTop = commentsContainerRef.current.scrollHeight;
-        }
-      }, 50);
-    }
-  }, [posting]);
+  if (!show) return null;
 
   return (
     <div
@@ -779,12 +754,18 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
         </div>
 
         {/* Comments Area - Now below the input */}
-        <div 
+        <div
           ref={commentsContainerRef}
-          className="flex-1 overflow-y-auto px-4 pb-20 scrollbar-thin" // Added pb-20 for extra padding at bottom
+          className="min-h-0 flex-1 overflow-y-auto px-4 pb-20 scrollbar-thin"
         >
           {commentLoading ? (
-            <div className="text-gray-500 dark:text-gray-400 text-center py-4">Loading...</div>
+            <div className="py-4">
+              <SkeletonLine width="30%" className="mx-auto" />
+              <div className="mt-3 space-y-3">
+                <SkeletonCard />
+                <SkeletonCard />
+              </div>
+            </div>
           ) : comments.length === 0 ? (
             <div className="text-gray-500 dark:text-gray-400 text-center py-4">
               {user || userData ? 'No comments yet. Be the first to comment!' : 'No comments yet.'}
@@ -792,7 +773,11 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
           ) : (
             <div className="space-y-4 pt-2 pb-4">
               {comments.map((comment) => {
-                const cUser = normalizeUser(comment.user);
+                const ownProfile = userData?.user || userData;
+                const commentProfile = !comment.user && ownProfile?.id && String(comment.user_id) === String(ownProfile.id)
+                  ? ownProfile
+                  : comment.user;
+                const cUser = normalizeUser(commentProfile);
                 return (
                 <div key={comment.id} className="space-y-2">
                   {/* Main Comment */}

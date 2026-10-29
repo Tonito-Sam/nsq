@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
-import { Camera, CameraOff, Play, X, Maximize2, Minimize2, FlipHorizontal2, Share2, Upload } from 'lucide-react';
+import { Camera, CameraOff, Play, X, Maximize2, Minimize2, FlipHorizontal2, Share2, Upload, Sparkles } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowLeft } from 'lucide-react';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
@@ -18,6 +18,7 @@ import {
   cleanupVideoURL,
   isSafariOrIOS 
 } from '@/utils/safariVideoUtils';
+import { insertSharedFeedPost, insertVideoMoment } from '@/lib/feedShare';
 
 const RecordVideo = () => {
   // Category list from Studio.tsx header
@@ -48,6 +49,7 @@ const RecordVideo = () => {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [shareToFeed, setShareToFeed] = useState(false);
+  const [shareToMoment, setShareToMoment] = useState(false);
   const [showShareSettings, setShowShareSettings] = useState(false);
   const [timer, setTimer] = useState(90);
   const [isUploading, setIsUploading] = useState(false);
@@ -232,6 +234,7 @@ const RecordVideo = () => {
       document.exitFullscreen();
       setIsFullscreen(false);
     }
+    navigate('/studio');
   };
 
   const toggleFullscreen = () => {
@@ -316,11 +319,12 @@ const RecordVideo = () => {
       const { data: urlData } = supabase.storage.from('studio-videos').getPublicUrl(filePath);
 
       errorStep = 'database insert';
-      const { error: dbError } = await supabase
+      const { data: inserted, error: dbError } = await supabase
         .from('studio_videos')
         .insert({
           user_id: user.id,
           channel_id: channel.id,
+          is_reel: false,
           video_url: urlData.publicUrl,
           caption: caption.trim(),
           share_to_feeds: shareToFeed,
@@ -332,15 +336,45 @@ const RecordVideo = () => {
           badge_type,
           ...(original_creator_id ? { original_creator_id } : {}),
           created_at: new Date().toISOString()
-        });
+        }).select('*').single();
       if (dbError) {
         console.error('Database error:', dbError);
         alert('Database error: ' + dbError.message);
         throw dbError;
       }
+
+      if (shareToFeed && inserted) {
+        try {
+          await insertSharedFeedPost({
+            supabaseClient: supabase,
+            userId: user.id,
+            caption,
+            mediaUrl: urlData.publicUrl,
+            categories: selectedCategories,
+            audience: 'public',
+            sourceType: 'video',
+          });
+        } catch (feedError) {
+          console.warn('Failed to create shared feed post for recorded video:', feedError);
+        }
+      }
+      if (shareToMoment && inserted) {
+        try {
+          await insertVideoMoment({
+            supabaseClient: supabase,
+            userId: user.id,
+            caption,
+            mediaUrl: urlData.publicUrl,
+          });
+        } catch (momentError) {
+          console.warn('Recorded video uploaded, but sharing it to Moments failed:', momentError);
+        }
+      }
       setIsUploading(false);
       setCaption('');
       setSelectedCategories([]);
+      setShareToFeed(false);
+      setShareToMoment(false);
       if (videoUrl) {
         cleanupVideoURL(videoUrl);
       }
@@ -361,7 +395,7 @@ const RecordVideo = () => {
       <div className="w-full max-w-xl mx-auto px-4 pt-4">
         <button
           className="flex items-center gap-2 text-purple-600 dark:text-purple-400 font-semibold mb-2 hover:underline"
-          onClick={() => navigate(-1)}
+          onClick={() => navigate('/studio')}
         >
           <ArrowLeft className="h-5 w-5" />
           Back
@@ -563,6 +597,24 @@ const RecordVideo = () => {
                 </div>
               </div>
 
+              <div className="flex items-center gap-2 bg-accent/50 rounded-lg px-4 py-2 w-full sm:w-auto justify-center sm:justify-start">
+                <Sparkles className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Share to Moments</span>
+                <div className="relative inline-block w-10 h-5 ml-2">
+                  <input
+                    type="checkbox"
+                    checked={shareToMoment}
+                    onChange={e => setShareToMoment(e.target.checked)}
+                    className="sr-only peer"
+                    id="share-moment-toggle-record-video"
+                  />
+                  <label
+                    htmlFor="share-moment-toggle-record-video"
+                    className="absolute cursor-pointer top-0 left-0 right-0 bottom-0 bg-gray-300 dark:bg-gray-700 rounded-full transition-colors peer-checked:bg-primary before:absolute before:content-[''] before:h-3.5 before:w-3.5 before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full before:transition-transform peer-checked:before:translate-x-5"
+                  />
+                </div>
+              </div>
+
               {/* Action Buttons */}
               <div className="flex items-center gap-3 w-full sm:w-auto justify-center sm:justify-end">
                 <Button
@@ -591,7 +643,7 @@ const RecordVideo = () => {
                   {isUploading ? (
                     <span className="flex items-center gap-2">
                       <Skeleton className="h-4 w-4 rounded-full" />
-                      Uploading...
+                      <span className="inline-flex items-center gap-2"><div className="animate-spin h-4 w-4 rounded-full border-b-2 border-white" /> <span className="text-sm">Uploading</span></span>
                     </span>
                   ) : (
                     <span className="flex items-center gap-2">

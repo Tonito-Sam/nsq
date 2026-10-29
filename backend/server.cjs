@@ -99,6 +99,14 @@ try {
   console.warn('⚠️ identity route not available:', e?.message || e);
 }
 
+try {
+  const virtualCardOtp = require('./routes/virtual-card-otp');
+  app.use('/api/virtual-card-otp', virtualCardOtp);
+  console.log('✅ Mounted /api/virtual-card-otp');
+} catch (e) {
+  console.warn('⚠️ virtual-card-otp route not available:', e?.message || e);
+}
+
 // Health probe (checks Supabase connectivity)
 try {
   const health = require('./routes/health');
@@ -203,6 +211,14 @@ try {
   console.log('✅ Mounted /api/shows');
 } catch (e) {
   console.warn('⚠️ shows route not available:', e?.message || e);
+}
+
+try {
+  const dailyPodcast = require('./routes/daily-podcast');
+  app.use('/api/daily-podcast', dailyPodcast);
+  console.log('✅ Mounted /api/daily-podcast');
+} catch (e) {
+  console.warn('⚠️ daily-podcast route not available:', e?.message || e);
 }
 
 try {

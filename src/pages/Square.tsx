@@ -208,6 +208,22 @@ const Square = () => {
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const { data: ownStore, isLoading: ownStoreLoading } = useQuery({
+    queryKey: ['square-own-store', user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+      const { data, error } = await supabase
+        .from('user_stores')
+        .select('id')
+        .eq('user_id', user.id)
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!user,
+    staleTime: 5 * 60 * 1000,
+  });
 
   // Seasonal carousel slides for holiday hero
   const seasonalMessages = [
@@ -1265,6 +1281,23 @@ const Square = () => {
       <style>{globalStyles}</style>
       
       <div className="max-w-7xl mx-auto px-4 pt-6 pb-32 lg:pb-8">
+        {(!user || (!ownStoreLoading && !ownStore)) && (
+          <div className="mb-6 flex flex-col gap-4 rounded-lg border border-purple-200 bg-purple-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-purple-900/60 dark:bg-purple-950/30">
+            <div>
+              <h2 className="font-semibold text-gray-900 dark:text-white">Open your own store</h2>
+              <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                Create a store to list products and start selling on Square.
+              </p>
+            </div>
+            <Button
+              onClick={() => navigate(user ? '/create-store' : '/auth')}
+              className="shrink-0 bg-purple-700 text-white hover:bg-purple-800"
+            >
+              <Store className="mr-2 h-4 w-4" />
+              {user ? 'Create Store' : 'Sign in to create a store'}
+            </Button>
+          </div>
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Sidebar: categories */}
           <aside className="hidden lg:block col-span-1">
@@ -1563,7 +1596,7 @@ const Square = () => {
                     <div className="max-h-56 overflow-y-auto">
                       {user ? (
                         cartLoading ? (
-                          <div className="text-sm text-gray-500">Loading...</div>
+                          <div className="text-sm text-gray-500"><Skeleton className="h-4 w-24 rounded" /></div>
                         ) : cartItems.length === 0 ? (
                           <div className="text-sm text-gray-500">No items in cart</div>
                         ) : (

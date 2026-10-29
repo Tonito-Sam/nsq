@@ -23,14 +23,11 @@ export const RightSidebar = () => {
   // Hide right sidebar on specific profile edit path to allow custom right column
   if (isMobile) return null;
   if (location.pathname && location.pathname.startsWith('/profile/edit')) return null;
+  const showLiveChat = location.pathname === '/';
 
   return (
     <div className="w-80 p-4 space-y-6">
-      {/* Live Chat Section */}
-      <div className="space-y-2">
-        <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-lg"></h3>
-        <LiveChat />
-      </div>
+      {showLiveChat && <LiveChat />}
       <TrendingCard />
       <EventsSidebar />
       <SuggestedFriends />

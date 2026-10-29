@@ -10,6 +10,8 @@ import { toast } from '@/components/ui/use-toast';
 import { countries } from '@/utils/countries';
 import { statesByCountry } from '@/utils/statesByCountry';
 import { banksByCountry } from '@/utils/banksByCountry';
+import apiUrl from '@/lib/api';
+import { getCurrencyByCountry } from '@/utils/currencyByCountry';
 
 interface Store {
   id: string;
@@ -17,7 +19,10 @@ interface Store {
   store_category: string;
   description: string;
   base_currency: string;
+  country?: string;
   shipping_partner: string;
+  owner_kyc_status?: string;
+  owner_identity_country?: string | null;
   logo_url: string;
   verification_status: string;
   is_active: boolean;
@@ -51,20 +56,31 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
     store_name: store?.store_name || '',
     store_category: store?.store_category || '',
     description: store?.description || '',
-    base_currency: store?.base_currency || 'ZAR',
+    base_currency: store?.base_currency || getCurrencyByCountry(store?.country),
     shipping_partner: store?.shipping_partner || '',
     business_whatsapp_number: (store as any)?.business_whatsapp_number || '',
-    notify_whatsapp: !!(store as any)?.notify_whatsapp,
-    business_country: '',
+    notify_whatsapp: Boolean(
+      (store as any)?.notify_whatsapp &&
+      (store as any)?.business_whatsapp_verified_at &&
+      (store as any)?.business_whatsapp_verified_phone === (store as any)?.business_whatsapp_number
+    ),
+    business_country: store?.country || '',
     business_state_province: '',
-    business_bank_name: '',
-    business_account_number: '',
-    business_account_holder: '',
-    business_branch_name: '',
+    business_bank_name: (store as any)?.business_bank_name || '',
+    business_account_number: (store as any)?.business_bank_account_number || '',
+    business_account_holder: (store as any)?.business_registered_name || '',
+    business_branch_name: (store as any)?.business_bank_branch || '',
     store_paypal_enabled: false,
     store_paypal_email: ''
   });
   const [saving, setSaving] = useState(false);
+  const [whatsappCode, setWhatsappCode] = useState('');
+  const [whatsappCodeSent, setWhatsappCodeSent] = useState(false);
+  const [whatsappVerificationLoading, setWhatsappVerificationLoading] = useState(false);
+  const isWhatsAppNumberVerified = Boolean(
+    (store as any)?.business_whatsapp_verified_at &&
+    (store as any)?.business_whatsapp_verified_phone === formData.business_whatsapp_number.trim()
+  );
 
   const handleInputChange = (field: string, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value } as any));
@@ -75,42 +91,24 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
 
     setSaving(true);
     try {
-      // If enabling WhatsApp notify, call server endpoint first to validate & persist that field
-      let serverUpdatedRow: any = null;
-      if (formData.notify_whatsapp) {
-        const maybeNumber = (formData.business_whatsapp_number || '').trim();
-        if (!maybeNumber) {
-          throw new Error('Please provide a WhatsApp number to enable notifications.');
-        }
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please sign in again to update WhatsApp settings.');
 
-    // Pick API base from Vite env (VITE_API_BASE_URL preferred) or fallback to localhost:3001 for dev
-    // Use import.meta.env for Vite, fall back to global process env when available
-    const apiBase = (((import.meta as any).env?.VITE_API_BASE_URL) || ((import.meta as any).env?.VITE_API_URL) || ((globalThis as any).process?.env?.VITE_API_BASE_URL) || ((globalThis as any).process?.env?.VITE_API_URL) || 'http://localhost:3001').replace(/\/+$/g, '');
-      const endpoint = `${apiBase}/api/stores/update-whatsapp-notify`;
-
-        const resp = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ store_id: store.id, business_whatsapp_number: maybeNumber, notify_whatsapp: true })
-        });
-
-        const text = await resp.text().catch(() => '');
-        let json: any = null;
-        try {
-          json = text ? JSON.parse(text) : null;
-        } catch (err) {
-          // invalid JSON from server
-          console.warn('Non-JSON response from update-whatsapp-notify', text);
-          json = null;
-        }
-
-        if (!resp.ok) {
-          const errMsg = json?.error || json?.body || `Server returned ${resp.status}`;
-          throw new Error(errMsg || 'Failed to validate WhatsApp number');
-        }
-
-        serverUpdatedRow = json?.updated || null;
-      }
+      const resp = await fetch(apiUrl('/api/stores/update-whatsapp-notify'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          store_id: store.id,
+          business_whatsapp_number: formData.business_whatsapp_number.trim(),
+          notify_whatsapp: formData.notify_whatsapp,
+        }),
+      });
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(json.error || `Server returned ${resp.status}`);
+      const serverUpdatedRow: any = json.updated || null;
 
       // Update other store settings via Supabase (excluding WhatsApp fields which server already handled)
       const { data, error } = await supabase
@@ -119,6 +117,11 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
           store_name: formData.store_name,
           store_category: formData.store_category,
           description: formData.description,
+          country: formData.business_country || null,
+          business_bank_name: formData.business_bank_name || null,
+          business_bank_account_number: formData.business_account_number || null,
+          business_registered_name: formData.business_account_holder || null,
+          business_bank_branch: formData.business_branch_name || null,
           base_currency: formData.base_currency,
           shipping_partner: formData.shipping_partner,
           updated_at: new Date().toISOString()
@@ -142,6 +145,74 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const requestWhatsAppVerification = async () => {
+    if (!store) return;
+
+    setWhatsappVerificationLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please sign in again to verify this number.');
+      const response = await fetch(apiUrl('/api/stores/whatsapp-verification/start'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          store_id: store.id,
+          business_whatsapp_number: formData.business_whatsapp_number.trim(),
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not send a verification code');
+      setWhatsappCodeSent(true);
+      setWhatsappCode('');
+      toast({ title: 'Code sent', description: 'Check WhatsApp for your six-digit verification code.' });
+    } catch (error) {
+      toast({
+        title: 'WhatsApp verification unavailable',
+        description: (error as Error).message,
+        variant: 'destructive',
+      });
+    } finally {
+      setWhatsappVerificationLoading(false);
+    }
+  };
+
+  const confirmWhatsAppVerification = async () => {
+    if (!store) return;
+
+    setWhatsappVerificationLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please sign in again to verify this number.');
+      const response = await fetch(apiUrl('/api/stores/whatsapp-verification/confirm'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ store_id: store.id, code: whatsappCode.trim() }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not verify this number');
+
+      setWhatsappCodeSent(false);
+      setWhatsappCode('');
+      setFormData(previous => ({ ...previous, notify_whatsapp: false }));
+      if (result.updated) onStoreUpdate({ ...store, ...result.updated });
+      toast({ title: 'Number verified', description: 'Turn on the order notification setting and save to opt in.' });
+    } catch (error) {
+      toast({
+        title: 'Verification failed',
+        description: (error as Error).message,
+        variant: 'destructive',
+      });
+    } finally {
+      setWhatsappVerificationLoading(false);
     }
   };
 
@@ -232,21 +303,60 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
             <Input
               id="business_whatsapp_number"
               value={formData.business_whatsapp_number}
-              onChange={(e) => handleInputChange('business_whatsapp_number', e.target.value)}
+              onChange={(e) => {
+                handleInputChange('business_whatsapp_number', e.target.value);
+                handleInputChange('notify_whatsapp', false);
+                setWhatsappCodeSent(false);
+                setWhatsappCode('');
+              }}
               placeholder="+15551234567"
             />
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Enter number in international E.164 format (e.g., +15551234567). Enable notifications below to send prompts to this number.</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Enter the WhatsApp number that should receive NexSq order alerts, including country code.</p>
+            {isWhatsAppNumberVerified ? (
+              <p className="text-sm text-green-700 dark:text-green-400 mt-2">WhatsApp number verified</p>
+            ) : (
+              <div className="flex flex-col sm:flex-row gap-2 mt-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={requestWhatsAppVerification}
+                  disabled={saving || whatsappVerificationLoading || !formData.business_whatsapp_number.trim()}
+                >
+                  {whatsappVerificationLoading ? 'Sending...' : 'Verify number on WhatsApp'}
+                </Button>
+                {whatsappCodeSent && (
+                  <div className="flex gap-2">
+                    <Input
+                      aria-label="WhatsApp verification code"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={whatsappCode}
+                      onChange={event => setWhatsappCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="6-digit code"
+                    />
+                    <Button
+                      type="button"
+                      onClick={confirmWhatsAppVerification}
+                      disabled={saving || whatsappVerificationLoading || whatsappCode.length !== 6}
+                    >
+                      Confirm
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="md:col-span-2 flex items-center justify-between">
             <div>
-              <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">Notify via WhatsApp</h4>
-              <p className="text-sm text-gray-500 dark:text-gray-400">When enabled, customers' messages will trigger a short, read-only notification to this WhatsApp number prompting you to reply inside the app.</p>
+              <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100">Send order notifications to this number</h4>
+              <p className="text-sm text-gray-500 dark:text-gray-400">NexSq will send a WhatsApp alert after an order payment is confirmed. Customer address and payment details are not included.</p>
             </div>
             <input
               type="checkbox"
-              checked={!!formData.notify_whatsapp}
+              checked={!!formData.notify_whatsapp && isWhatsAppNumberVerified}
               onChange={e => handleInputChange('notify_whatsapp', e.target.checked)}
+              disabled={!isWhatsAppNumberVerified && !formData.notify_whatsapp}
               className="form-checkbox h-5 w-5 text-purple-600"
             />
           </div>
@@ -319,6 +429,15 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
             <Badge className={store.verification_status === 'verified' ? 'bg-green-600' : 'bg-yellow-600'}>
               {store.verification_status}
             </Badge>
+          </div>
+          <div>
+            <p className="text-sm text-gray-500 mb-2">Owner Identity Verification</p>
+            <Badge className={store.owner_kyc_status === 'verified' ? 'bg-green-600' : store.owner_kyc_status === 'pending' ? 'bg-yellow-600' : 'bg-gray-500'}>
+              {store.owner_kyc_status || 'unverified'}
+            </Badge>
+            {store.owner_identity_country && (
+              <p className="text-xs text-gray-500 mt-1">Identity country: {countries.find(country => country.code === store.owner_identity_country)?.name || store.owner_identity_country}</p>
+            )}
           </div>
         </div>
 

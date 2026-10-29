@@ -3,6 +3,8 @@ import apiUrl from '@/lib/api';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
+import SkeletonCard from '@/components/skeletons/SkeletonCard';
 
 export function PostViewersModal({ open, onOpenChange, postId }: { open: boolean; onOpenChange: (open: boolean) => void; postId: string }) {
   const [viewers, setViewers] = useState<any[]>([]);
@@ -35,7 +37,12 @@ export function PostViewersModal({ open, onOpenChange, postId }: { open: boolean
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader><DialogTitle>Recent viewers</DialogTitle></DialogHeader>
-        {loading ? <div>Loading...</div> : (
+        {loading ? (
+          <div className="space-y-3 py-2">
+            <SkeletonLine width="40%" className="mx-auto" />
+            <SkeletonCard />
+          </div>
+        ) : (
           viewers.length === 0 ? <div>No viewers yet.</div> : viewers.map(u => (
             <div key={u.id} className="flex items-center space-x-3 p-2">
               <Avatar className="h-8 w-8"><AvatarImage src={u.avatar_url} /><AvatarFallback>{u.first_name?.[0]}{u.last_name?.[0]}</AvatarFallback></Avatar>

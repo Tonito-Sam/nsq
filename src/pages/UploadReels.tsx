@@ -24,13 +24,16 @@ import {
   DollarSign,
   Calendar,
   FolderOpen,
-  Share2
+  Share2,
+  Sparkles
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
+import { insertSharedFeedPost, insertVideoMoment } from '@/lib/feedShare';
+import { ShowSlotApplication } from '@/components/studio/ShowSlotApplication';
 // Removed landscape warning components per request
 
 // Add custom life-threatening words to leo-profanity
@@ -78,6 +81,7 @@ const UploadReels = () => {
   const [portraitApplied, setPortraitApplied] = useState<Record<number, boolean>>({});
   const [isSeries, setIsSeries] = useState(false);
   const [shareToFeeds, setShareToFeeds] = useState<boolean>(false);
+  const [shareToMoments, setShareToMoments] = useState(false);
   const [subscriptionCycle, setSubscriptionCycle] = useState('monthly');
   const [isPaid, setIsPaid] = useState(true);
   const [subscriptionAmount, setSubscriptionAmount] = useState(1);
@@ -85,6 +89,7 @@ const UploadReels = () => {
   const [seriesDescription, setSeriesDescription] = useState('');
   const [uploading, setUploading] = useState(false);
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [showCategoryOptions, setShowCategoryOptions] = useState(false);
   const [progress, setProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'scanning' | 'uploading' | 'complete'>('idle');
   
@@ -295,9 +300,13 @@ const UploadReels = () => {
             const img = tf.browser.fromPixels(canvas);
             const predictions = await nsfwModel.classify(img);
             img.dispose();
-            nsfwFound = predictions.some(
-              p => (p.className === 'Porn' || p.className === 'Hentai' || p.className === 'Sexy') && p.probability > 0.7
-            );
+            const probabilities: Record<string, number> = {};
+            predictions.forEach((prediction) => {
+              probabilities[prediction.className] = prediction.probability;
+            });
+            const porn = probabilities.Porn || 0;
+            const hentai = probabilities.Hentai || 0;
+            nsfwFound = porn >= 0.95 || hentai >= 0.95;
           } catch (error) {}
         }
         checkedFrames++;
@@ -326,7 +335,7 @@ const UploadReels = () => {
       setUploading(false);
       return;
     }
-    if (!caption || !user || selectedCategories.length === 0) return;
+    if (!caption || !user) return;
 
     if (leoProfanity.check(caption)) {
       toast({ description: 'Caption contains inappropriate language.', variant: 'destructive' });
@@ -395,6 +404,7 @@ const UploadReels = () => {
       }
 
       let lastInsertedId: string | null = null;
+      let momentShareFailed = false;
 
       // If we have a shared remote URL provided, create DB entry directly without re-upload
       if (sharedVideoUrl) {
@@ -402,6 +412,7 @@ const UploadReels = () => {
           const dbRes = await supabase.from('studio_videos').insert({
             user_id: user.id,
             channel_id: channel.id,
+            is_reel: true,
             video_url: sharedVideoUrl,
             caption,
             categories: selectedCategories,
@@ -413,6 +424,19 @@ const UploadReels = () => {
           }).select('id');
           if (dbRes.error) throw dbRes.error;
           if (dbRes.data && dbRes.data.length > 0) lastInsertedId = dbRes.data[0].id;
+          if (shareToMoments) {
+            try {
+              await insertVideoMoment({
+                supabaseClient: supabase,
+                userId: user.id,
+                caption,
+                mediaUrl: sharedVideoUrl,
+              });
+            } catch (momentError) {
+              console.warn('Video imported to Studio but could not be shared to Moments:', momentError);
+              toast({ description: 'Video imported, but sharing it to Moments failed.', variant: 'destructive' });
+            }
+          }
           setUploadStatus('complete');
           toast({ description: 'Video imported to Studio successfully!' });
           setUploading(false);
@@ -493,6 +517,7 @@ const UploadReels = () => {
           const dbRes = await supabase.from('studio_videos').insert({
             user_id: user.id,
             channel_id: channel.id,
+            is_reel: true,
             video_url: urlData.publicUrl,
             caption,
             categories: selectedCategories,
@@ -531,17 +556,48 @@ const UploadReels = () => {
         }
         if (inserted && inserted.length > 0) {
           lastInsertedId = inserted[0].id;
+          if (shareToFeeds) {
+            try {
+              await insertSharedFeedPost({
+                supabaseClient: supabase,
+                userId: user.id,
+                caption,
+                mediaUrl: urlData.publicUrl,
+                categories: selectedCategories,
+                audience: 'public',
+                sourceType: 'video',
+              });
+            } catch (feedError) {
+              console.warn('Failed to create shared feed post for uploaded reel:', feedError);
+            }
+          }
+          if (shareToMoments) {
+            try {
+              await insertVideoMoment({
+                supabaseClient: supabase,
+                userId: user.id,
+                caption,
+                description: isSeries ? seriesDescription : undefined,
+                mediaUrl: urlData.publicUrl,
+              });
+            } catch (momentError) {
+              momentShareFailed = true;
+              console.warn('Failed to share uploaded reel to Moments:', momentError);
+            }
+          }
         }
       }
 
       setUploadStatus('complete');
-      toast({ description: 'Videos uploaded successfully!' });
+      toast({ description: momentShareFailed ? 'Videos uploaded, but sharing to Moments failed.' : 'Videos uploaded successfully!' });
       setCaption('');
       setVideoFiles([]);
       setVideoMetadatas([]);
       videoPreviews.forEach(url => URL.revokeObjectURL(url));
       setVideoPreviews([]);
       setIsSeries(false);
+      setShareToFeeds(false);
+      setShareToMoments(false);
       setSeriesTitle('');
       setSeriesDescription('');
       setUploading(false);
@@ -620,7 +676,7 @@ const UploadReels = () => {
         <div className="flex items-center justify-between mb-6">
           <button
             className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors group"
-            onClick={() => navigate(-1)}
+            onClick={() => navigate('/studio')}
           >
             <ArrowLeft className="h-5 w-5 transition-transform group-hover:-translate-x-1" />
             <span className="font-medium">Back to Studio</span>
@@ -804,13 +860,9 @@ const UploadReels = () => {
                   onChange={e => setCaption(e.target.value)}
                   className="h-12 text-lg"
                 />
-                <div className="flex items-center justify-between mt-2">
+                  <div className="flex items-center justify-end mt-2">
                   <div className="text-xs text-muted-foreground">
                     {caption.length}/280 characters
-                  </div>
-                  <div className="flex items-center gap-1 text-xs">
-                    <Shield className="h-3 w-3" />
-                    <span>AI Content Moderation Active</span>
                   </div>
                 </div>
               </CardContent>
@@ -819,156 +871,59 @@ const UploadReels = () => {
 
           {/* Right Column - Settings */}
           <div className="space-y-6">
-            {/* Categories Card */}
-            <Card>
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-full bg-gradient-to-br from-purple-100 to-blue-100 flex items-center justify-center">
-                      <Tag className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold">Content Categories</h3>
-                     
-                    </div>
-                  </div>
-                  <Badge variant="secondary" className="px-3 py-1.5">
-                    {selectedCategories.length}/3
-                  </Badge>
-                </div>
-
-                <div className="mb-6">
-                  <div className="flex flex-wrap gap-3">
-                    {CATEGORY_OPTIONS.map(cat => {
-                      const selected = selectedCategories.includes(cat);
-                      const disabled = !selected && selectedCategories.length >= 3;
-                      return (
-                        <button
-                          key={cat}
-                          type="button"
-                          aria-pressed={selected}
-                          onClick={() => {
-                            if (selected) {
-                              setSelectedCategories(selectedCategories.filter(c => c !== cat));
-                            } else if (selectedCategories.length < 3) {
-                              setSelectedCategories([...selectedCategories, cat]);
-                            }
-                          }}
-                          disabled={disabled}
-                          className={`text-sm font-medium whitespace-nowrap px-3 py-1 rounded-full transition-all focus:outline-none focus:ring-2 focus:ring-purple-400 ${selected ? 'bg-purple-600 text-white border-transparent' : 'bg-white dark:bg-gray-900 text-black dark:text-white border border-gray-300 dark:border-gray-700'} ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105'}`}
-                        >
-                          {cat}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {selectedCategories.length > 0 && (
-                  <div className="animate-in fade-in duration-300">
-                    <div className="flex items-center gap-2 mb-3">
-                      <span className="text-sm font-medium text-muted-foreground">Selected:</span>
-                      <div className="flex-1 h-px bg-border" />
-                    </div>
-                    
+            <div className="space-y-3">
+              <Button
+                type="button"
+                variant="outline"
+                aria-expanded={showCategoryOptions}
+                onClick={() => setShowCategoryOptions((visible) => !visible)}
+                className="w-full justify-start"
+              >
+                <Tag className="mr-2 h-4 w-4" />
+                {selectedCategories.length ? `Categories (${selectedCategories.length})` : 'Add categories (optional)'}
+                <span className="ml-auto" aria-hidden="true">{showCategoryOptions ? 'Hide' : 'Add'}</span>
+              </Button>
+              {showCategoryOptions && (
+                <Card>
+                  <CardContent className="p-4">
+                    <p className="mb-3 text-sm text-muted-foreground">Choose up to 3 categories. This is optional.</p>
                     <div className="flex flex-wrap gap-2">
-                      {selectedCategories.map(cat => (
-                        <div
-                          key={cat}
-                          className="group inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-gradient-to-r from-primary/10 to-primary/5 border border-primary/20"
-                        >
-                          <span className="font-medium text-sm">{cat}</span>
+                      {CATEGORY_OPTIONS.map((category) => {
+                        const selected = selectedCategories.includes(category);
+                        const disabled = !selected && selectedCategories.length >= 3;
+                        return (
                           <button
+                            key={category}
                             type="button"
-                            onClick={() => setSelectedCategories(selectedCategories.filter(c => c !== cat))}
-                            className="h-5 w-5 rounded-full bg-primary/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                            aria-pressed={selected}
+                            onClick={() => setSelectedCategories((current) => selected
+                              ? current.filter((item) => item !== category)
+                              : current.length < 3 ? [...current, category] : current
+                            )}
+                            disabled={disabled}
+                            className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-purple-400 ${selected
+                              ? 'border-purple-600 bg-purple-600 text-white'
+                              : 'border-gray-300 bg-white text-black dark:border-gray-700 dark:bg-gray-900 dark:text-white'
+                            } ${disabled ? 'cursor-not-allowed opacity-50' : 'hover:border-purple-400'}`}
                           >
-                            <X className="h-3 w-3 text-primary" />
+                            {category}
                           </button>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
-                  </div>
-                )}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
 
-                <div className="mt-6 pt-4 border-t">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm text-muted-foreground">
-                      {selectedCategories.length === 0 ? (
-                        "No categories selected"
-                      ) : selectedCategories.length === 3 ? (
-                        <span className="text-green-600 font-medium">✓ Maximum categories selected</span>
-                      ) : (
-                        `${3 - selectedCategories.length} more can be selected`
-                      )}
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      {[...Array(3)].map((_, i) => (
-                        <div
-                          key={i}
-                          className={`
-                            h-2 w-8 rounded-full transition-all duration-300
-                            ${i < selectedCategories.length 
-                              ? 'bg-primary' 
-                              : 'bg-muted'
-                            }
-                          `}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* NEW: Video Summary Card */}
-            {videoFiles.length > 0 && (
-              <Card>
-                <CardContent className="p-6">
-                  <h3 className="font-semibold mb-4">Video Summary</h3>
-                  
-                  <div className="space-y-3 max-h-60 overflow-y-auto">
-                    {videoFiles.map((file, index) => (
-                      <div key={index} className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50">
-                        <div className="flex items-center gap-3">
-                          <div className={`
-                            h-8 w-8 rounded-full flex items-center justify-center
-                            bg-primary/10 text-primary
-                          `}>
-                            {/* Aspect icon removed */}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium truncate">
-                              {file.name.length > 20 ? `${file.name.substring(0, 20)}...` : file.name}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {videoMetadatas[index]?.width}×{videoMetadatas[index]?.height} • 
-                              {(file.size / (1024 * 1024)).toFixed(1)} MB
-                            </p>
-                          </div>
-                        </div>
-                        <Badge 
-                          variant="outline"
-                          className={`
-                            ${videoMetadatas[index]?.aspectRatio === 'landscape' ? 'border-amber-300 text-amber-700' :
-                              videoMetadatas[index]?.aspectRatio === 'portrait' ? 'border-green-300 text-green-700' :
-                              'border-blue-300 text-blue-700'}
-                          `}
-                        >
-                          {videoMetadatas[index]?.aspectRatio?.charAt(0).toUpperCase() || '?'}
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                  
-                  {/* Landscape note removed */}
-                </CardContent>
-              </Card>
-            )}
+            <ShowSlotApplication />
 
             {/* Series Card */}
-            <Card className="mb-28">
+            <details className="mb-28 rounded-xl border bg-card">
+              <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-muted-foreground">
+                Advanced: subscription series
+              </summary>
+              <Card className="border-0 shadow-none">
               <CardContent className="p-6">
                 <div className="flex items-center gap-2 mb-4">
                   <Layers className="h-5 w-5 text-primary" />
@@ -1074,7 +1029,8 @@ const UploadReels = () => {
                   )}
                 </div>
               </CardContent>
-            </Card>
+              </Card>
+            </details>
 
             {/* Upload Requirements removed per request */}
           </div>
@@ -1142,6 +1098,24 @@ const UploadReels = () => {
                     />
                   </div>
                 </div>
+
+                <div className="flex items-center gap-2 bg-accent/50 rounded-lg px-4 py-2 w-full sm:w-auto justify-center sm:justify-start">
+                  <Sparkles className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Share to Moments</span>
+                  <div className="relative inline-block w-10 h-5 ml-2">
+                    <input
+                      type="checkbox"
+                      checked={shareToMoments}
+                      onChange={e => setShareToMoments(e.target.checked)}
+                      className="sr-only peer"
+                      id="share-moment-toggle-upload"
+                    />
+                    <label
+                      htmlFor="share-moment-toggle-upload"
+                      className="absolute cursor-pointer top-0 left-0 right-0 bottom-0 bg-gray-300 dark:bg-gray-700 rounded-full transition-colors peer-checked:bg-primary before:absolute before:content-[''] before:h-3.5 before:w-3.5 before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full before:transition-transform peer-checked:before:translate-x-5"
+                    />
+                  </div>
+                </div>
                 
                 {/* Action Buttons */}
                 <div className="flex items-center gap-3 w-full sm:w-auto justify-center sm:justify-end">
@@ -1157,7 +1131,6 @@ const UploadReels = () => {
                     disabled={
                       videoFiles.length < 1 ||
                       !caption ||
-                      selectedCategories.length === 0 ||
                       (isSeries && videoFiles.length < 5) ||
                       (isSeries && (!seriesTitle || !seriesDescription || (isPaid && !subscriptionAmount))) ||
                       uploading

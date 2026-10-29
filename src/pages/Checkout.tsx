@@ -23,6 +23,7 @@ import { getAvailableGateways, PaymentGateway, initializePayment } from '@/servi
 import { selectDefaultShippingPartner } from '@/utils/shippingPartners';
 import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import apiUrl from '@/lib/api';
 
 interface CartItem {
   id: string;
@@ -57,6 +58,12 @@ const paymentGatewayInfo = {
     logo: '/uploads/paystack.png',
     description: 'Secure online payments',
     color: 'from-green-500 to-green-600'
+  },
+  payfast: {
+    name: 'PayFast',
+    logo: '/uploads/payfast.png',
+    description: 'Secure South African payments in ZAR',
+    color: 'from-blue-500 to-cyan-600'
   },
   flutterwave: {
     name: 'Flutterwave',
@@ -115,6 +122,13 @@ const Checkout = () => {
   const [availableGateways, setAvailableGateways] = useState<PaymentGateway[]>([]);
   const [selectedGateway, setSelectedGateway] = useState<PaymentGateway | null>(null);
   const [cartItemsCount, setCartItemsCount] = useState(0);
+  const hasPhysicalItems = cartItems.some(item => {
+    const productType = (item.product.product_type || '').toLowerCase();
+    return !(productType.includes('digital') || productType.includes('download'));
+  });
+  const checkoutCountries = hasPhysicalItems
+    ? countries.filter(country => country.code === 'ZA')
+    : countries;
 
   useEffect(() => {
     if (user) {
@@ -122,6 +136,65 @@ const Checkout = () => {
       fetchCartCount();
     }
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const payfastState = params.get('payfast');
+    const reference = params.get('ref');
+    if (!payfastState || !reference) return;
+
+    if (payfastState === 'cancelled') {
+      toast({ title: 'Payment cancelled', description: 'Your cart is still available for checkout.' });
+      navigate('/checkout', { replace: true });
+      return;
+    }
+
+    let cancelled = false;
+    const verifyReturnedOrder = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        toast({ title: 'Sign in required', description: 'Sign in to check this PayFast order.', variant: 'destructive' });
+        return;
+      }
+
+      for (let attempt = 0; attempt < 20 && !cancelled; attempt += 1) {
+        try {
+          const response = await fetch(apiUrl(`/api/payments/payfast/status/${encodeURIComponent(reference)}`), {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+          const result = await response.json().catch(() => ({}));
+
+          const paidOrders = Array.isArray(result.orders) ? result.orders : [];
+          if (response.ok && paidOrders.length > 0 && paidOrders.every((order: any) => order.status === 'paid')) {
+            await supabase.from('cart_items').delete().eq('user_id', user.id);
+            navigate(`/order-summary/${paidOrders[0].id}?status=paid`, { replace: true });
+            return;
+          }
+          if (response.ok && (result.status === 'failed' || paidOrders.some((order: any) => order.status === 'failed'))) {
+            toast({ title: 'Payment not completed', description: 'PayFast did not confirm the transaction.', variant: 'destructive' });
+            navigate('/checkout', { replace: true });
+            return;
+          }
+        } catch (error) {
+          console.error('Could not check PayFast payment status:', error);
+        }
+
+        await new Promise(resolve => window.setTimeout(resolve, 1500));
+      }
+
+      if (!cancelled) {
+        toast({ title: 'Payment processing', description: 'PayFast has not confirmed this payment yet. Your order will update when confirmation arrives.' });
+        navigate('/checkout', { replace: true });
+      }
+    };
+
+    void verifyReturnedOrder();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, navigate]);
 
   const fetchCartCount = async () => {
     if (!user) return;
@@ -320,7 +393,7 @@ const Checkout = () => {
 
   const getServiceFee = () => {
     const subtotal = getSubtotal();
-    return Number((subtotal * 0.005).toFixed(2));
+    return Number((subtotal * 0.02).toFixed(2));
   };
 
   const getTotal = () => {
@@ -363,21 +436,20 @@ const Checkout = () => {
       'ZAR'
     );
     
-    const fallbackGateways: PaymentGateway[] = ['applepay', 'googlepay'];
-    
-    if (userCurrency === 'NGN') {
-      const filteredGateways = gateways.filter(gateway => gateway === 'flutterwave') as PaymentGateway[];
-      setAvailableGateways([...filteredGateways, ...fallbackGateways]);
-    } else {
-      setAvailableGateways([...gateways, ...fallbackGateways]);
-    }
-    
-    if (!selectedGateway && gateways.length > 0) {
-      setSelectedGateway(gateways[0]);
-    }
+    setAvailableGateways(gateways);
+    setSelectedGateway(current => current && gateways.includes(current) ? current : gateways[0] || null);
   }, [userCurrency, shippingInfo.country]);
 
   const handlePayment = async () => {
+    if (hasPhysicalItems && shippingInfo.country !== 'ZA') {
+      toast({
+        title: 'Physical products ship within South Africa',
+        description: 'Remove physical products or use a South African delivery address.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
     if (!selectedGateway) {
       toast({
         title: "Error",
@@ -399,13 +471,20 @@ const Checkout = () => {
     setProcessing(true);
     try {
       const reference = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const finalAmount = userCurrency !== 'ZAR' && exchangeRate 
+      const paymentCurrency = selectedGateway === 'payfast'
+        ? 'ZAR'
+        : selectedGateway === 'paystack'
+        ? ((import.meta as any).env?.VITE_PAYSTACK_CURRENCY || storeCurrency)
+        : userCurrency;
+      const finalAmount = paymentCurrency !== storeCurrency && exchangeRate
         ? getTotal() * exchangeRate 
         : getTotal();
 
+      const { data: { session } } = await supabase.auth.getSession();
       await initializePayment(selectedGateway, {
         amount: finalAmount,
-        currency: userCurrency,
+        currency: paymentCurrency,
+        accessToken: session?.access_token,
         buyerCountry: shippingInfo.country || 'NG',
         buyerCurrency: userCurrency,
         sellerCountry: 'ZA',
@@ -425,14 +504,14 @@ const Checkout = () => {
 
       toast({
         title: "Payment Initiated",
-        description: `${selectedGateway} payment would be processed here. Amount: ${formatAmount(finalAmount, userCurrency)}`,
+        description: `${selectedGateway} payment would be processed here. Amount: ${formatAmount(finalAmount, paymentCurrency)}`,
       });
 
     } catch (error) {
       console.error('Payment failed:', error);
       toast({
         title: "Payment Failed",
-        description: "There was an error processing your payment. Please try again.",
+        description: error instanceof Error ? error.message : "There was an error processing your payment. Please try again.",
         variant: "destructive"
       });
     } finally {
@@ -675,7 +754,7 @@ const Checkout = () => {
                           <SelectValue placeholder="Select country" />
                         </SelectTrigger>
                         <SelectContent>
-                          {countries
+                          {checkoutCountries
                             .sort((a, b) => a.name.localeCompare(b.name))
                             .map((country) => (
                               <SelectItem key={country.code} value={country.code}>
@@ -821,7 +900,7 @@ const Checkout = () => {
                               </div>
                               
                               {/* Popular badge for certain gateways */}
-                              {(gateway === 'paystack' || gateway === 'flutterwave') && (
+                              {(gateway === 'paystack' || gateway === 'payfast' || gateway === 'flutterwave') && (
                                 <Badge variant="secondary" className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300">
                                   Popular
                                 </Badge>
@@ -835,7 +914,7 @@ const Checkout = () => {
                 ) : (
                   <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
                     <p className="text-sm text-yellow-600 dark:text-yellow-400">
-                      Loading payment methods... If this persists, please contact support.
+                      No supported payment method is configured for this country and currency yet. Please contact support.
                     </p>
                   </div>
                 )}
@@ -899,7 +978,7 @@ const Checkout = () => {
                   </div>
                   
                   <div className="flex justify-between text-gray-600 dark:text-gray-400">
-                    <span>Service Fee (0.5%)</span>
+                    <span>Service Fee (2%)</span>
                     <span>{formatAmount(getServiceFee(), 'ZAR')}</span>
                   </div>
 
@@ -973,7 +1052,9 @@ const Checkout = () => {
                             </div>
                             <div className="pt-2 border-t border-purple-200 dark:border-purple-800">
                               <p className="text-xs text-purple-600 dark:text-purple-400">
-                                You'll be charged in {userCurrency}
+                                {selectedGateway === 'payfast'
+                                  ? `PayFast charges in ZAR. Your bank may convert this to ${userCurrency}.`
+                                  : `You'll be charged in ${userCurrency}`}
                               </p>
                             </div>
                           </>
@@ -1001,7 +1082,9 @@ const Checkout = () => {
                     </div>
                   ) : (
                     <>
-                      Pay {!isLoadingRate && exchangeRate && userCurrency !== 'ZAR' 
+                      Pay {selectedGateway === 'payfast'
+                        ? formatAmount(getTotal(), 'ZAR')
+                        : !isLoadingRate && exchangeRate && userCurrency !== 'ZAR'
                         ? formatAmount(getTotal() * exchangeRate, userCurrency)
                         : formatAmount(getTotal(), 'ZAR')}
                     </>

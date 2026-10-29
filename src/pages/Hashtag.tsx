@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { PostCard } from '@/components/PostCard';
 import { supabase } from '@/integrations/supabase/client';
 import { Layout } from '@/components/Layout';
+import SkeletonCard from '@/components/skeletons/SkeletonCard';
 import { useAuth } from '@/hooks/useAuth';
 
 interface Post {
@@ -45,7 +46,11 @@ export default function HashtagPage() {
       <div className="max-w-2xl mx-auto p-4">
         <h1 className="text-2xl font-bold mb-4">Trending: #{tag}</h1>
         {loading ? (
-          <div>Loading...</div>
+          <div className="space-y-4">
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
         ) : posts.length === 0 ? (
           <div>No posts found for this hashtag.</div>
         ) : (

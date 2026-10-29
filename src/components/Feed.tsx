@@ -30,16 +30,27 @@ import { ArrowDown, Loader2, ArrowUp, ExternalLink, Info, Video, Play, Pause, Vo
 import { LiveChat } from './LiveChat';
 import { Skeleton } from '@/components/ui/skeleton';
 import FeedSkeleton from '@/components/skeletons/FeedSkeleton';
+import { groupPlatformCelebrations } from '@/lib/platformCelebrationGroups';
+import type { PlatformCelebrationSlide, PlatformSpecialDayRelation } from '@/lib/platformCelebrationGroups';
 
 interface Post {
   id: string;
   content?: string;
   created_at: string;
+  pinned_until?: string | null;
   likes_count?: number;
   comments_count?: number;
   shares_count?: number;
   reposts_count?: number;
   post_type?: string;
+  is_platform_celebration?: boolean;
+  moment_special_name?: string | null;
+  moment_special_message?: string | null;
+  moment_special_icon?: string | null;
+  moment_special_bg?: string | null;
+  moment_bg?: string | null;
+  platform_special_day?: PlatformSpecialDayRelation | PlatformSpecialDayRelation[] | null;
+  special_day_events?: PlatformCelebrationSlide[];
   media_url?: string;
   media_urls?: string[];
   user_id?: string;
@@ -125,11 +136,7 @@ const formatCurrency = (amount: number, currency?: string) => {
 
 const Feed: React.FC = () => {
   const loadMoreRef = useRef<HTMLDivElement>(null);
-  const desktopReelsRef = useRef<HTMLDivElement>(null);
-  const mobileReelsRef = useRef<HTMLDivElement>(null);
-  const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
-  const desktopAutoplayRef = useRef<number | null>(null);
-  const mobileAutoplayRef = useRef<number | null>(null);
+  const activeReelPreviewRef = useRef<Set<HTMLVideoElement>>(new Set());
   const feedContainerRef = useRef<HTMLDivElement>(null);
   
   const PAGE_SIZE = 10;
@@ -143,13 +150,8 @@ const Feed: React.FC = () => {
   const [reels, setReels] = useState<Reel[]>([]);
   const [fullscreenIndex, setFullscreenIndex] = useState<number | null>(null);
   const [reelsLoading, setReelsLoading] = useState(false);
-  const [playingReelId, setPlayingReelId] = useState<string | null>(null);
+  const [playingReelIds, setPlayingReelIds] = useState<string[]>([]);
   const [mutedStates, setMutedStates] = useState<Record<string, boolean>>({});
-  const [activeReelIndex, setActiveReelIndex] = useState<number | null>(null);
-  const [desktopPlayingIndex, setDesktopPlayingIndex] = useState<number>(0);
-  const [mobilePlayingIndex, setMobilePlayingIndex] = useState<number>(0);
-  const [desktopVisibleReels, setDesktopVisibleReels] = useState<Reel[]>([]);
-  const [mobileVisibleReels, setMobileVisibleReels] = useState<Reel[]>([]);
   const [storeProducts, setStoreProducts] = useState<StoreProduct[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
   
@@ -161,6 +163,8 @@ const Feed: React.FC = () => {
   const [showRepostModal, setShowRepostModal] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [currentShowIndex, setCurrentShowIndex] = useState(0);
+  const [scheduleTransition, setScheduleTransition] = useState(false);
+  const [nextProgramIndex, setNextProgramIndex] = useState<number | null>(null);
   const [showCommentsOverlay, setShowCommentsOverlay] = useState(false);
   const [showReelsOverlay, setShowReelsOverlay] = useState(false);
   const [selectedReel, setSelectedReel] = useState<Reel | null>(null);
@@ -206,7 +210,7 @@ const Feed: React.FC = () => {
           .eq('share_to_feeds', true)
           .not('video_url', 'is', null)
           .order('created_at', { ascending: false })
-          .limit(12);
+          .limit(60);
         data = res.data; error = res.error;
 
         if (error && String(error.code) === '42703') {
@@ -217,7 +221,7 @@ const Feed: React.FC = () => {
             .eq('share_to_feed', true)
             .not('video_url', 'is', null)
             .order('created_at', { ascending: false })
-            .limit(12);
+            .limit(60);
           data = res.data; error = res.error;
         }
 
@@ -228,7 +232,7 @@ const Feed: React.FC = () => {
             .select(selectCols)
             .not('video_url', 'is', null)
             .order('created_at', { ascending: false })
-            .limit(12);
+            .limit(60);
           data = res.data; error = res.error;
         }
 
@@ -262,8 +266,6 @@ const Feed: React.FC = () => {
 
         if (mounted) {
           setReels(shuffled);
-          setDesktopVisibleReels(shuffled);
-          setMobileVisibleReels(shuffled.slice(0, 12));
         }
 
         const initialMuted: Record<string, boolean> = {};
@@ -282,14 +284,6 @@ const Feed: React.FC = () => {
     fetchReels();
     return () => { 
       mounted = false;
-      if (desktopAutoplayRef.current) {
-        clearInterval(desktopAutoplayRef.current);
-        desktopAutoplayRef.current = null;
-      }
-      if (mobileAutoplayRef.current) {
-        clearInterval(mobileAutoplayRef.current);
-        mobileAutoplayRef.current = null;
-      }
     };
   }, []);
 
@@ -454,139 +448,6 @@ const Feed: React.FC = () => {
     ];
   };
 
-  // Helper function to play a single video with proper autoplay handling
-  const playOnlyVideo = (reelId: string, videoElement: HTMLVideoElement) => {
-    videoRefs.current.forEach((video, id) => {
-      if (id !== reelId && video) {
-        try { 
-          video.pause(); 
-          video.currentTime = 0; 
-        } catch (e) {}
-      }
-    });
-
-    setPlayingReelId(reelId);
-    
-    videoElement.muted = true;
-    videoElement.autoplay = true;
-    videoElement.playsInline = true;
-    
-    const playImmediately = () => {
-      videoElement.play().catch(error => {
-        console.warn(`Immediate autoplay failed for ${reelId}:`, error);
-        
-        const onCanPlay = () => {
-          videoElement.removeEventListener('canplay', onCanPlay);
-          videoElement.play().catch(err => {
-            console.warn(`Retry autoplay failed for ${reelId}:`, err);
-          });
-        };
-        
-        videoElement.addEventListener('canplay', onCanPlay);
-        videoElement.load();
-      });
-    };
-    
-    playImmediately();
-  };
-
-  // Desktop autoplay sequence for first 4 videos
-  useEffect(() => {
-    if (!desktopVisibleReels.length || desktopVisibleReels.length === 0) return;
-
-    if (desktopAutoplayRef.current) {
-      clearInterval(desktopAutoplayRef.current);
-      desktopAutoplayRef.current = null;
-    }
-
-    const startAutoplaySequence = () => {
-      let currentIndex = 0;
-      
-      const playVideo = (index: number) => {
-        const reel = desktopVisibleReels[index];
-        if (!reel) return;
-
-        const videoElement = videoRefs.current.get(reel.id);
-        if (!videoElement) return;
-
-        playOnlyVideo(reel.id, videoElement);
-        setDesktopPlayingIndex(index);
-
-        const duration = reel.duration || 30;
-        desktopAutoplayRef.current = window.setTimeout(() => {
-          const nextIndex = (index + 1) % Math.min(desktopVisibleReels.length, 4);
-          playVideo(nextIndex);
-        }, duration * 1000);
-      };
-
-      if (desktopVisibleReels.length > 0) {
-        playVideo(0);
-      }
-    };
-
-    const timer = setTimeout(startAutoplaySequence, 500);
-
-    return () => {
-      clearTimeout(timer);
-      if (desktopAutoplayRef.current) {
-        clearTimeout(desktopAutoplayRef.current);
-        desktopAutoplayRef.current = null;
-      }
-    };
-  }, [desktopVisibleReels]);
-
-  // Mobile autoplay for first visible video
-  useEffect(() => {
-    if (!mobileVisibleReels.length || mobileVisibleReels.length === 0) return;
-
-    if (mobileAutoplayRef.current) {
-      clearTimeout(mobileAutoplayRef.current);
-      mobileAutoplayRef.current = null;
-    }
-
-    const playMobileVideo = (index: number) => {
-      const reel = mobileVisibleReels[index];
-      if (!reel) return;
-
-      const videoElement = videoRefs.current.get(reel.id);
-      if (!videoElement) return;
-
-      playOnlyVideo(reel.id, videoElement);
-      setMobilePlayingIndex(index);
-
-      const duration = reel.duration || 30;
-      mobileAutoplayRef.current = window.setTimeout(() => {
-        const nextIndex = (index + 1) % Math.min(mobileVisibleReels.length, 3);
-        playMobileVideo(nextIndex);
-      }, duration * 1000);
-    };
-
-    const timer = setTimeout(() => {
-      playMobileVideo(0);
-    }, 500);
-
-    return () => {
-      clearTimeout(timer);
-      if (mobileAutoplayRef.current) {
-        clearTimeout(mobileAutoplayRef.current);
-        mobileAutoplayRef.current = null;
-      }
-    };
-  }, [mobileVisibleReels]);
-
-  // Ensure videos actually play when playingReelId changes
-  useEffect(() => {
-    if (playingReelId) {
-      const videoElement = videoRefs.current.get(playingReelId);
-      if (videoElement && videoElement.paused) {
-        videoElement.muted = true;
-        videoElement.play().catch(error => {
-          console.warn('Failed to play video:', error);
-        });
-      }
-    }
-  }, [playingReelId]);
-
   // Helper function to process media URLs
   const processPostMediaUrls = (post: any): any => {
     let media_urls: string[] | undefined = undefined;
@@ -646,9 +507,15 @@ const Feed: React.FC = () => {
             moment_special_message,
             moment_special_icon,
             moment_special_name,
+            moment_special_bg,
+            moment_special_countries,
             is_custom_special_day,
             moment_special_id,
             share_to_feed,
+            is_platform_celebration,
+            platform_special_day_id,
+            platform_special_day:platform_special_days(event_date,country_code,name,local_name,description,icon,background),
+            pinned_until,
             media_url,
             media_urls,
             voice_note_url,
@@ -671,6 +538,7 @@ const Feed: React.FC = () => {
           `, { count: 'exact' })
           .is('group_id', null)
           .or('post_type.neq.moment,share_to_feed.eq.true')
+          .order('pinned_until', { ascending: false, nullsFirst: false })
           .order('created_at', { ascending: false })
           .range(from, to);
 
@@ -690,6 +558,15 @@ const Feed: React.FC = () => {
             
             const processedPost = { 
               ...processPostMediaUrls(post), 
+              ...(post.is_platform_celebration ? {
+                user: {
+                  first_name: 'NexSq',
+                  last_name: 'Celebrations',
+                  username: 'nexsq',
+                  avatar_url: '/favicon.ico',
+                  verified: true,
+                },
+              } : {}),
               comments_count: commentCount || 0 
             };
             
@@ -750,22 +627,266 @@ const Feed: React.FC = () => {
   const { data: studioShows = [] } = useQuery({
     queryKey: QUERY_KEYS.studioShows,
     queryFn: async () => {
-      const { data, error } = await supabase
+      const { data: shows, error } = await supabase
         .from('studio_shows')
         .select('*')
         .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(10);
+        .order('created_at', { ascending: false });
 
       if (error) throw error;
-      return data || [];
+      const activeShows = shows || [];
+      if (activeShows.length === 0) return [];
+
+      const showIds = activeShows.map((show) => show.id);
+      const { data: episodes, error: episodesError } = await supabase
+        .from('studio_episodes')
+        .select('*')
+        .in('show_id', showIds)
+        .eq('is_active', true)
+        .order('scheduled_time', { ascending: true, nullsFirst: false })
+        .order('created_at', { ascending: true });
+
+      if (episodesError) {
+        console.warn('[Feed] Could not load studio episodes for TV playlist:', episodesError);
+      }
+
+      const episodesByShow = new Map<string, any[]>();
+      for (const episode of episodes || []) {
+        const episodeShowId = String(episode.show_id);
+        const showEpisodes = episodesByShow.get(episodeShowId) || [];
+        showEpisodes.push(episode);
+        episodesByShow.set(episodeShowId, showEpisodes);
+      }
+
+      const programStart = (show: any) => {
+        if (show.time_slot_start) return String(show.time_slot_start);
+        if (!show.scheduled_time) return '99:99:99';
+        const scheduledDate = new Date(show.scheduled_time);
+        return Number.isNaN(scheduledDate.getTime())
+          ? String(show.scheduled_time)
+          : scheduledDate.toISOString().slice(11, 19);
+      };
+      const orderedShows = [...activeShows].sort((first: any, second: any) =>
+        programStart(first).localeCompare(programStart(second)) ||
+        String(first.created_at || '').localeCompare(String(second.created_at || ''))
+      );
+
+      return orderedShows.flatMap((show: any) => {
+        const playableEpisodes = (episodesByShow.get(String(show.id)) || [])
+          .filter((episode) => typeof episode.video_url === 'string' && episode.video_url.trim());
+
+        if (playableEpisodes.length > 0) {
+          return playableEpisodes.map((episode) => ({
+            ...episode,
+            id: episode.id,
+            show_id: show.id,
+            show_title: show.title,
+            title: episode.title || show.title,
+            description: episode.description || show.description,
+            video_url: episode.video_url,
+            thumbnail_url: episode.thumbnail_url || show.thumbnail_url,
+            duration: episode.duration || show.duration,
+            category: show.category,
+            time_slot_start: show.time_slot_start,
+            time_slot_end: show.time_slot_end,
+            days_of_week: show.approved_days?.length ? show.approved_days : show.days_of_week,
+            approved_days: show.approved_days,
+            schedule_pattern: show.schedule_pattern,
+            program_scheduled_time: show.scheduled_time,
+            program_end_time: show.end_time,
+            is_live: false,
+            is_active: true,
+          }));
+        }
+
+        const videoUrl = show.video_url || show.live_url;
+        return videoUrl ? [{
+          ...show,
+          video_url: videoUrl,
+          show_id: show.id,
+          show_title: show.title,
+          program_scheduled_time: show.scheduled_time,
+          program_end_time: show.end_time,
+        }] : [];
+      });
     },
     staleTime: 2 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
   });
 
+  useEffect(() => {
+    if (!studioShows.length) {
+      setScheduleTransition(false);
+      setNextProgramIndex(null);
+      return;
+    }
+
+    const selectScheduledProgram = () => {
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const today = now.toDateString();
+      const dayName = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+      const parseDays = (value: unknown): string[] => {
+        if (Array.isArray(value)) {
+          return value.map((day) => String(day).trim().toLowerCase()).filter(Boolean);
+        }
+        if (typeof value !== 'string' || !value.trim()) return [];
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            return parsed.map((day) => String(day).trim().toLowerCase()).filter(Boolean);
+          }
+        } catch {}
+        return value.split(',').map((day) => day.trim().toLowerCase()).filter(Boolean);
+      };
+      const programs = studioShows.flatMap((program: any, index: number) => {
+        const days = parseDays(program.approved_days?.length ? program.approved_days : program.days_of_week);
+        const pattern = String(program.schedule_pattern || '').toLowerCase();
+        const startValue = program.time_slot_start || program.program_scheduled_time;
+        const endValue = program.time_slot_end || program.program_end_time;
+        const parseMinutes = (value: string) => {
+          const timeMatch = value.match(/^(\d{1,2}):(\d{2})/);
+          if (timeMatch) return Number(timeMatch[1]) * 60 + Number(timeMatch[2]);
+          const date = new Date(value);
+          return Number.isNaN(date.getTime()) ? null : date.getHours() * 60 + date.getMinutes();
+        };
+        const start = typeof startValue === 'string' ? parseMinutes(startValue) : null;
+        const end = typeof endValue === 'string' ? parseMinutes(endValue) : null;
+        if (start === null || end === null) return [];
+
+        const recurring = pattern === 'daily' || days.includes(dayName);
+        const scheduledDate = program.program_scheduled_time
+          ? new Date(program.program_scheduled_time)
+          : null;
+        const oneOff = !pattern && days.length === 0 && scheduledDate &&
+          !Number.isNaN(scheduledDate.getTime()) && scheduledDate.toDateString() === today;
+        if (!recurring && !oneOff) return [];
+
+        const normalizedEnd = end <= start ? end + 24 * 60 : end;
+        const normalizedNow = currentMinutes < start ? currentMinutes + 24 * 60 : currentMinutes;
+        return [{ index, start, end: normalizedEnd, active: normalizedNow >= start && normalizedNow < normalizedEnd }];
+      });
+
+      const currentProgram = programs.find((program) => program.active);
+      const nextProgram = programs
+        .filter((program) => program.start > currentMinutes)
+        .sort((first, second) => first.start - second.start)[0];
+      const nextIndex = currentProgram?.index ?? nextProgram?.index ?? 0;
+      setNextProgramIndex(currentProgram ? null : nextProgram?.index ?? null);
+      setCurrentShowIndex((currentIndex) => currentIndex === nextIndex ? currentIndex : nextIndex);
+      setScheduleTransition(!currentProgram);
+    };
+
+    selectScheduledProgram();
+    const intervalId = window.setInterval(selectScheduledProgram, 30_000);
+    return () => window.clearInterval(intervalId);
+  }, [studioShows]);
+
   // Get all posts from pages
-  const posts: Post[] = (postsData as any)?.pages?.flatMap((page: any) => page.posts) || [];
+  const loadedPosts: Post[] = (postsData as any)?.pages?.flatMap((page: any) => page.posts) || [];
+  const [pinSortNow, setPinSortNow] = useState(() => Date.now());
+  const nextPinExpiry = loadedPosts.reduce((nextExpiry, post) => {
+    const expiry = Date.parse(post.pinned_until || '');
+    return Number.isFinite(expiry) && expiry > pinSortNow && expiry < nextExpiry
+      ? expiry
+      : nextExpiry;
+  }, Number.POSITIVE_INFINITY);
+
+  useEffect(() => {
+    if (!Number.isFinite(nextPinExpiry)) return;
+
+    const timeoutId = window.setTimeout(
+      () => setPinSortNow(Date.now()),
+      Math.max(0, nextPinExpiry - Date.now() + 1),
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [nextPinExpiry]);
+
+  const orderedPosts = [...loadedPosts].sort((first, second) => {
+    const firstExpiry = Date.parse(first.pinned_until || '');
+    const secondExpiry = Date.parse(second.pinned_until || '');
+    const firstIsPinned = Number.isFinite(firstExpiry) && firstExpiry > pinSortNow;
+    const secondIsPinned = Number.isFinite(secondExpiry) && secondExpiry > pinSortNow;
+
+    if (firstIsPinned !== secondIsPinned) return firstIsPinned ? -1 : 1;
+    return Date.parse(second.created_at) - Date.parse(first.created_at);
+  });
+  const posts = groupPlatformCelebrations(orderedPosts);
+
+  // Only the most-visible Shorts preview plays, even though responsive rails are duplicated in the DOM.
+  useEffect(() => {
+    if (posts.length < 6 || reels.length === 0 || !feedRef.current) return;
+
+    const previewVideos = Array.from(
+      feedRef.current.querySelectorAll<HTMLVideoElement>('[data-reel-preview]')
+    );
+    if (previewVideos.length === 0) return;
+
+    const visibilityByVideo = new Map<HTMLVideoElement, number>();
+    const reconcilePlayback = () => {
+      const visibleVideos = [...visibilityByVideo.entries()]
+        .filter(([, ratio]) => ratio >= 0.5)
+        .sort(([, firstRatio], [, secondRatio]) => secondRatio - firstRatio);
+      const nextActiveVideos = visibleVideos.slice(0, 1).map(([video]) => video);
+      const nextActiveSet = new Set(nextActiveVideos);
+
+      previewVideos.forEach((video) => {
+        if (!nextActiveSet.has(video) && !video.paused) video.pause();
+      });
+
+      const previousActiveSet = activeReelPreviewRef.current;
+      activeReelPreviewRef.current = nextActiveSet;
+
+      nextActiveVideos.forEach((video) => {
+        if (previousActiveSet.has(video) && !video.paused) return;
+        video.muted = true;
+        video.defaultMuted = true;
+        video.autoplay = false;
+        video.playsInline = true;
+        video.play().catch((error) => {
+          if (activeReelPreviewRef.current.has(video)) {
+            console.warn('Failed to play muted reel preview:', error);
+          }
+        });
+      });
+
+      const activeReelIds = [...new Set(
+        nextActiveVideos.map((video) => video.dataset.reelId).filter((id): id is string => !!id)
+      )].sort();
+      setPlayingReelIds((currentIds) =>
+        currentIds.length === activeReelIds.length && currentIds.every((id, index) => id === activeReelIds[index])
+          ? currentIds
+          : activeReelIds
+      );
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        visibilityByVideo.set(
+          entry.target as HTMLVideoElement,
+          entry.isIntersecting ? entry.intersectionRatio : 0
+        );
+      });
+      reconcilePlayback();
+    }, { threshold: [0, 0.5, 0.75, 1] });
+    const handleResize = () => {
+      visibilityByVideo.clear();
+      previewVideos.forEach((video) => {
+        observer.unobserve(video);
+        observer.observe(video);
+      });
+    };
+    window.addEventListener('resize', handleResize);
+
+    previewVideos.forEach((video) => observer.observe(video));
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      observer.disconnect();
+      previewVideos.forEach((video) => video.pause());
+      activeReelPreviewRef.current.clear();
+    };
+  }, [posts.length, reels]);
 
   // Fetch ad campaigns from campaigns table
   useEffect(() => {
@@ -1109,19 +1230,6 @@ const Feed: React.FC = () => {
   const handleReelClose = () => {
     setShowReelsOverlay(false);
     setSelectedReel(null);
-    setActiveReelIndex(null);
-  };
-
-  const handleReelPlay = (reelId: string) => {
-    const videoElement = videoRefs.current.get(reelId);
-    if (videoElement) {
-      if (videoElement.paused) {
-        playOnlyVideo(reelId, videoElement);
-      } else {
-        videoElement.pause();
-        setPlayingReelId(null);
-      }
-    }
   };
 
   const handleReelMute = (reelId: string, e: React.MouseEvent) => {
@@ -1130,10 +1238,6 @@ const Feed: React.FC = () => {
       ...prev,
       [reelId]: !prev[reelId]
     }));
-    const videoElement = videoRefs.current.get(reelId);
-    if (videoElement) {
-      videoElement.muted = !mutedStates[reelId];
-    }
   };
 
   const handleReelLike = async (reelId: string) => {
@@ -1166,19 +1270,6 @@ const Feed: React.FC = () => {
   // Handle product click
   const handleProductClick = (product: StoreProduct) => {
     navigate(`/product/${product.id}`);
-  };
-
-  // Handle video time updates
-  const handleTimeUpdate = (reelId: string, e: React.SyntheticEvent<HTMLVideoElement>) => {
-    const video = e.currentTarget;
-    const reel = reels.find(r => r.id === reelId);
-    const duration = reel?.duration || 30;
-    
-    if (video.currentTime >= duration) {
-      video.pause();
-      video.currentTime = 0;
-      setPlayingReelId(null);
-    }
   };
 
   // Add this to your existing event handlers
@@ -1440,7 +1531,10 @@ const Feed: React.FC = () => {
       <div className="relative">
         <VideoContainer 
           shows={studioShows} 
+          selectedShowId={studioShows[currentShowIndex]?.id}
           currentShowIndex={currentShowIndex}
+          scheduleTransition={scheduleTransition}
+          nextProgram={nextProgramIndex === null ? undefined : studioShows[nextProgramIndex]}
           onCurrentShowChange={handleCurrentShowChange}
           onCommentClick={handleCommentClick}
         />
@@ -1543,6 +1637,12 @@ const Feed: React.FC = () => {
                 {/* After every 6 organic posts insert Reels then an AD */}
                 {(idx + 1) % 6 === 0 && (() => {
                   const batchIndex = Math.floor(idx / 6);
+                  const reelsPerBatch = Math.min(12, Math.max(1, Math.ceil(reels.length / 2)));
+                  const reelStart = reels.length > 0 ? (batchIndex * reelsPerBatch) % reels.length : 0;
+                  const batchReels = Array.from(
+                    { length: Math.min(reelsPerBatch, reels.length) },
+                    (_, reelIndex) => reels[(reelStart + reelIndex) % reels.length]
+                  );
                   const adCampaign = adCampaigns[batchIndex] || getFallbackAd(batchIndex);
 
                   // Reels block
@@ -1558,36 +1658,22 @@ const Feed: React.FC = () => {
                       </div>
 
                       {/* Mobile: horizontal scroll */}
-                      <div className="sm:hidden flex space-x-2 overflow-x-auto pb-2 px-2" ref={mobileReelsRef}>
-                        {mobileVisibleReels.map((reel, i) => (
+                      <div className="sm:hidden flex space-x-2 overflow-x-auto pb-2 px-2">
+                        {batchReels.map((reel, i) => (
                           <div key={`m-${reel.id}-${i}`} className="w-28 flex-shrink-0 aspect-[9/16] rounded-lg overflow-hidden relative cursor-pointer active:scale-95 transition-transform" onClick={() => handleReelClick(reel, i)}>
                             <video 
                               id={reel.id} 
-                              ref={(el) => { 
-                                if (el) {
-                                  videoRefs.current.set(reel.id, el);
-                                  el.muted = true;
-                                  el.autoplay = false;
-                                  el.playsInline = true;
-                                  el.addEventListener('canplay', () => {});
-                                } else {
-                                  videoRefs.current.delete(reel.id);
-                                }
-                              }} 
+                              data-reel-preview
+                              data-reel-id={reel.id}
                               src={reel.video_url} 
                               muted={true}
                               playsInline={true}
+                              loop={true}
+                              preload="none"
                               className="w-full h-full object-cover" 
-                              onTimeUpdate={(e) => handleTimeUpdate(reel.id, e)}
-                              onLoadedData={() => {
-                                const video = videoRefs.current.get(reel.id);
-                                if (video && playingReelId === reel.id) {
-                                  video.play().catch(console.warn);
-                                }
-                              }}
                             />
                             <div className="absolute top-2 right-2 bg-black/50 rounded-full p-1">
-                              {playingReelId === reel.id ? (
+                              {playingReelIds.includes(reel.id) ? (
                                 <Pause className="h-3 w-3 text-white" />
                               ) : (
                                 <Play className="h-3 w-3 text-white" />
@@ -1605,58 +1691,23 @@ const Feed: React.FC = () => {
 
                       {/* Desktop: horizontal scroll */}
                       <div className="hidden sm:block">
-                        <div className="flex space-x-2 overflow-x-auto pb-2 px-2" ref={desktopReelsRef}>
-                          {desktopVisibleReels.map((reel, i) => (
+                        <div className="flex space-x-2 overflow-x-auto pb-2 px-2">
+                          {batchReels.map((reel, i) => (
                             <div key={`d-${reel.id}-${i}`} className="w-48 flex-shrink-0 aspect-[9/16] rounded-lg overflow-hidden relative cursor-pointer active:scale-95 transition-transform group" onClick={() => handleReelClick(reel, i)}>
                               <video 
                                 id={reel.id} 
-                                ref={(el) => { 
-                                  if (el) {
-                                    videoRefs.current.set(reel.id, el);
-                                    el.muted = true;
-                                    el.autoplay = false;
-                                    el.playsInline = true;
-                                    el.loop = true;
-                                  } else {
-                                    videoRefs.current.delete(reel.id);
-                                  }
-                                }} 
+                                data-reel-preview
+                                data-reel-id={reel.id}
                                 src={reel.video_url} 
                                 muted={true}
                                 playsInline={true}
                                 loop={true}
+                                preload="none"
                                 className="w-full h-full object-cover" 
-                                onTimeUpdate={(e) => handleTimeUpdate(reel.id, e)}
-                                onLoadedData={() => {
-                                  const video = videoRefs.current.get(reel.id);
-                                  if (video && playingReelId === reel.id) {
-                                    video.play().catch(console.warn);
-                                  }
-                                }}
-                                onMouseEnter={() => {
-                                  if (i >= 4) {
-                                    const video = videoRefs.current.get(reel.id);
-                                    if (video && video.paused) {
-                                      playOnlyVideo(reel.id, video);
-                                    }
-                                  }
-                                }}
-                                onMouseLeave={() => {
-                                  if (i >= 4) {
-                                    const video = videoRefs.current.get(reel.id);
-                                    if (video) {
-                                      video.pause();
-                                      video.currentTime = 0;
-                                      if (playingReelId === reel.id) {
-                                        setPlayingReelId(null);
-                                      }
-                                    }
-                                  }
-                                }}
                               />
                               <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                               <div className="absolute top-2 right-2 bg-black/60 rounded-full p-1.5">
-                                {playingReelId === reel.id ? (
+                                {playingReelIds.includes(reel.id) ? (
                                   <Pause className="h-3 w-3 text-white" />
                                 ) : (
                                   <Play className="h-3 w-3 text-white" />

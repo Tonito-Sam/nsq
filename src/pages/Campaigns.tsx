@@ -34,35 +34,18 @@ const Campaigns = () => {
   const fetchWallet = async () => {
     if (!user) return;
     try {
-      const { data, error } = await supabase
-        .from('wallets')
-        .select('real_balance, virtual_balance, total_balance')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!error && data) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const response = await fetch(apiUrl('/api/wallet/balance'), {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
         setWallet({
-          real_balance: data.real_balance || 0,
-          virtual_balance: data.virtual_balance || 100,
-          total_balance: data.total_balance || ((data.real_balance || 0) + (data.virtual_balance || 100))
+          real_balance: data.real_balance ?? 0,
+          virtual_balance: data.virtual_balance ?? 100,
+          total_balance: data.total_balance ?? ((data.real_balance ?? 0) + (data.virtual_balance ?? 100))
         });
-      } else if (error && error.code === 'PGRST116') {
-        const initialVirtualBalance = 100;
-        const { data: newWallet, error: insertError } = await supabase
-          .from('wallets')
-          .insert({
-            user_id: user.id,
-            real_balance: 0,
-            virtual_balance: initialVirtualBalance,
-            total_balance: initialVirtualBalance,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-        if (!insertError && newWallet) {
-          setWallet({ real_balance: 0, virtual_balance: initialVirtualBalance, total_balance: initialVirtualBalance });
-        }
       }
     } catch (e) {
       console.error('fetchWallet error', e);
@@ -72,7 +55,11 @@ const Campaigns = () => {
   const fetchCampaigns = async () => {
     if (!user) return;
     try {
-      const resp = await fetch(apiUrl(`/api/campaigns?user_id=${encodeURIComponent(user.id)}`));
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const resp = await fetch(apiUrl('/api/campaigns'), {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
       const j = await resp.json();
       setCampaigns(j.campaigns || []);
     } catch (e) {
@@ -84,7 +71,12 @@ const Campaigns = () => {
   const handleCancel = async (id: string) => {
     if (!confirm('Cancel this campaign and refund remaining budget (prorated)?')) return;
     try {
-      const resp = await fetch(apiUrl(`/api/campaigns/${id}?refund=true`), { method: 'DELETE' });
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please sign in again to cancel this campaign.');
+      const resp = await fetch(apiUrl(`/api/campaigns/${id}?refund=true`), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
       const j = await resp.json();
       if (!resp.ok) throw new Error(j.error || JSON.stringify(j));
       await fetchCampaigns();

@@ -4,7 +4,15 @@ import { Button } from '@/components/ui/button';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { CreatePostModal } from './CreatePostModal';
 
-export const MobileBottomNav = () => {
+export const MobileBottomNav = ({
+  transparent = false,
+  className = '',
+  forceVisible = false,
+}: {
+  transparent?: boolean;
+  className?: string;
+  forceVisible?: boolean;
+}) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -77,7 +85,7 @@ export const MobileBottomNav = () => {
   return (
     <>
       {!hiddenByOverlay && (
-        <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-[#161616] border-t border-gray-200 dark:border-gray-700 md:hidden z-50 safe-area-inset-bottom">
+        <div className={`fixed bottom-0 left-0 right-0 border-t border-gray-200 dark:border-gray-700 ${forceVisible ? '' : 'md:hidden'} z-50 safe-area-inset-bottom ${transparent ? 'bg-white/10 dark:bg-[#161616]/10 backdrop-blur-xl' : 'bg-white dark:bg-[#161616]'} ${className}`.trim()}>
           <div className="flex items-center justify-between px-3 sm:px-4 py-2 pb-safe">
             {/* Left side navigation items */}
             <div className="flex space-x-3 sm:space-x-4">
@@ -93,7 +101,7 @@ export const MobileBottomNav = () => {
                   }`}
                   onClick={() => navigate(item.path)}
                 >
-                  <item.icon className="h-4 w-4 sm:h-5 sm:w-5 mb-1" />
+                  <item.icon className="h-4 w-4 sm:h-5 sm:w-5 mb-0.5" />
                   <span className="text-xs truncate">{item.label}</span>
                 </Button>
               ))}
@@ -123,7 +131,7 @@ export const MobileBottomNav = () => {
                   }`}
                   onClick={() => navigate(item.path)}
                 >
-                  <item.icon className="h-4 w-4 sm:h-5 sm:w-5 mb-1" />
+                  <item.icon className="h-4 w-4 sm:h-5 sm:w-5 mb-0.5" />
                   <span className="text-xs truncate">{item.label}</span>
                 </Button>
               ))}

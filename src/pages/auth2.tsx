@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { Eye, EyeOff, User, Mail, Lock, UserCircle, Megaphone, Globe, Users } from 'lucide-react';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
 
 // Typing animation for hero card with three sections
 function TypingHeroCard() {
@@ -555,7 +556,7 @@ const Auth = () => {
                 className="w-full h-12 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5"
                 disabled={loading}
               >
-                {loading ? 'Loading...' : (isLogin ? 'Login' : 'Register')}
+                {loading ? <SkeletonLine width="5rem" height="1rem" className="inline-block" /> : (isLogin ? 'Login' : 'Register')}
               </Button>
             </form>
 

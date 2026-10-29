@@ -13,6 +13,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { supabase } from "@/integrations/supabase/client";
 import webrtcBridge, { BASE as WEBRTC_BASE, API_ROOT as WEBRTC_API_ROOT } from '@/services/webrtcBridge';
 import { useAuth } from '@/hooks/useAuth';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
 
 type StreamInfo = {
   playbackId: string;
@@ -523,7 +524,11 @@ const LiveStream = () => {
                     <AvatarFallback>{userData?.username?.[0]?.toUpperCase() || '?'}</AvatarFallback>
                   )}
                 </Avatar>
-                <span className="text-white font-semibold text-sm">{userData?.username || 'Loading...'}</span>
+                {userData?.username ? (
+                  <span className="text-white font-semibold text-sm">{userData.username}</span>
+                ) : (
+                  <SkeletonLine width="6rem" height="1rem" className="inline-block align-middle" />
+                )}
               </div>
 
               {/* Channel Badge */}

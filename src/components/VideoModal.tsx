@@ -232,48 +232,37 @@ export const VideoModal: React.FC<VideoModalProps> = (props) => {
   const renderSpecialDayOverlay = () => {
     if (!moment) return null;
 
-    let icon = null;
-    let message = null;
+    let icon = moment.moment_special_icon || null;
+    let name = moment.moment_special_name || null;
+    let message = moment.moment_special_message || null;
 
-    console.log('Rendering special day overlay for moment:', moment.id);
-    
-    // Check for custom special day first
     if (moment.is_custom_special_day) {
-      console.log('Found custom special day');
-      icon = moment.moment_special_icon;
-      message = moment.moment_special_message || moment.moment_special_name;
-    }
-    // Then check for predefined special days
-    else if (moment.moment_special_id) {
-      console.log('Found predefined special day with ID:', moment.moment_special_id);
+      name = moment.moment_special_name || null;
+    } else if (moment.moment_special_id) {
       const special = specialBackgrounds.find(bg => bg.id === moment.moment_special_id);
-      console.log('Special background found:', special);
       if (special) {
-        icon = special.icon;
-        message = moment.moment_special_message || special.description || special.name;
+        icon = icon || special.icon;
+        name = name || special.name;
+        message = message || special.description;
       }
     }
 
-    console.log('Final overlay values - icon:', icon, 'message:', message);
-
-    if (!icon && !message) {
-      console.log('No special day content to display');
-      return null;
-    }
+    if (!icon && !name && !message) return null;
 
     return (
       <div
         style={{
           position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 8,
+          left: 12,
+          right: 12,
+          bottom: 12,
           display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'flex-end',
-          justifyContent: 'space-between',
-          width: '100%',
-          padding: '0 16px',
+          alignItems: 'center',
+          gap: 10,
+          padding: '8px 10px',
+          borderRadius: 10,
+          background: 'rgba(0,0,0,0.48)',
+          backdropFilter: 'blur(6px)',
           pointerEvents: 'none',
           zIndex: 3,
         }}
@@ -281,41 +270,25 @@ export const VideoModal: React.FC<VideoModalProps> = (props) => {
         {icon && (
           <span
             style={{
-              fontSize: 32,
+              flex: '0 0 auto',
+              fontSize: 28,
               textShadow: '0 2px 8px #0008',
-              background: 'rgba(0,0,0,0.10)',
-              borderRadius: 8,
-              padding: '2px 6px',
-              minWidth: 36,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
             }}
           >
-            {icon}
+            {/^https?:\/\//i.test(String(icon)) || String(icon).includes('/') ? (
+              <img src={String(icon)} alt={name || 'Special day icon'} style={{ width: 30, height: 30, objectFit: 'cover', borderRadius: 6 }} />
+            ) : (
+              <span aria-hidden>{icon}</span>
+            )}
           </span>
         )}
-        {message && (
-          <span
-            style={{
-              fontSize: 16,
-              color: '#fff',
-              background: 'rgba(0,0,0,0.35)',
-              borderRadius: 8,
-              padding: '2px 10px',
-              fontWeight: 600,
-              textShadow: '0 1px 4px #000',
-              marginLeft: icon ? 'auto' : 0,
-              marginRight: 0,
-              minWidth: 60,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-end',
-            }}
-          >
-            {message}
-          </span>
-        )}
+        <div style={{ minWidth: 0, flex: 1, color: '#fff', textShadow: '0 1px 4px #000' }}>
+          {name && <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.2 }}>{name}</div>}
+          {message && <div style={{ marginTop: name ? 2 : 0, fontSize: 13, fontWeight: 600, lineHeight: 1.25, overflowWrap: 'anywhere' }}>{message}</div>}
+        </div>
       </div>
     );
   };

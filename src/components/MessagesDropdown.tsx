@@ -135,7 +135,7 @@ export const MessagesDropdown = () => {
                       .update({ read_at: new Date().toISOString() })
                       .eq('conversation_id', conv.id)
                       .is('read_at', null)
-                      .neq('sender_id', userId);
+                      .neq('sender_id', userId || '');
                     navigate(`/messages/${conv.id}`);
                     setTimeout(fetchConversations, 500);
                   }}

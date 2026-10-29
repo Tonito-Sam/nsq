@@ -43,8 +43,8 @@ export default function EpisodeDragDropList({ episodes, onReorder, onEdit, onDel
                       </div>
                     </div>
                     <div className="flex gap-2">
-                      <Button size="sm" variant="outline" onClick={() => onEdit(ep)}>Edit</Button>
-                      <Button size="sm" variant="destructive" onClick={() => onDelete(ep.id)}>Delete</Button>
+                      <Button type="button" size="sm" variant="outline" onClick={() => onEdit(ep)}>Edit</Button>
+                      <Button type="button" size="sm" variant="destructive" onClick={() => onDelete(ep.id)}>Delete</Button>
                       {ep.video_url && <a href={ep.video_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline text-xs px-2 py-1">Watch</a>}
                     </div>
                   </div>

@@ -155,37 +155,18 @@ const CampaignCreate = () => {
   const fetchWallet = async () => {
     if (!user) return;
     try {
-      const { data, error } = await supabase
-        .from('wallets')
-        .select('real_balance, virtual_balance, total_balance')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!error && data) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      const response = await fetch(apiUrl('/api/wallet/balance'), {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (response.ok) {
+        const data = await response.json();
         setWallet({
-          real_balance: data.real_balance || 0,
-          virtual_balance: data.virtual_balance || 100,
-          total_balance: data.total_balance || ((data.real_balance || 0) + (data.virtual_balance || 100))
+          real_balance: data.real_balance ?? 0,
+          virtual_balance: data.virtual_balance ?? 100,
+          total_balance: data.total_balance ?? ((data.real_balance ?? 0) + (data.virtual_balance ?? 100))
         });
-      } else if (error && error.code === 'PGRST116') {
-        // No wallet record found, create one with initial virtual balance (same behaviour as Wallet page)
-        const initialVirtualBalance = 100;
-        const { data: newWallet, error: insertError } = await supabase
-          .from('wallets')
-          .insert({
-            user_id: user.id,
-            real_balance: 0,
-            virtual_balance: initialVirtualBalance,
-            total_balance: initialVirtualBalance,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-
-        if (!insertError && newWallet) {
-          setWallet({ real_balance: 0, virtual_balance: initialVirtualBalance, total_balance: initialVirtualBalance });
-        }
       }
     } catch (e) { console.error('fetchWallet', e); }
   };
@@ -329,11 +310,12 @@ const CampaignCreate = () => {
       targetOptions.bid_strategy = bidStrategy;
 
       const payload: any = {
-        user_id: user.id,
         post_id: postId || null,
         name: name || `Campaign ${new Date().toISOString().slice(0, 10)}`,
         objective: objective || 'impressions',
         budget_usd: budgetNum,
+        days,
+        reference: `CAMP-${crypto.randomUUID()}`,
         start_at: startAt || new Date(Date.now() + 86400000).toISOString(),
         target_options: targetOptions,
         metadata: {
@@ -345,10 +327,15 @@ const CampaignCreate = () => {
         }
       };
 
-      const resp = await fetch(apiUrl('/api/campaigns'), { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify(payload) 
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please sign in again to create a campaign.');
+      const resp = await fetch(apiUrl('/api/campaigns'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(payload)
       });
       const j = await resp.json();
       if (!resp.ok) throw new Error(j.error || JSON.stringify(j));

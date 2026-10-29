@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AssumptionsPanel } from "@/components/AssumptionsPanel";
 import { MetricsCards } from "@/components/MetricsCards";
 import { ProjectionTable } from "@/components/ProjectionTable";
@@ -187,37 +187,37 @@ const Index = () => {
     return breakdown;
   };
 
-  const projectionData = calculateProjections();
-  const revenueBreakdown = calculateRevenueBreakdown();
+  const projectionData = useMemo(() => calculateProjections(), [assumptions]);
+  const revenueBreakdown = useMemo(() => calculateRevenueBreakdown(), [assumptions]);
 
   // Calculate metrics
-  const totalRevenue = projectionData.reduce((sum, year) => sum + year.revenue, 0);
-  const totalExpenses = projectionData.reduce((sum, year) => sum + year.expenses, 0);
-  const netCashFlow = totalRevenue - totalExpenses;
+  const totalRevenue = useMemo(() => projectionData.reduce((sum, year) => sum + year.revenue, 0), [projectionData]);
+  const totalExpenses = useMemo(() => projectionData.reduce((sum, year) => sum + year.expenses, 0), [projectionData]);
+  const netCashFlow = useMemo(() => totalRevenue - totalExpenses, [totalRevenue, totalExpenses]);
   
   // Calculate runway (months until funding needed)
-  const monthlyBurn = projectionData[0].expenses / 12;
-  const runwayMonths = Math.round(investmentAmount / monthlyBurn);
+  const monthlyBurn = useMemo(() => projectionData[0].expenses / 12, [projectionData]);
+  const runwayMonths = useMemo(() => Math.round(investmentAmount / monthlyBurn), [investmentAmount, monthlyBurn]);
   
   // Find break-even year
-  const breakEvenYear = projectionData.findIndex(year => year.cashFlow >= 0) + 1 || 5;
+  const breakEvenYear = useMemo(() => projectionData.findIndex(year => year.cashFlow >= 0) + 1 || 5, [projectionData]);
 
   // Calculate investor metrics
-  const year5Revenue = projectionData[4].revenue;
-  const totalMarketingSpend = projectionData.reduce((sum, year) => sum + (assumptions.digitalAdsCost + assumptions.eventsCost) * 12, 0);
-  const totalUsers = assumptions.initialUsers * Math.pow(1 + getGrowthRate() / 100, 3 * 12); // Year 5 users
-  const cac = totalUsers > 0 ? totalMarketingSpend / totalUsers : 0;
-  const avgRevenuePerUser = totalUsers > 0 ? totalRevenue / totalUsers : 0;
+  const year5Revenue = useMemo(() => projectionData[4].revenue, [projectionData]);
+  const totalMarketingSpend = useMemo(() => projectionData.reduce((sum, year) => sum + (assumptions.digitalAdsCost + assumptions.eventsCost) * 12, 0), [projectionData, assumptions.digitalAdsCost, assumptions.eventsCost]);
+  const totalUsers = useMemo(() => assumptions.initialUsers * Math.pow(1 + getGrowthRate() / 100, 3 * 12), [assumptions.initialUsers, getGrowthRate]);
+  const cac = useMemo(() => totalUsers > 0 ? totalMarketingSpend / totalUsers : 0, [totalMarketingSpend, totalUsers]);
+  const avgRevenuePerUser = useMemo(() => totalUsers > 0 ? totalRevenue / totalUsers : 0, [totalRevenue, totalUsers]);
   const customerLifetimeMonths = 24; // Assume 24 month average lifetime
-  const ltv = avgRevenuePerUser * (customerLifetimeMonths / 60); // 60 months = 5 years
-  const ltvCacRatio = cac > 0 ? ltv / cac : 0;
+  const ltv = useMemo(() => avgRevenuePerUser * (customerLifetimeMonths / 60), [avgRevenuePerUser]);
+  const ltvCacRatio = useMemo(() => (cac > 0 ? ltv / cac : 0), [cac, ltv]);
   
   // Burn multiple = Net Burn / Net New ARR
-  const netBurnYear2 = Math.abs(projectionData[1].netIncome);
-  const arrGrowthYear2 = projectionData[1].revenue;
-  const burnMultiple = arrGrowthYear2 > 0 ? netBurnYear2 / arrGrowthYear2 : 0;
+  const netBurnYear2 = useMemo(() => Math.abs(projectionData[1].netIncome), [projectionData]);
+  const arrGrowthYear2 = useMemo(() => projectionData[1].revenue, [projectionData]);
+  const burnMultiple = useMemo(() => (arrGrowthYear2 > 0 ? netBurnYear2 / arrGrowthYear2 : 0), [netBurnYear2, arrGrowthYear2]);
   
-  const monthlyRecurringRevenue = year5Revenue / 12;
+  const monthlyRecurringRevenue = useMemo(() => year5Revenue / 12, [year5Revenue]);
 
   // Prepare chart data
   const chartData = projectionData.map(p => ({

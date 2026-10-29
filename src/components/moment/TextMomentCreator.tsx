@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';
 import { Upload, Sparkles, Palette, Image as ImageIcon, Calendar, Users, Globe, Filter, ChevronDown, ChevronUp, Eye } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
 import { applyMemeFilter } from '../../lib/image-processing';
 import { specialBackgrounds, SpecialBackground } from './specialBackgrounds';
 import { cn } from '@/lib/utils';
@@ -245,6 +246,36 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
       .filter(bg => isTodaySpecial(bg, userCountry))
       .map(bg => convertStaticToSpecialDay(bg));
   }, [userCountry]);
+
+  const todayDate = dayjs().format('YYYY-MM-DD');
+  const { data: platformSpecialDays = [] } = useQuery<SpecialDay[]>({
+    queryKey: ['platform-special-days', todayDate],
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from('platform_special_days')
+        .select('id, event_date, country_code, name, local_name, description, icon, background, event_types, is_national')
+        .eq('event_date', todayDate)
+        .eq('is_enabled', true)
+        .order('country_code', { ascending: true });
+      if (error) {
+        console.warn('Could not load platform special days:', error.message);
+        return [];
+      }
+      return (data || []).map((event: any) => ({
+        id: `platform-${event.id}`,
+        name: event.local_name || event.name,
+        description: event.description || `Celebrate ${event.local_name || event.name}!`,
+        icon: event.icon || '🎉',
+        background: event.background,
+        date_type: 'fixed' as const,
+        fixed_date: dayjs(event.event_date).format('MM-DD'),
+        country_codes: [event.country_code],
+        is_global: false,
+        category: event.event_types?.includes('Public') ? 'holiday' as const : 'observance' as const,
+      }));
+    },
+    staleTime: 5 * 60 * 1000,
+  });
   
   // Fetch birthdays from database
   const { data: birthdayUsers = [], isLoading: isLoadingBirthdays } = useQuery({
@@ -256,7 +287,7 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
   // Combine all special days
   const allSpecialDays = React.useMemo(() => {
     const birthdays = birthdayUsers.map(generateBirthdaySpecialDay);
-    const combined = [...staticSpecialDays, ...birthdays];
+    const combined = [...staticSpecialDays, ...platformSpecialDays, ...birthdays];
     
     if (countryFilter !== 'all') {
       return combined.filter(day => 
@@ -267,7 +298,7 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
     }
     
     return combined;
-  }, [staticSpecialDays, birthdayUsers, countryFilter]);
+  }, [staticSpecialDays, platformSpecialDays, birthdayUsers, countryFilter]);
   
   // Get unique countries
   const availableCountries = React.useMemo(() => {
@@ -277,8 +308,9 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
         if (country !== 'ALL') countries.add(country);
       });
     });
+    platformSpecialDays.forEach(day => day.country_codes?.forEach(country => countries.add(country)));
     return Array.from(countries).sort();
-  }, []);
+  }, [platformSpecialDays]);
   
   // Handler functions
   const handleBgSelect = (color: string) => {
@@ -692,7 +724,7 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
                     <div className="space-y-1">
                       <Label className="text-sm font-medium">Today's Special Days</Label>
                       <p className="text-xs text-muted-foreground">
-                        {isLoadingBirthdays ? 'Loading...' : `${birthdayUsers.length} birthdays`}
+                        {isLoadingBirthdays ? <Skeleton className="h-3 w-20" /> : `${birthdayUsers.length} birthdays`}
                       </p>
                     </div>
                     

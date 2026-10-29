@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
 import { supabase } from '@/integrations/supabase/client';
 
 interface LiveStreamMessage {
@@ -68,7 +69,11 @@ const LiveStreamMessages: React.FC<Props> = ({ streamId }) => {
             <b>{msg.sender_id}:</b> {msg.content} <small>{msg.created_at}</small>
           </div>
         ))}
-        {loading && <div>Loading...</div>}
+        {loading && (
+          <div className="py-4">
+            <SkeletonLine width="60%" className="mx-auto" />
+          </div>
+        )}
       </div>
       <form onSubmit={e => { e.preventDefault(); sendMessage(); }}>
         <input

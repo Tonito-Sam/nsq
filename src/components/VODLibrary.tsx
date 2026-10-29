@@ -40,6 +40,7 @@ type ViewMode = 'grid' | 'list' | 'by-show' | 'by-category';
 interface VODLibraryProps {
   showId?: string;
   onEpisodeSelect?: (episode: VODEpisode) => void;
+  onInitialEpisode?: (episode: VODEpisode) => void;
   playingEpisodeId?: string;
   showAllPastShows?: boolean;
   defaultViewMode?: ViewMode;
@@ -49,6 +50,7 @@ interface VODLibraryProps {
 const VODLibrary: React.FC<VODLibraryProps> = ({
   showId,
   onEpisodeSelect,
+  onInitialEpisode,
   playingEpisodeId,
   showAllPastShows = false,
   defaultViewMode,
@@ -73,6 +75,7 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
   };
   const containerRef = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
+  const initialEpisodeNotifiedRef = useRef(false);
   const lastLoadAtRef = useRef<number>(0);
   const consecutiveErrorRef = useRef<number>(0);
 
@@ -271,15 +274,47 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
 
       const endpoint = apiUrl(endpointPath);
       const response = await fetch(endpoint);
-      
+
+      const data = response.ok ? await response.json() : { episodes: [], hasMore: false };
       if (!response.ok) {
         console.error('Episodes fetch returned non-ok status', response.status);
-        setHasMore(false);
-        return;
       }
-      
-      const data = await response.json();
       let incoming: VODEpisode[] = data.episodes || [];
+      incoming = incoming.filter((episode) => typeof episode.video_url === 'string' && episode.video_url.trim().length > 0);
+
+      // Feed shows can be playable even when no separate episode records exist.
+      if (showAllPastShows && incoming.length === 0) {
+        const { data: playableShows, error: showsError } = await supabase
+          .from('studio_shows')
+          .select('*')
+          .eq('is_active', true)
+          .not('video_url', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (showsError) throw showsError;
+
+        const search = searchQuery.trim().toLowerCase();
+        incoming = (playableShows || [])
+          .filter((show) => !search || `${show.title || ''} ${show.description || ''}`.toLowerCase().includes(search))
+          .map((show) => ({
+            id: show.id,
+            show_id: show.id,
+            show_title: show.title,
+            title: show.title || 'Untitled show',
+            description: show.description || undefined,
+            video_url: show.video_url || undefined,
+            thumbnail_url: show.thumbnail_url || undefined,
+            show_thumbnail: show.thumbnail_url || undefined,
+            category: show.category || undefined,
+            show_category: show.category || undefined,
+            duration: show.duration || undefined,
+            views: show.total_views || 0,
+            created_at: show.created_at || new Date().toISOString(),
+            is_live: false,
+            is_active: true,
+          }));
+      }
 
       // Filter to only include episodes that have already aired
       const pastEpisodes = incoming.filter(ep => {
@@ -359,6 +394,10 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
 
       if (pageNum === 1) {
         setEpisodes(sortedEpisodes);
+        if (!initialEpisodeNotifiedRef.current && sortedEpisodes[0]) {
+          initialEpisodeNotifiedRef.current = true;
+          onInitialEpisode?.(sortedEpisodes[0]);
+        }
       } else {
         setEpisodes(prev => {
           const existingIds = new Set(prev.map(p => p.id));
@@ -379,7 +418,7 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [showId, showAllPastShows, sortBy, filterBy, searchQuery]);
+  }, [showId, showAllPastShows, sortBy, filterBy, searchQuery, onInitialEpisode]);
 
   // Initial load
   useEffect(() => {
@@ -511,7 +550,7 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
     return (
       <div className="flex flex-col items-center justify-center py-16 space-y-4">
         <Loader2 className="h-12 w-12 animate-spin text-purple-500" />
-        <p className="text-gray-400">
+        <p className="text-muted-foreground">
           {showAllPastShows ? 'Loading all past shows...' : 'Loading episodes...'}
         </p>
       </div>
@@ -523,11 +562,11 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
       {/* Header with mode selector */}
       <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
         <div>
-          <h3 className="text-xl font-semibold text-white">
+          <h3 className="text-xl font-semibold text-foreground">
             {showAllPastShows ? 'All Past Shows' : 'Past Episodes'}
           </h3>
           {showAllPastShows && (
-            <p className="text-sm text-gray-400 mt-1">
+            <p className="text-sm text-muted-foreground mt-1">
               Browse and watch shows from all series • Total views across all episodes: {formatViewCount(episodes.reduce((total, ep) => total + (ep.views || 0), 0))}
             </p>
           )}
@@ -536,23 +575,23 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
         {/* View Mode Toggle - only show in "all shows" mode */}
         {showAllPastShows && (
           <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-400">View:</span>
-            <div className="flex bg-gray-800 rounded-lg p-1">
+            <span className="text-sm text-muted-foreground">View:</span>
+            <div className="flex rounded-lg border border-border bg-muted p-1">
               <button
                 onClick={() => setViewMode('grid')}
-                className={`px-3 py-1 rounded text-sm ${viewMode === 'grid' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                className={`px-3 py-1 rounded text-sm ${viewMode === 'grid' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 Grid
               </button>
               <button
                 onClick={() => setViewMode('by-show')}
-                className={`px-3 py-1 rounded text-sm ${viewMode === 'by-show' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                className={`px-3 py-1 rounded text-sm ${viewMode === 'by-show' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 By Show
               </button>
               <button
                 onClick={() => setViewMode('by-category')}
-                className={`px-3 py-1 rounded text-sm ${viewMode === 'by-category' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                className={`px-3 py-1 rounded text-sm ${viewMode === 'by-category' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 By Category
               </button>
@@ -565,14 +604,14 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
       <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
         <div className="flex flex-wrap gap-2 items-center">
           <div className="flex items-center space-x-2">
-            <Filter className="h-4 w-4 text-gray-400" />
-            <span className="text-sm text-gray-400">Sort by:</span>
+            <Filter className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Sort by:</span>
           </div>
           <Select value={sortBy} onValueChange={(value: SortOption) => setSortBy(value)}>
-            <SelectTrigger className="w-[180px] bg-gray-800 border-gray-700">
+            <SelectTrigger className="w-[180px] border-input bg-background text-foreground">
               <SelectValue placeholder="Sort by" />
             </SelectTrigger>
-            <SelectContent className="bg-gray-900 border-gray-700">
+            <SelectContent className="border-border bg-popover text-popover-foreground">
               <SelectItem value="newest">Newest First</SelectItem>
               <SelectItem value="oldest">Oldest First</SelectItem>
               <SelectItem value="most-viewed">Most Viewed</SelectItem>
@@ -584,10 +623,10 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
           </Select>
 
           <Select value={filterBy} onValueChange={(value: FilterOption) => setFilterBy(value)}>
-            <SelectTrigger className="w-[150px] bg-gray-800 border-gray-700">
+            <SelectTrigger className="w-[150px] border-input bg-background text-foreground">
               <SelectValue placeholder="Filter" />
             </SelectTrigger>
-            <SelectContent className="bg-gray-900 border-gray-700">
+            <SelectContent className="border-border bg-popover text-popover-foreground">
               <SelectItem value="all">All Episodes</SelectItem>
               <SelectItem value="recent">Last 7 Days</SelectItem>
               <SelectItem value="popular">Most Popular</SelectItem>
@@ -599,10 +638,10 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
           {/* Category Filter for grid view */}
           {showAllPastShows && viewMode === 'grid' && (
             <Select value={selectedCategory} onValueChange={setSelectedCategory}>
-              <SelectTrigger className="w-[150px] bg-gray-800 border-gray-700">
+              <SelectTrigger className="w-[150px] border-input bg-background text-foreground">
                 <SelectValue placeholder="All Categories" />
               </SelectTrigger>
-              <SelectContent className="bg-gray-900 border-gray-700">
+              <SelectContent className="border-border bg-popover text-popover-foreground">
                 {getAvailableCategories().map(cat => (
                   <SelectItem key={cat} value={cat}>
                     {cat === 'all' ? 'All Categories' : cat}
@@ -620,10 +659,10 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
             placeholder={showAllPastShows ? "Search all shows..." : "Search episodes..."}
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
-            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 pl-10 text-sm text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            className="w-full rounded-lg border border-input bg-background px-4 py-2 pl-10 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
-            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </div>
@@ -631,7 +670,7 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
       </div>
 
       {/* Episode Count */}
-      <div className="text-sm text-gray-400">
+      <div className="text-sm text-muted-foreground">
         {selectedCategory !== 'all' ? (
           <>
             Showing {getFilteredEpisodes().length} episode{getFilteredEpisodes().length !== 1 ? 's' : ''} in {selectedCategory} • {formatViewCount(getCategoryTotalViews(getFilteredEpisodes()))} total views
@@ -666,8 +705,8 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
                             <Tv className="h-6 w-6 text-white/70" />
                           </div>
                           <div>
-                            <h4 className="font-semibold text-white text-lg">{category}</h4>
-                            <p className="text-sm text-gray-400">
+                            <h4 className="font-semibold text-foreground text-lg">{category}</h4>
+                            <p className="text-sm text-muted-foreground">
                               {categoryEpisodes.length} episode{categoryEpisodes.length !== 1 ? 's' : ''} • {formatViewCount(categoryViews)} views
                             </p>
                           </div>
@@ -675,7 +714,7 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="text-purple-400 hover:text-purple-300"
+                          className="text-primary hover:text-primary/80"
                           onClick={() => {
                             setViewMode('grid');
                             setSelectedCategory(category);
@@ -705,7 +744,7 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
                           <Button
                             variant="outline"
                             size="sm"
-                            className="border-gray-700 text-gray-400 hover:text-white"
+                            className="border-border text-muted-foreground hover:bg-muted hover:text-foreground"
                             onClick={() => {
                               setViewMode('grid');
                               setSelectedCategory(category);
@@ -740,11 +779,11 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
                           </div>
                         )}
                         <div>
-                          <h4 className="font-semibold text-white text-lg">{show.title}</h4>
-                          <p className="text-sm text-gray-400">
+                          <h4 className="font-semibold text-foreground text-lg">{show.title}</h4>
+                          <p className="text-sm text-muted-foreground">
                             {showEpisodes.length} episode{showEpisodes.length !== 1 ? 's' : ''} • {formatViewCount(showTotalViews)} views
                             {show.category && (
-                              <span className="ml-2 px-2 py-1 bg-gray-800 rounded text-xs">
+                              <span className="ml-2 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
                                 {show.category}
                               </span>
                             )}
@@ -772,7 +811,7 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
                           <Button
                             variant="outline"
                             size="sm"
-                            className="border-gray-700 text-gray-400 hover:text-white"
+                            className="border-border text-muted-foreground hover:bg-muted hover:text-foreground"
                             onClick={() => {
                               // This would ideally navigate to the show's page
                               console.log('Navigate to show:', show.title);
@@ -823,18 +862,18 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
           <div className="flex justify-center py-8">
             <div className="flex flex-col items-center space-y-2">
               <Loader2 className="h-8 w-8 animate-spin text-purple-500" />
-              <p className="text-sm text-gray-400">Loading more episodes...</p>
+              <p className="text-sm text-muted-foreground">Loading more episodes...</p>
             </div>
           </div>
         )}
         
         {/* No More Content */}
         {!hasMore && episodes.length > 0 && (
-          <div className="text-center py-8 border-t border-gray-800">
-            <p className="text-gray-400 text-sm">
+          <div className="text-center py-8 border-t border-border">
+            <p className="text-muted-foreground text-sm">
               You've reached the end of available {showAllPastShows ? 'shows' : 'episodes'}
             </p>
-            <p className="text-gray-500 text-xs mt-1">
+            <p className="text-muted-foreground/80 text-xs mt-1">
               Check back later for new content
             </p>
           </div>
@@ -843,12 +882,12 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
         {/* No Episodes Found */}
         {episodes.length === 0 && !loading && (
           <div className="text-center py-16 space-y-4">
-            <div className="mx-auto w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center">
-              <Calendar className="h-8 w-8 text-gray-400" />
+            <div className="mx-auto w-16 h-16 rounded-full bg-muted flex items-center justify-center">
+              <Calendar className="h-8 w-8 text-muted-foreground" />
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-white mb-2">No Past Shows Found</h3>
-              <p className="text-gray-400 max-w-md mx-auto">
+              <h3 className="text-lg font-semibold text-foreground mb-2">No Past Shows Found</h3>
+              <p className="text-muted-foreground max-w-md mx-auto">
                 {searchQuery 
                   ? `No shows match "${searchQuery}". Try different search terms.`
                   : 'No past shows available at the moment. Check back later!'}
@@ -858,7 +897,7 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
               <Button
                 variant="outline"
                 onClick={() => setSearchQuery('')}
-                className="mt-4 border-gray-700 text-gray-300 hover:bg-gray-800"
+                className="mt-4 border-border text-foreground hover:bg-muted"
               >
                 Clear Search
               </Button>
@@ -929,8 +968,8 @@ const EpisodeCard: React.FC<{
 
   // Determine view count badge color
   const getViewCountColor = (views?: number) => {
-    if (!views || views === 0) return 'text-gray-400';
-    if (views < 10) return 'text-gray-300';
+    if (!views || views === 0) return 'text-white/90';
+    if (views < 10) return 'text-white/90';
     if (views < 100) return 'text-blue-300';
     if (views < 1000) return 'text-green-300';
     if (views < 10000) return 'text-yellow-300';
@@ -939,13 +978,13 @@ const EpisodeCard: React.FC<{
 
   return (
     <Card 
-      className={`group cursor-pointer transition-all hover:scale-[1.02] hover:shadow-xl hover:border-purple-500/30 border-2 ${
+      className={`group cursor-pointer transition-all hover:scale-[1.02] hover:shadow-xl hover:border-primary/50 border-2 ${
         playingEpisodeId === episode.id 
-          ? 'border-purple-500 ring-2 ring-purple-500/30' 
+          ? 'border-primary ring-2 ring-primary/30' 
           : userHasViewed 
           ? 'border-green-500/30 bg-green-500/5' 
-          : 'border-gray-800'
-      } bg-gray-900/50 backdrop-blur-sm`}
+          : 'border-border'
+      } bg-card text-card-foreground`}
       onClick={() => onEpisodeSelect?.(episode)}
     >
       {/* Thumbnail Container */}
@@ -1026,17 +1065,17 @@ const EpisodeCard: React.FC<{
       
       {/* Episode Info */}
       <CardContent className="p-4">
-        <h4 className="font-semibold text-white mb-2 line-clamp-1 group-hover:text-purple-300 transition-colors">
+        <h4 className="font-semibold text-foreground mb-2 line-clamp-1 group-hover:text-primary transition-colors">
           {episode.title}
         </h4>
         {episode.description && (
-          <p className="text-sm text-gray-400 line-clamp-2 mb-3">
+          <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
             {episode.description}
           </p>
         )}
         
         {/* Metadata */}
-        <div className="flex items-center justify-between text-xs text-gray-500">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
           <div className="flex items-center">
             <CalendarDays className="h-3 w-3 mr-1" />
             <span>
@@ -1050,7 +1089,7 @@ const EpisodeCard: React.FC<{
           
           {/* Category Badge */}
           {episode.show_category && (
-            <Badge className="bg-gray-800 text-gray-300">
+            <Badge className="bg-muted text-muted-foreground">
               {episode.show_category}
             </Badge>
           )}

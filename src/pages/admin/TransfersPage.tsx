@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../integrations/supabase/client';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
 import { Button } from '@/components/ui/button';
 
 const TransfersPage: React.FC = () => {
@@ -41,7 +42,7 @@ const TransfersPage: React.FC = () => {
         <h1 className="text-2xl font-bold">Transfers</h1>
         <Button onClick={fetchTransfers}>Refresh</Button>
       </div>
-      {loading ? <div>Loading...</div> : (
+      {loading ? <div className="py-6"><SkeletonLine width="40%" className="mx-auto" /></div> : (
         tableMissing ? (
           <div className="p-6 text-sm text-muted-foreground">
             Transfers table not found in the database. No transfer records are available.

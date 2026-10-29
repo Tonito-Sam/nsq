@@ -54,7 +54,11 @@ const Messages = () => {
   const [newMessage, setNewMessage] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [messageSub, setMessageSub] = useState<any>(null);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
+  const [conversationsLoaded, setConversationsLoaded] = useState(false);
+  const [conversationFetchFailed, setConversationFetchFailed] = useState(false);
+  const [conversationLoadError, setConversationLoadError] = useState<string | null>(null);
   const [showMobileSidebar, setShowMobileSidebar] = useState(false);
   const [showVoiceRecorder, setShowVoiceRecorder] = useState(false);
   const [voiceNoteUrl, setVoiceNoteUrl] = useState<string | null>(null);
@@ -63,6 +67,7 @@ const Messages = () => {
 
   // Notification sound for new messages
   const defaultWhistleSound = React.useRef<HTMLAudioElement | null>(null);
+  const messageSubRef = useRef<any>(null);
 
   useEffect(() => {
     defaultWhistleSound.current = new window.Audio('/whistle.wav');
@@ -80,41 +85,65 @@ const Messages = () => {
 
   useEffect(() => {
     if (user) {
-      fetchConversations();
-      fetchFollowings();
+      void fetchConversations();
+      void fetchFollowings();
+    } else {
+      setConversations([]);
+      setConversationsLoaded(false);
     }
-    // Cleanup on unmount
     return () => {
-      if (messageSub) supabase.removeChannel(messageSub);
+      if (messageSubRef.current) {
+        void supabase.removeChannel(messageSubRef.current);
+        messageSubRef.current = null;
+      }
     };
     // eslint-disable-next-line
   }, [user]);
 
   useEffect(() => {
-    if (selectedConversation) {
-      fetchMessages(selectedConversation.id);
-      if (messageSub) supabase.removeChannel(messageSub);
-      const sub = subscribeToMessages(selectedConversation.id);
-      setMessageSub(sub);
+    const conversationId = selectedConversation?.id;
+    if (!conversationId) {
+      setMessages([]);
+      setMessagesError(null);
+      setMessagesLoading(false);
+      return;
     }
+
+    let active = true;
+    setMessages([]);
+    setMessagesError(null);
+    setMessagesLoading(true);
+    const subscription = subscribeToMessages(conversationId);
+    messageSubRef.current = subscription;
+    void fetchMessages(conversationId, () => active);
+
+    return () => {
+      active = false;
+      if (messageSubRef.current === subscription) messageSubRef.current = null;
+      void supabase.removeChannel(subscription);
+    };
     // eslint-disable-next-line
-  }, [selectedConversation]);
+  }, [selectedConversation?.id, user?.id]);
 
   // After conversations load, check if we should auto-select a conversation
   useEffect(() => {
-    if (conversations.length > 0) {
-      // If URL has conversationId, select that conversation
-      if (conversationId) {
-        const conv = conversations.find(c => c.id === conversationId);
-        if (conv) setSelectedConversation(conv);
-      } else if (location.state?.openConversationId) {
-        // Fallback: check location state
-        const conv = conversations.find(c => c.id === location.state.openConversationId);
-        if (conv) setSelectedConversation(conv);
+    if (!conversationsLoaded) return;
+    const requestedId = conversationId || location.state?.openConversationId;
+
+    if (requestedId) {
+      const conversation = conversations.find((item) => item.id === requestedId);
+      if (conversation) {
+        setConversationLoadError(null);
+        setSelectedConversation(conversation);
+      } else if (conversationId && !conversationFetchFailed) {
+        setSelectedConversation(null);
+        setConversationLoadError('This conversation does not exist or you do not have access to it.');
       }
+    } else {
+      setConversationLoadError(conversationFetchFailed ? 'Could not load conversations. Please retry.' : null);
     }
     // eslint-disable-next-line
-  }, [conversations, conversationId, location.state]);
+  }, [conversations, conversationsLoaded, conversationId, conversationFetchFailed, location.state]);
 
   // Prevent user from chatting with themselves
   useEffect(() => {
@@ -147,8 +176,14 @@ const Messages = () => {
 
   // Fetch conversations for the current user (as customer or seller)
   const fetchConversations = async () => {
-    if (!user) return;
+    if (!user) {
+      setConversations([]);
+      setConversationsLoaded(true);
+      return;
+    }
     console.log('Messages page: Fetching conversations for user:', user.id);
+    setConversationFetchFailed(false);
+    setConversationLoadError(null);
     
     try {
       const { data: convs, error } = await supabase
@@ -158,6 +193,21 @@ const Messages = () => {
         .order('last_message_at', { ascending: false });
       if (error) throw error;
       if (!convs) return setConversations([]);
+
+      const participantRows = convs.flatMap((conversation) => [
+        { conversation_id: conversation.id, user_id: conversation.customer_id, last_read_at: null },
+        { conversation_id: conversation.id, user_id: conversation.seller_id, last_read_at: null },
+      ]);
+      if (participantRows.length > 0) {
+        const { error: participantError } = await supabase
+          .from('conversation_participants')
+          .upsert(participantRows, {
+            onConflict: 'conversation_id,user_id',
+            ignoreDuplicates: true,
+          });
+        if (participantError) console.warn('Could not initialize conversation participants:', participantError);
+      }
+
       const convsWithDetails = await Promise.all(
         convs.map(async (conv) => {
           const otherUserId = conv.customer_id === user.id ? conv.seller_id : conv.customer_id;
@@ -173,7 +223,7 @@ const Messages = () => {
             .eq('conversation_id', conv.id)
             .order('created_at', { ascending: false })
             .limit(1)
-            .single();
+            .maybeSingle();
           const { count: unread } = await supabase
             .from('messages')
             .select('*', { count: 'exact', head: true })
@@ -199,6 +249,10 @@ const Messages = () => {
     } catch (error) {
       console.error('Error fetching conversations:', error);
       setConversations([]);
+      setConversationFetchFailed(true);
+      setConversationLoadError('Could not load conversations. Please retry.');
+    } finally {
+      setConversationsLoaded(true);
     }
   };
 
@@ -262,7 +316,9 @@ const Messages = () => {
       (payload) => {
         console.log('Messages page: New message received:', payload.new);
         const newMessage = payload.new as Message;
-        setMessages(prev => [...prev, newMessage]);
+        setMessages((previous) => previous.some((message) => message.id === newMessage.id)
+          ? previous
+          : [...previous, newMessage]);
         
         // If the new message is from someone else, refresh unread counts
         if (newMessage.sender_id !== user?.id) {
@@ -298,8 +354,10 @@ const Messages = () => {
   };
 
   // Fetch messages for a conversation
-  const fetchMessages = async (conversationId: string) => {
+  const fetchMessages = async (conversationId: string, isActive: () => boolean = () => true) => {
     if (!conversationId) return;
+    setMessagesLoading(true);
+    setMessagesError(null);
     try {
       const { data: messagesData, error } = await supabase
         .from('messages')
@@ -307,9 +365,15 @@ const Messages = () => {
         .eq('conversation_id', conversationId)
         .order('created_at', { ascending: true });
       if (error) throw error;
-      setMessages(messagesData || []);
+      if (isActive()) setMessages(messagesData || []);
     } catch (error) {
-      setMessages([]);
+      console.error('Error fetching messages:', error);
+      if (isActive()) {
+        setMessages([]);
+        setMessagesError('Could not load this conversation. Check your connection and retry.');
+      }
+    } finally {
+      if (isActive()) setMessagesLoading(false);
     }
   };
 
@@ -317,20 +381,28 @@ const Messages = () => {
     if (!newMessage.trim() || !selectedConversation || !user) return;
     setLoading(true);
     try {
+      const sentAt = new Date().toISOString();
       const messageData = {
         conversation_id: selectedConversation.id,
         sender_id: user.id,
         content: newMessage.trim(),
-        created_at: new Date().toISOString()
+        created_at: sentAt,
       };
       const { error } = await supabase
         .from('messages')
         .insert(messageData);
       if (error) throw error;
+      const { error: conversationError } = await supabase
+        .from('conversations')
+        .update({ last_message_at: sentAt })
+        .eq('id', selectedConversation.id);
+      if (conversationError) console.warn('Could not update conversation activity:', conversationError);
       setNewMessage('');
       
       // Refresh unread counts after sending a message
-      setTimeout(() => refreshUnreadCounts(), 100);
+      setTimeout(() => {
+        void refreshUnreadCounts();
+      }, 100);
     } catch (error) {
       console.error('Error sending message:', error);
       toast({
@@ -378,15 +450,21 @@ const Messages = () => {
       // Use the new dedicated bucket for chat voice notes
       const url = await uploadFile(file, 'messages-voicenotes', 'voice/', user.id);
       // Insert message with voice note URL
+      const sentAt = new Date().toISOString();
       const { error } = await supabase.from('messages').insert({
         conversation_id: selectedConversation.id,
         sender_id: user.id,
         content: '',
         voice_note_url: url,
         voice_duration: duration,
-        created_at: new Date().toISOString(),
+        created_at: sentAt,
       });
       if (error) throw error;
+      const { error: conversationError } = await supabase
+        .from('conversations')
+        .update({ last_message_at: sentAt })
+        .eq('id', selectedConversation.id);
+      if (conversationError) console.warn('Could not update conversation activity:', conversationError);
       setVoiceNoteUrl(null);
       setVoiceNoteDuration(0);
       
@@ -407,33 +485,59 @@ const Messages = () => {
   const handleSelectConversation = async (conv: any) => {
     if (!user) return;
     if (!conv.isNew) {
+      setConversationLoadError(null);
       setSelectedConversation(conv);
       // Navigate to the conversation's unique URL
       navigate(`/messages/${conv.id}`);
       return;
     }
-    // Create a new conversation
+
     try {
-      const { data: newConv, error } = await supabase
+      const participantId = conv.other_user_id;
+      const { data: existingConversation, error: lookupError } = await supabase
         .from('conversations')
-        .insert({ customer_id: user.id, seller_id: conv.other_user_id })
-        .select()
-        .single();
-      if (error) throw error;
-      // Refetch conversations to update sidebar
+        .select('*')
+        .or(`and(customer_id.eq.${user.id},seller_id.eq.${participantId}),and(customer_id.eq.${participantId},seller_id.eq.${user.id})`)
+        .order('last_message_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (lookupError) throw lookupError;
+
+      let conversation = existingConversation;
+      if (!conversation) {
+        const { data: createdConversation, error: createError } = await supabase
+          .from('conversations')
+          .insert({ customer_id: user.id, seller_id: participantId })
+          .select()
+          .single();
+        if (createError) throw createError;
+        conversation = createdConversation;
+      }
+
+      const { error: participantError } = await supabase
+        .from('conversation_participants')
+        .upsert([
+          { conversation_id: conversation.id, user_id: user.id, last_read_at: null },
+          { conversation_id: conversation.id, user_id: participantId, last_read_at: null },
+        ], { onConflict: 'conversation_id,user_id', ignoreDuplicates: true });
+      if (participantError) console.warn('Could not initialize conversation participants:', participantError);
+
       await fetchConversations();
-      // Find the new conversation in the updated sidebarList
       const updatedConv = {
         ...conv,
-        id: newConv.id,
+        id: conversation.id,
         isNew: false,
       };
+      setConversationLoadError(null);
       setSelectedConversation(updatedConv);
-      fetchMessages(newConv.id); // Fetch messages for the new conversation
-      // Navigate to the new conversation's unique URL
-      navigate(`/messages/${newConv.id}`);
-    } catch (error) {
-      // Optionally show error
+      navigate(`/messages/${conversation.id}`);
+    } catch (error: any) {
+      console.error('Failed to start conversation:', error);
+      toast({
+        title: 'Could not start conversation',
+        description: error.message || 'Please try again.',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -444,9 +548,18 @@ const Messages = () => {
     console.log('Messages page: Marking messages as read for conversation:', conversationId);
     
     try {
+      const readAt = new Date().toISOString();
+      const { error: participantError } = await supabase
+        .from('conversation_participants')
+        .upsert(
+          { conversation_id: conversationId, user_id: user.id, last_read_at: readAt },
+          { onConflict: 'conversation_id,user_id' }
+        );
+      if (participantError) console.warn('Could not update participant read cursor:', participantError);
+
       const { data, error } = await supabase
         .from('messages')
-        .update({ read_at: new Date().toISOString() })
+        .update({ read_at: readAt })
         .eq('conversation_id', conversationId)
         .neq('sender_id', user.id)
         .is('read_at', null)
@@ -579,10 +692,23 @@ const Messages = () => {
                   }}
                   style={{ minHeight: '100%' }}
                 >
-                  {messages.length === 0 && (
-                    <div className="text-center text-gray-400 mt-8">No messages yet.</div>
-                  )}
-                  {messages
+                  {!selectedConversation ? (
+                    <div className="mx-auto mt-8 max-w-sm text-center text-sm text-gray-500">
+                      {conversationLoadError || (conversationsLoaded ? 'Choose a conversation to start messaging.' : 'Loading conversations...')}
+                      {conversationLoadError && (
+                        <Button variant="outline" size="sm" className="mt-3" onClick={() => void fetchConversations()}>
+                          Retry
+                        </Button>
+                      )}
+                    </div>
+                  ) : messagesLoading ? (
+                    <div className="mt-8 text-center text-sm text-gray-500">Loading messages...</div>
+                  ) : messagesError ? (
+                    <div className="mx-auto mt-8 max-w-sm text-center text-sm text-red-500">{messagesError}</div>
+                  ) : messages.length === 0 ? (
+                    <div className="mt-8 text-center text-gray-400">No messages yet.</div>
+                  ) : null}
+                  {[...messages]
                     .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
                     .map((message) => (
                       <div
@@ -629,11 +755,11 @@ const Messages = () => {
                     onKeyDown={handleKeyPress}
                     placeholder="Type a message..."
                     className="flex-1 rounded-full px-4 py-2 border-0 bg-gray-100 dark:bg-gray-800 focus:ring-2 focus:ring-purple-400"
-                    disabled={loading}
+                    disabled={loading || !selectedConversation}
                   />
                   <Button
                     onClick={sendMessage}
-                    disabled={!newMessage.trim() || loading}
+                    disabled={!newMessage.trim() || loading || !selectedConversation}
                     className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white rounded-full shadow-md"
                     aria-label="Send message"
                   >
@@ -641,7 +767,7 @@ const Messages = () => {
                   </Button>
                 </div>
               </div>
-              {showVoiceRecorder && (
+              {showVoiceRecorder && selectedConversation && (
                 <div className="mb-4">
                   <VoiceRecorder
                     onRecordingComplete={handleVoiceRecordingComplete}

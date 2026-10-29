@@ -104,14 +104,14 @@ export const useViewTracking = ({ showId, isPlaying = false, onViewCountUpdate }
                         try {
                           const { data: row, error: selErr } = await supabase
                             .from('studio_shows')
-                            .select('views')
+                            .select('total_views')
                             .eq('id', showId)
                             .single();
                           if (selErr) throw selErr;
-                          const serverCount = (row && (row as any).views) || 0;
+                          const serverCount = (row && (row as any).total_views) || 0;
                           const { error: updErr } = await supabase
                             .from('studio_shows')
-                            .update({ views: serverCount + 1 })
+                            .update({ total_views: serverCount + 1 })
                             .eq('id', showId);
                           if (updErr) throw updErr;
                         } catch (fallbackErr) {

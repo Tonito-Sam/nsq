@@ -1,138 +1,144 @@
-import axios from 'axios';
-import type { Organization, OrganizationMember, CreateOrganizationInput, UpdateOrganizationInput } from '@/types/organization';
-import apiUrl from '@/lib/api';
 import { supabase } from '@/integrations/supabase/client';
-
-// Use centralized apiUrl helper so dev proxy and multiple env vars are respected
-const API = (path: string) => apiUrl(path.startsWith('/') ? path : `/${path}`);
-
-async function getAuthHeaders() {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session && session.access_token) {
-      return { Authorization: `Bearer ${session.access_token}` };
-    }
-  } catch (e) {
-    // ignore
-  }
-  return {};
-}
+import type { Organization, OrganizationMember, CreateOrganizationInput, UpdateOrganizationInput } from '@/types/organization';
+import slugify from 'slugify';
 
 class OrganizationService {
-  /**
-   * Get all organizations for current user
-   */
   async getMyOrganizations(): Promise<Organization[]> {
     try {
-      const headers = await getAuthHeaders();
-      const response = await axios.get(API('/api/organizations'), {
-        withCredentials: true,
-        headers,
-      });
-      return response.data;
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId) return [];
+
+      // Owned organizations
+      const { data: ownedOrgs, error: ownedErr } = await supabase
+        .from('organizations')
+        .select('*')
+        .eq('owner_id', userId);
+      if (ownedErr) throw ownedErr;
+
+      // Organizations where user is a member
+      const { data: memberRows, error: memberErr } = await supabase
+        .from('organization_members')
+        .select('organization(*)')
+        .eq('user_id', userId);
+      if (memberErr) throw memberErr;
+
+      const memberOrgs = (memberRows || []).map((r: any) => r.organization).filter(Boolean);
+
+      // Merge and dedupe by id
+      const combined = [...(ownedOrgs || []), ...memberOrgs];
+      const unique: Record<string, Organization> = {};
+      combined.forEach((o: Organization) => { if (o && o.id) unique[o.id] = o; });
+      return Object.values(unique);
     } catch (error) {
-      console.error('Failed to fetch organizations:', error);
+      console.error('Failed to fetch organizations from Supabase:', error);
       throw error;
     }
   }
 
-  /**
-   * Get organization by slug
-   */
   async getOrganization(slug: string) {
     try {
-      const headers = await getAuthHeaders();
-      const response = await axios.get(API(`/api/organizations/${slug}`), {
-        withCredentials: true,
-        headers,
-      });
-      return response.data;
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('*, owner:users(id,username,first_name,last_name,avatar_url)')
+        .eq('slug', slug)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
     } catch (error) {
-      console.error('Failed to fetch organization:', error);
+      console.error('Failed to fetch organization from Supabase:', error);
       throw error;
     }
   }
 
-  /**
-   * Create a new organization
-   */
   async createOrganization(input: CreateOrganizationInput): Promise<Organization> {
     try {
-      const headers = await getAuthHeaders();
-      const response = await axios.post(API('/api/organizations'), input, {
-        withCredentials: true,
-        headers,
-      });
-      return response.data;
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId) throw new Error('Not authenticated');
+
+      const slug = input.slug ? slugify(input.slug, { lower: true, strict: true }) : slugify(input.name, { lower: true, strict: true });
+
+      const { data, error } = await supabase
+        .from('organizations')
+        .insert({
+          owner_id: userId,
+          name: input.name,
+          slug,
+          description: input.description || null,
+          website: input.website || null,
+          location: input.location || null,
+          industry: input.industry || null,
+          verified: false,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // add member as owner
+      await supabase.from('organization_members').insert({ organization_id: data.id, user_id: userId, role: 'owner' });
+
+      return data as Organization;
     } catch (error) {
-      console.error('Failed to create organization:', error);
+      console.error('Failed to create organization in Supabase:', error);
       throw error;
     }
   }
 
-  /**
-   * Update organization details
-   */
   async updateOrganization(id: string, input: UpdateOrganizationInput): Promise<Organization> {
     try {
-      const headers = await getAuthHeaders();
-      const response = await axios.patch(API(`/api/organizations/${id}`), input, {
-        withCredentials: true,
-        headers,
-      });
-      return response.data;
+      const { data, error } = await supabase
+        .from('organizations')
+        .update(input)
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) throw error;
+      return data as Organization;
     } catch (error) {
-      console.error('Failed to update organization:', error);
+      console.error('Failed to update organization in Supabase:', error);
       throw error;
     }
   }
 
-  /**
-   * Add member to organization
-   */
   async addMember(orgId: string, userId: string, role: string = 'member'): Promise<OrganizationMember> {
     try {
-      const headers = await getAuthHeaders();
-      const response = await axios.post(
-        API(`/api/organizations/${orgId}/members`),
-        { user_id: userId, role },
-        { withCredentials: true, headers }
-      );
-      return response.data;
+      const { data, error } = await supabase
+        .from('organization_members')
+        .insert({ organization_id: orgId, user_id: userId, role })
+        .select()
+        .single();
+      if (error) throw error;
+      return data as OrganizationMember;
     } catch (error) {
-      console.error('Failed to add member:', error);
+      console.error('Failed to add organization member in Supabase:', error);
       throw error;
     }
   }
 
-  /**
-   * Remove member from organization
-   */
   async removeMember(orgId: string, userId: string): Promise<void> {
     try {
-      const headers = await getAuthHeaders();
-      await axios.delete(API(`/api/organizations/${orgId}/members/${userId}`), {
-        withCredentials: true,
-        headers,
-      });
+      const { error } = await supabase
+        .from('organization_members')
+        .delete()
+        .eq('organization_id', orgId)
+        .eq('user_id', userId);
+      if (error) throw error;
     } catch (error) {
-      console.error('Failed to remove member:', error);
+      console.error('Failed to remove organization member in Supabase:', error);
       throw error;
     }
   }
 
-  /**
-   * Delete organization (owner only)
-   */
   async deleteOrganization(id: string): Promise<void> {
     try {
-      const headers = await getAuthHeaders();
-      await axios.delete(API(`/api/organizations/${id}`), {
-        withCredentials: true,
-        headers,
-      });
+      // remove members first
+      await supabase.from('organization_members').delete().eq('organization_id', id);
+      const { error } = await supabase.from('organizations').delete().eq('id', id);
+      if (error) throw error;
     } catch (error) {
-      console.error('Failed to delete organization:', error);
+      console.error('Failed to delete organization in Supabase:', error);
       throw error;
     }
   }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Package, X, AlertCircle } from 'lucide-react';
+import { Package, X, AlertCircle, Save } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
@@ -36,6 +36,69 @@ interface EnhancedAddProductFormProps {
   onChangeCurrency: () => void;
 }
 
+interface ProductDraft {
+  formData: ProductFormData;
+  currentTag: string;
+  removeBgEnabled: boolean;
+}
+
+const PRODUCT_DRAFT_DB = 'nexsq-product-drafts';
+const PRODUCT_DRAFT_STORE = 'drafts';
+
+const openProductDraftDb = () => new Promise<IDBDatabase>((resolve, reject) => {
+  const request = indexedDB.open(PRODUCT_DRAFT_DB, 1);
+  request.onupgradeneeded = () => request.result.createObjectStore(PRODUCT_DRAFT_STORE);
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+});
+
+const readProductDraft = async (key: string): Promise<ProductDraft | undefined> => {
+  const db = await openProductDraftDb();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction(PRODUCT_DRAFT_STORE, 'readonly').objectStore(PRODUCT_DRAFT_STORE).get(key);
+    request.onsuccess = () => {
+      db.close();
+      resolve(request.result as ProductDraft | undefined);
+    };
+    request.onerror = () => {
+      db.close();
+      reject(request.error);
+    };
+  });
+};
+
+const writeProductDraft = async (key: string, draft: ProductDraft) => {
+  const db = await openProductDraftDb();
+  return new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(PRODUCT_DRAFT_STORE, 'readwrite');
+    transaction.objectStore(PRODUCT_DRAFT_STORE).put(draft, key);
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
+};
+
+const deleteProductDraft = async (key: string) => {
+  const db = await openProductDraftDb();
+  return new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(PRODUCT_DRAFT_STORE, 'readwrite');
+    transaction.objectStore(PRODUCT_DRAFT_STORE).delete(key);
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
+};
+
 export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ onClose, onSuccess, storeCurrency, onChangeCurrency }) => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -46,6 +109,8 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [removeBgEnabled, setRemoveBgEnabled] = useState(false);
   const [currentTag, setCurrentTag] = useState('');
+  const [draftReady, setDraftReady] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [formData, setFormData] = useState<ProductFormData>({
     title: '',
     description: '',
@@ -67,6 +132,40 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
     checkUserStore();
     createProductsBucket();
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !storeId) return;
+
+    let cancelled = false;
+    setDraftReady(false);
+    readProductDraft(`${user.id}:${storeId}`)
+      .then(draft => {
+        if (cancelled || !draft) return;
+        setFormData(current => ({ ...current, ...draft.formData }));
+        setCurrentTag(draft.currentTag || '');
+        setRemoveBgEnabled(!!draft.removeBgEnabled);
+        toast({ title: 'Draft restored', description: 'Your unfinished product details are ready to continue.' });
+      })
+      .catch(error => console.warn('Could not restore product draft:', error))
+      .finally(() => {
+        if (!cancelled) setDraftReady(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, storeId]);
+
+  useEffect(() => {
+    if (!draftReady || !user || !storeId) return;
+
+    const timeout = window.setTimeout(() => {
+      writeProductDraft(`${user.id}:${storeId}`, { formData, currentTag, removeBgEnabled })
+        .catch(error => console.warn('Could not autosave product draft:', error));
+    }, 500);
+
+    return () => window.clearTimeout(timeout);
+  }, [draftReady, formData, currentTag, removeBgEnabled, user, storeId]);
 
   const createProductsBucket = async () => {
     try {
@@ -330,6 +429,10 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
         console.log('Product inserted successfully');
       }
 
+      await deleteProductDraft(`${user.id}:${storeId}`).catch(error => {
+        console.warn('Could not remove completed product draft:', error);
+      });
+
       toast({
         title: "Product Added",
         description: "Your product has been added successfully!",
@@ -356,6 +459,25 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
       });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    if (!user || !storeId) return;
+
+    setSavingDraft(true);
+    try {
+      await writeProductDraft(`${user.id}:${storeId}`, { formData, currentTag, removeBgEnabled });
+      toast({ title: 'Draft saved', description: 'You can continue editing this product later.' });
+      onClose();
+    } catch (error) {
+      toast({
+        title: 'Could not save draft',
+        description: 'Please keep this form open and try again.',
+        variant: 'destructive'
+      });
+    } finally {
+      setSavingDraft(false);
     }
   };
 
@@ -427,6 +549,10 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
             <div className="flex justify-end space-x-3 pt-6 border-t">
               <Button type="button" variant="outline" onClick={onClose} size="lg">
                 Cancel
+              </Button>
+              <Button type="button" variant="outline" onClick={handleSaveDraft} disabled={!draftReady || savingDraft || isSubmitting || !hasStore} size="lg">
+                <Save className="h-4 w-4 mr-2" />
+                {savingDraft ? 'Saving Draft...' : 'Save Draft'}
               </Button>
               <Button
                 type="submit"

@@ -23,6 +23,11 @@ import type { EventItem } from '@/components/BirthdaysAnniversariesCard';
 import ParentalGuidanceCard from '@/components/ParentalGuidanceCard';
 import { OrganizationsTab } from '@/components/OrganizationsTab';
 import type { MinorAccount } from '@/components/ParentalGuidanceCard';
+import SkeletonCard from '@/components/skeletons/SkeletonCard';
+import SkeletonAvatar from '@/components/skeletons/SkeletonAvatar';
+import SkeletonLine from '@/components/skeletons/SkeletonLine';
+import SkeletonMedia from '@/components/skeletons/SkeletonMedia';
+import { IdentityVerificationCard } from '@/components/IdentityVerificationCard';
 
 interface UserData {
   id: string;
@@ -204,7 +209,11 @@ const CURRENCIES = [
   { code: 'SSP', name: 'South Sudanese Pound' }
 ].sort((a, b) => a.name.localeCompare(b.name));
 
-const EditProfile = () => {
+interface EditProfileProps {
+  inline?: boolean;
+}
+
+const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
   // Minor Accounts (PGP) state and handlers
   const [minorAccounts, setMinorAccounts] = useState<MinorAccount[]>([]);
   const [isAddingAccount, setIsAddingAccount] = useState(false);
@@ -715,6 +724,7 @@ const EditProfile = () => {
         title: "Profile updated successfully!",
         description: "Your changes have been saved.",
       });
+      window.dispatchEvent(new CustomEvent('profile-updated', { detail: updates }));
       
   // Removed redirect to /profile after saving for debugging
     } catch (error: any) {
@@ -892,10 +902,13 @@ const EditProfile = () => {
 
   if (isAuthChecking) {
     return (
-      <Layout>
-        <div className="max-w-2xl mx-auto">
-          <div className="flex items-center justify-center h-64">
-            <div className="text-lg text-gray-500 dark:text-gray-400">Loading...</div>
+      <Layout embedded={inline}>
+        <div className={inline ? 'w-full space-y-4' : 'max-w-2xl mx-auto space-y-4'}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <div className="grid grid-cols-2 gap-4">
+            <SkeletonLine width="100%" height="2rem" />
+            <SkeletonLine width="100%" height="2rem" />
           </div>
         </div>
       </Layout>
@@ -904,8 +917,8 @@ const EditProfile = () => {
 
   if (!user) {
     return (
-      <Layout>
-        <div className="max-w-2xl mx-auto">
+      <Layout embedded={inline}>
+        <div className={inline ? 'w-full' : 'max-w-2xl mx-auto'}>
           <div className="flex items-center justify-center h-64">
             <div className="text-lg text-gray-500 dark:text-gray-400">Please log in to edit your profile</div>
           </div>
@@ -915,17 +928,21 @@ const EditProfile = () => {
   }
 
   return (
-    <Layout>
-      <div className="max-w-2xl mx-auto">
+    <Layout embedded={inline}>
+      <div className={inline ? 'w-full min-w-0' : 'max-w-2xl mx-auto'}>
         <div className="flex items-center mb-6">
-          <Button
-            variant="ghost"
-            onClick={() => navigate('/profile')}
-            className="mr-4"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Edit Profile</h1>
+          {!inline && (
+            <Button
+              variant="ghost"
+              onClick={() => navigate('/profile')}
+              className="mr-4"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          )}
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+            {inline ? 'Profile settings' : 'Edit Profile'}
+          </h1>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -1280,6 +1297,8 @@ const EditProfile = () => {
               </div>
             </div>
           </Card>
+
+          <IdentityVerificationCard />
 
           <Button
             type="submit"

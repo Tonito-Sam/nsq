@@ -570,7 +570,7 @@ const AnnouncementsPage = () => {
                       {imageUploading ? (
                         <div className="space-y-2">
                           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
-                          <p className="text-sm text-muted-foreground">Uploading...</p>
+                          <p className="text-sm text-muted-foreground"><span className="inline-flex items-center gap-2"><div className="animate-spin h-4 w-4 rounded-full border-b-2 border-current" /> Uploading</span></p>
                         </div>
                       ) : form.imageUrl ? (
                         <div className="space-y-2">
@@ -606,7 +606,7 @@ const AnnouncementsPage = () => {
                       {videoUploading ? (
                         <div className="space-y-2">
                           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto" />
-                          <p className="text-sm text-muted-foreground">Uploading...</p>
+                          <p className="text-sm text-muted-foreground"><span className="inline-flex items-center gap-2"><div className="animate-spin h-4 w-4 rounded-full border-b-2 border-current" /> Uploading</span></p>
                         </div>
                       ) : form.videoUrl ? (
                         <div className="space-y-2">

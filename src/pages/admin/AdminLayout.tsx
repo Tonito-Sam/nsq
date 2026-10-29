@@ -1,5 +1,5 @@
 import { Outlet, NavLink } from 'react-router-dom';
-import { Sun, Moon, BarChart3, Users, Store as StoreIcon, Flag, Headphones, DollarSign, TrendingUp, Ticket, Megaphone } from 'lucide-react';
+import { Sun, Moon, BarChart3, Users, Store as StoreIcon, Flag, Headphones, DollarSign, TrendingUp, Ticket, Megaphone, BadgeCheck, WalletCards } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { useTheme } from '../../components/ThemeProvider';
 import { HeaderLogo } from '../../components/header/HeaderLogo';
@@ -11,6 +11,8 @@ const adminLinks: { to: string; label: string; icon: JSX.Element; external?: str
 	{ to: '/admin/stores', label: 'Stores', icon: <StoreIcon size={20} /> },
 	{ to: '/admin/reports', label: 'Reports', icon: <Flag size={20} /> },
 	{ to: '/admin/withdrawals', label: 'Withdrawals', icon: <DollarSign size={20} /> },
+	{ to: '/admin/identity-reviews', label: 'Identity Reviews', icon: <BadgeCheck size={20} /> },
+	{ to: '/admin/store-payouts', label: 'Store Payouts', icon: <WalletCards size={20} /> },
 	{ to: '/admin/transfers', label: 'Transfers', icon: <TrendingUp size={20} /> },
 	{ to: '/admin/tickets', label: 'Support', icon: <Ticket size={20} /> },
 	{ to: '/admin/announcements', label: 'Announcements', icon: <Megaphone size={20} /> },

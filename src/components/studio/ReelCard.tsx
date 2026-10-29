@@ -56,7 +56,9 @@ import {
   UserPlus,
   Check,
   X,
-  MoreVertical
+  MoreVertical,
+  Volume2,
+  VolumeX
 } from "lucide-react";
 
 import { ENABLE_LIVE } from '@/config/featureFlags';
@@ -77,6 +79,8 @@ type StudioReelVideo = ReelVideo & {
   creator?: { name: string; avatar_url?: string };
   creator_id?: string;
   shares_count?: number;
+  shares?: number;
+  download_count?: number;
   title?: string;
   description?: string;
   subscriber_count?: number;
@@ -98,6 +102,9 @@ interface ReelCardProps {
   userData?: any; // Pass userData as prop
   // When true, hide studio-level controls like the Go Live button regardless of feature flag
   hideLive?: boolean;
+  onPlaybackError?: (videoId: string) => void;
+  mobileLayout?: boolean;
+  hasUserInteracted?: boolean;
   // Optional callback to expose the internal video element to parent components
   videoRef?: (el: HTMLVideoElement | null) => void;
 }
@@ -108,7 +115,7 @@ interface ProfileModalProps {
   channelName?: string;
   subscriberCount: number;
   isFollowing: boolean;
-  onFollow: () => void;
+  onFollow: () => void | Promise<void>;
   channelId?: string;
   userId?: string;
   channelDescription?: string;
@@ -139,15 +146,19 @@ const ProfileModal = ({
   const [videosViews, setVideosViews] = useState<number | null>(null);
   const navigate = useNavigate();
 
+  useEffect(() => {
+    setIsSubscribed(isFollowing);
+    setLocalSubscriberCount(subscriberCount);
+  }, [isFollowing, subscriberCount]);
+
   const handleSubscribe = async () => {
-    // For now, just navigate to channel page
-    // The actual subscription will happen on the channel page
-    if (channelId) {
-      navigate(`/studio/channel/${channelId}`);
-    } else if (userId) {
-      navigate(`/studio/channel/user/${userId}`);
+    try {
+      await onFollow();
+      setIsSubscribed(true);
+      setLocalSubscriberCount((count) => count + 1);
+    } catch {
+      return;
     }
-    setIsOpen(false);
   };
 
   const handleViewChannel = () => {
@@ -408,6 +419,9 @@ export function ReelCard({
   isActive,
   userData = null,
   hideLive = false,
+  onPlaybackError,
+  mobileLayout = false,
+  hasUserInteracted = false,
   videoRef: externalVideoRef,
 }: ReelCardProps) {
   const { user } = useAuth();
@@ -418,14 +432,20 @@ export function ReelCard({
   // Feature flags (imported at top-level)
   const [isPlaying, setIsPlaying] = useState(false);
   const [userPaused, setUserPaused] = useState(false);
+  const isActiveRef = useRef(isActive);
+  const userPausedRef = useRef(userPaused);
+  isActiveRef.current = isActive;
+  userPausedRef.current = userPaused;
   const [progress, setProgress] = useState(0);
   // For seekable progress bar
   const [seeking, setSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
   const [isMuted, setIsMuted] = useState(true);
+  const [hasPlaybackError, setHasPlaybackError] = useState(false);
+  const playbackErrorHandledRef = useRef(false);
   const [showControls, setShowControls] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null) as MutableRefObject<HTMLVideoElement | null>;
-  const isMobile = useIsMobile();
+  const isMobile = useIsMobile() || mobileLayout;
   // Recording button navigates directly to the Record page; no inline popover on ReelCard.
 
   // --- OUTRO overlay state and logic ---
@@ -437,13 +457,30 @@ export function ReelCard({
   const [commentIndex, setCommentIndex] = useState(0);
   const [showComments, setShowComments] = useState(false);
   const [comments, setComments] = useState<any[]>([]);
+  const commentIdsRef = useRef<Set<string>>(new Set());
   const [commentLoading, setCommentLoading] = useState(false);
   const [newComment, setNewComment] = useState('');
   const [posting, setPosting] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [downloadCount, setDownloadCount] = useState(() => Number(video.download_count) || 0);
   const commentChannelRef = useRef<any>(null);
   const [commentsCount, setCommentsCount] = useState<number>(video.comments_count ?? 0);
   const [videoAspect, setVideoAspect] = useState<'portrait' | 'landscape' | 'square' | null>(null);
+
+  useEffect(() => {
+    setDownloadCount(Number(video.download_count) || 0);
+  }, [video.id, video.download_count]);
+
+  useEffect(() => {
+    playbackErrorHandledRef.current = false;
+    setHasPlaybackError(false);
+  }, [video.id]);
+
+  useEffect(() => {
+    if (!isActive || !hasPlaybackError || playbackErrorHandledRef.current) return;
+    playbackErrorHandledRef.current = true;
+    onPlaybackError?.(video.id);
+  }, [hasPlaybackError, isActive, onPlaybackError, video.id]);
 
   // Detect aspect ratio by loading metadata offscreen so we can choose object-fit
   useEffect(() => {
@@ -482,25 +519,35 @@ export function ReelCard({
     };
   }, [video.video_url]);
 
+  const fetchCommentAuthors = async (userIds: string[]) => {
+    const uniqueIds = [...new Set(userIds.filter(Boolean))];
+    if (uniqueIds.length === 0) return new Map<string, any>();
+
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, username, avatar_url, first_name, last_name')
+      .in('id', uniqueIds);
+    if (error) throw error;
+    return new Map((data || []).map((author: any) => [String(author.id), author]));
+  };
+
   // --- Fetch comments for this video with likes and replies counts ---
   const fetchComments = async () => {
     setCommentLoading(true);
     try {
-      // Use correct PostgREST join syntax for related users table
       if (!video?.id) return;
       if (!supabase) throw new Error('Supabase client not available');
       
-      const { data, error } = await supabase
+      const { data, error, count } = await supabase
         .from('studio_video_comments')
         .select(`
           id, 
           user_id, 
           comment, 
           created_at,
-          users:user_id(id,username,avatar_url),
           comment_likes:studio_video_comment_likes(count),
           comment_replies:studio_video_comment_replies(count)
-        `)
+        `, { count: 'exact' })
         .order('created_at', { ascending: false })
         .limit(100)
         .eq('video_id', video.id);
@@ -508,16 +555,18 @@ export function ReelCard({
       if (error) {
         console.error('[ReelCard] fetchComments supabase error:', error);
       } else if (data) {
+        const authors = await fetchCommentAuthors(data.map((comment: any) => String(comment.user_id)));
         const mapped = data.map((c: any) => ({ 
           ...c, 
-          user: c.users || null,
+          user: authors.get(String(c.user_id)) || null,
           likes_count: c.comment_likes?.[0]?.count || 0,
           replies_count: c.comment_replies?.[0]?.count || 0,
           is_liked: false, // Will be updated when user checks are done
           replies: [] // Will be loaded when expanded
         }));
+        commentIdsRef.current = new Set(mapped.map((comment: any) => String(comment.id)));
         setComments(mapped);
-        setCommentsCount(mapped.length);
+        setCommentsCount(count ?? mapped.length);
         
         // Check if current user has liked any of these comments
         if (user) {
@@ -576,21 +625,26 @@ export function ReelCard({
       channel.on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'studio_video_comments', filter: `video_id=eq.${video.id}` },
-        (payload: any) => {
-          // Append new comment and increment count
-          const newCommentData = { 
-            ...payload.new, 
-            user: payload.new.users || null,
+        async (payload: any) => {
+          let author = null;
+          try {
+            const authors = await fetchCommentAuthors([String(payload.new.user_id)]);
+            author = authors.get(String(payload.new.user_id)) || null;
+          } catch (error) {
+            console.error('[ReelCard] Could not load comment author:', error);
+          }
+          const commentId = String(payload.new.id);
+          if (commentIdsRef.current.has(commentId)) return;
+          commentIdsRef.current.add(commentId);
+          const newCommentData = {
+            ...payload.new,
+            user: author,
             likes_count: 0,
             replies_count: 0,
             is_liked: false,
-            replies: []
+            replies: [],
           };
-          setComments(prev => {
-            // Avoid duplicates
-            if (prev.some(c => String(c.id) === String(newCommentData.id))) return prev;
-            return [newCommentData, ...prev];
-          });
+          setComments(prev => [newCommentData, ...prev]);
           setCommentsCount(c => (c || 0) + 1);
         }
       );
@@ -716,13 +770,39 @@ export function ReelCard({
           video_id: video.id,
           comment: commentText,
         })
-        .select('id')
+        .select('id, user_id, comment, created_at')
         .single();
 
-      if (!commentError && commentData) {
+      if (commentError) {
+        console.error('[ReelCard] Could not post comment:', commentError);
+        return;
+      }
+      if (commentData) {
+        const commentId = String(commentData.id);
+        const authors = await fetchCommentAuthors([String(commentData.user_id)]);
+        const profile = userData?.user || userData;
+        const author = authors.get(String(commentData.user_id)) || (
+          profile?.id && String(profile.id) === String(commentData.user_id)
+            ? {
+                id: profile.id,
+                username: profile.username || profile.full_name || user?.user_metadata?.username || 'Creator',
+                avatar_url: profile.avatar_url || user?.user_metadata?.avatar_url || null,
+              }
+            : null
+        );
+        if (!commentIdsRef.current.has(commentId)) {
+          commentIdsRef.current.add(commentId);
+          setComments(prev => [{
+            ...commentData,
+            user: author,
+            likes_count: 0,
+            replies_count: 0,
+            is_liked: false,
+            replies: [],
+          }, ...prev]);
+          setCommentsCount(c => (c || 0) + 1);
+        }
         setNewComment('');
-        // optimistic update of comment count then refresh
-        setCommentsCount(c => (c || 0) + 1);
         
         // Create a notification server-side via the backend route so we don't rely on client RLS rules
         try {
@@ -791,7 +871,7 @@ export function ReelCard({
     
     const handleEnded = () => {
       // Don't show outro if comments modal is open
-      if (showComments) return;
+      if (showComments || !isActiveRef.current) return;
       
       console.log('[ReelCard] Video ended, showing outro overlay');
       setShowOutro(true);
@@ -815,9 +895,13 @@ export function ReelCard({
         setShowOutro(false);
         // Only restart video after outro overlay is hidden
         setTimeout(() => {
-          if (videoRef.current && !showComments) {
+          if (videoRef.current && !showComments && isActiveRef.current && !userPausedRef.current) {
             videoRef.current.currentTime = 0;
-            videoRef.current.play();
+            videoRef.current.play().catch((error) => {
+              console.warn('[ReelCard] Could not restart video after outro:', error);
+              setIsPlaying(false);
+              if (error?.name === 'NotSupportedError') setHasPlaybackError(true);
+            });
           }
         }, 100); // slight delay to ensure outro overlay is gone
       }, 3000);
@@ -834,8 +918,16 @@ export function ReelCard({
   useEffect(() => {
     const videoEl = videoRef.current;
     if (!videoEl) return;
+    let cancelled = false;
+    let handleLoaded: (() => void) | null = null;
 
     if (isActive && !userPaused && !showComments) {
+      document.querySelectorAll<HTMLVideoElement>('video[data-studio-reel]').forEach((otherVideo) => {
+        if (otherVideo === videoEl) return;
+        otherVideo.pause();
+        otherVideo.muted = true;
+      });
+
       // Ensure the browser preloads the resource, but avoid calling load()
       // repeatedly because it can interrupt an ongoing play() and cause AbortError.
       try {
@@ -843,57 +935,58 @@ export function ReelCard({
       } catch (e) {
         console.warn('[ReelCard] preload set failed', e);
       }
-      // Attempt to unmute on both desktop and mobile when active.
-      // Browsers may block autoplay with sound; if so, fall back to muted playback.
-      try {
-        videoEl.muted = false;
-        setIsMuted(false);
-      } catch (e) {
-        console.warn('[ReelCard] Could not set muted=false directly', e);
-      }
+      videoEl.muted = !hasUserInteracted;
+      videoEl.volume = hasUserInteracted ? 0.8 : 0;
+      setIsMuted(!hasUserInteracted);
 
       // Try play and, if blocked, fall back to muted playback.
       const tryPlay = async () => {
+        if (cancelled || !isActiveRef.current || userPausedRef.current) return;
         try {
           await videoEl.play();
+          if (cancelled || !isActiveRef.current || userPausedRef.current) {
+            videoEl.pause();
+            videoEl.muted = true;
+            return;
+          }
           // Ensure the element is visibly playing (some browsers delay rendering)
           setIsPlaying(true);
           try { onView(video.id); } catch (e) { /* ignore */ }
         } catch (err) {
-          console.warn('[ReelCard] Autoplay with sound blocked or failed, falling back to muted playback:', err);
-          try {
-            videoEl.muted = true;
-            setIsMuted(true);
-            await videoEl.play();
-            setIsPlaying(true);
-            try { onView(video.id); } catch (e) { /* ignore */ }
-          } catch (err2) {
-            console.error('[ReelCard] Muted playback also failed:', err2);
-          }
+          console.warn('[ReelCard] Muted autoplay was blocked or failed:', err);
+          setIsPlaying(false);
         }
       };
 
       // If video has enough data to play, try immediately; otherwise wait for loadeddata
       if (videoEl.readyState >= 3) {
-        tryPlay();
+        void tryPlay();
       } else {
-        const handleLoaded = () => {
-          tryPlay();
-          videoEl.removeEventListener('loadeddata', handleLoaded);
+        const onLoadedData = () => {
+          void tryPlay();
+          videoEl.removeEventListener('loadeddata', onLoadedData);
+          handleLoaded = null;
         };
-        videoEl.addEventListener('loadeddata', handleLoaded);
-        // cleanup will be handled below by effect teardown
+        handleLoaded = onLoadedData;
+        videoEl.addEventListener('loadeddata', onLoadedData);
       }
-    } else if (!isActive || showComments) {
+    } else if (!isActive || showComments || userPaused) {
       // Pause when not active OR when comments modal is open
       try {
         videoEl.pause();
+        videoEl.muted = true;
+        setIsMuted(true);
       } catch (e) {
         console.warn('[ReelCard] pause failed', e);
       }
       setIsPlaying(false);
     }
-  }, [isActive, video.id, onView, isMobile, showComments]);
+
+    return () => {
+      cancelled = true;
+      if (handleLoaded) videoEl.removeEventListener('loadeddata', handleLoaded);
+    };
+  }, [isActive, userPaused, video.id, onView, isMobile, showComments, hasUserInteracted]);
 
   // Track progress and persist playback position
   useEffect(() => {
@@ -955,15 +1048,29 @@ export function ReelCard({
   }, [video.id]);
 
   const handleVideoClick = () => {
-    if (!videoRef.current) return;
+    const video = videoRef.current;
+    if (!video) return;
     if (isPlaying) {
-      videoRef.current.pause();
+      video.pause();
       setIsPlaying(false);
       setUserPaused(true);
     } else {
-      videoRef.current.play();
-      setIsPlaying(true);
-      setUserPaused(false);
+      video.muted = false;
+      video.volume = 0.8;
+      setIsMuted(false);
+      video.play().then(() => {
+        if (!isActiveRef.current) {
+          video.pause();
+          video.muted = true;
+          return;
+        }
+        setIsPlaying(true);
+        setUserPaused(false);
+      }).catch((error) => {
+        console.warn('[ReelCard] Video click playback failed:', error);
+        setIsPlaying(false);
+        if (error?.name === 'NotSupportedError') setHasPlaybackError(true);
+      });
     }
   };
 
@@ -978,9 +1085,17 @@ export function ReelCard({
         setIsPlaying(false);
         setUserPaused(true);
       } else {
+        v.muted = false;
+        v.volume = 0.8;
+        setIsMuted(false);
         const playPromise = v.play();
         if (playPromise && (playPromise as Promise<any>).then) {
           await playPromise;
+        }
+        if (!isActiveRef.current) {
+          v.pause();
+          v.muted = true;
+          return;
         }
         // Reflect actual element state after attempting play
         setIsPlaying(!v.paused && !v.ended);
@@ -1037,8 +1152,8 @@ export function ReelCard({
   return (
     <div
       className={cn(
-        "relative w-full bg-black overflow-hidden",
-        isMobile ? "h-screen" : "h-[600px] max-w-[350px] mx-auto rounded-lg"
+        "relative w-full overflow-hidden bg-black",
+        isMobile ? "h-full min-h-0" : "h-[680px] w-full max-w-[440px] mx-auto rounded-[28px] border border-white/10 shadow-[0_30px_80px_rgba(0,0,0,0.45)]"
       )}
       onMouseEnter={() => setShowControls(true)}
       onMouseLeave={() => setShowControls(false)}
@@ -1135,29 +1250,34 @@ export function ReelCard({
           "w-full h-full cursor-pointer",
           videoAspect === 'landscape' ? 'object-contain' : 'object-cover'
         )}
+        src={video.video_url}
+        data-studio-reel
         onClick={handleVideoClick}
+        onError={() => {
+          setHasPlaybackError(true);
+          setIsPlaying(false);
+        }}
         muted={isMuted}
         playsInline
       >
-        <source src={video.video_url} type="video/mp4" />
         Your browser does not support video playback.
       </video>
 
+      {isActive && hasPlaybackError && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/85 px-6 text-center text-white">
+          <p className="text-sm">This video format cannot be played in this browser.</p>
+        </div>
+      )}
+
       {/* Right side actions */}
-      <div className="absolute right-2 bottom-40 flex flex-col gap-6">
+      <div className={cn("absolute right-2 flex flex-col gap-6", isMobile ? "bottom-32" : "bottom-40")}>
         {/* Avatar + Enhanced ProfileModal */}
         <ProfileModal
           creator={displayCreator}
           channelName={video.channel_name}
           subscriberCount={video.subscriber_count || 0}
           isFollowing={isFollowing}
-          onFollow={() => {
-            if (video.channel_id) {
-              navigate(`/studio/channel/${video.channel_id}`);
-            } else if (video.user_id) {
-              navigate(`/studio/channel/user/${video.user_id}`);
-            }
-          }}
+          onFollow={() => onFollow(video.channel_id || video.user_id || '')}
           channelId={video.channel_id}
           userId={video.user_id}
           channelDescription={video.channel_description}
@@ -1166,12 +1286,14 @@ export function ReelCard({
           channelEmail={video.channel_email}
         >
           <div className="flex flex-col items-center gap-1 group mt-0 mb-2">
-            <Avatar className="h-12 w-12 border-2 border-white/20 hover:border-purple-500 transition-all duration-300">
-              <AvatarImage src={video.creator?.avatar_url} alt={video.creator?.name || 'User'} />
-              <AvatarFallback className="text-xs bg-gradient-to-br from-purple-600 to-pink-600 text-white">
-                {(displayCreator.name || 'U').slice(0, 2).toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
+            <div className="relative h-12 w-12 overflow-hidden rounded-xl border-2 border-white/20 shadow-md transition-all duration-300 hover:border-purple-500">
+              <Avatar className="h-full w-full rounded-xl">
+                <AvatarImage src={video.creator?.avatar_url} alt={video.creator?.name || 'User'} />
+                <AvatarFallback className="rounded-xl bg-gradient-to-br from-purple-600 to-pink-600 text-xs text-white">
+                  {(displayCreator.name || 'U').slice(0, 2).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+            </div>
             {/* Slim, small username badge closely stacked under avatar */}
             <Badge className="-mt-1 px-3 py-0.5 rounded-full bg-gradient-to-r from-purple-700/90 to-pink-700/90 text-white text-[11px] font-medium shadow border border-purple-400/40 hover:scale-105 transition-transform">
               @{displayCreator.name || 'unknown'}
@@ -1230,12 +1352,30 @@ export function ReelCard({
               >
                 <Share className="w-4 h-4 text-white" />
               </Button>
-            {formatCount(video.shares_count ?? 0)}
+            {formatCount(Number(video.shares_count ?? video.shares ?? 0) + downloadCount)}
           </Badge>
           <Badge className="flex items-center gap-1 px-2 py-1 rounded-full bg-black/60 text-white text-[10px] font-medium min-w-[48px] justify-center hover:bg-black/80 transition">
             <Eye className="w-4 h-4 text-white" />
             {formatCount(video.views_count ?? video.views ?? 0)}
           </Badge>
+            <Button
+              onClick={(event) => {
+                event.stopPropagation();
+                const nextMuted = !isMuted;
+                setIsMuted(nextMuted);
+                if (videoRef.current) {
+                  videoRef.current.muted = nextMuted;
+                  videoRef.current.volume = nextMuted ? 0 : 0.8;
+                }
+              }}
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="w-12 h-12 rounded-full bg-black/20 hover:bg-black/40 mt-2 transition-all hover:scale-110"
+              aria-label={isMuted ? 'Turn sound on' : 'Mute video'}
+            >
+              {isMuted ? <VolumeX className="w-6 h-6 text-white" /> : <Volume2 className="w-6 h-6 text-white" />}
+            </Button>
           <Button
             onClick={(e) => { e.stopPropagation(); handlePlayPauseToggle(); }}
             type="button"
@@ -1256,7 +1396,7 @@ export function ReelCard({
       {/* Info overlay */}
       <div className={cn(
         "absolute left-3 right-16 text-white",
-        isMobile ? "bottom-24" : "bottom-4"
+        isMobile ? "bottom-20" : "bottom-4"
       )}>
         {/* Original audio */}
         <div className="flex items-center gap-1 text-xs opacity-80 mb-2">
@@ -1355,7 +1495,22 @@ export function ReelCard({
         videoId={video.id}
         onCommentsUpdate={fetchComments}
       />
-      <VideoShareModal show={showShareModal} onClose={() => setShowShareModal(false)} videoUrl={video.video_url} videoId={video.id} title={video.title} />
+      <VideoShareModal
+        show={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        videoUrl={video.video_url}
+        videoId={video.id}
+        title={video.title}
+        creatorName={displayCreator.name}
+        creatorAvatarUrl={displayCreator.avatar_url}
+        creatorUrl={video.channel_id
+          ? `/studio/channel/${video.channel_id}`
+          : video.user_id
+            ? `/studio/channel/user/${video.user_id}`
+            : '/studio'}
+        initialDownloadCount={downloadCount}
+        onDownloadCountChange={setDownloadCount}
+      />
     </div>
   );
 }

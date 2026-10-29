@@ -17,31 +17,23 @@ export const isSafariOrIOS = () => {
 };
 
 export const getSafariCompatibleMimeType = () => {
+  if (typeof MediaRecorder === 'undefined') return '';
+
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-  
+
   if (isIOS || isSafari) {
-    // Safari/iOS prefers MP4 with H.264 codec
-    if (MediaRecorder.isTypeSupported('video/mp4; codecs="avc1.42E01E,mp4a.40.2"')) {
-      return 'video/mp4; codecs="avc1.42E01E,mp4a.40.2"';
-    }
-    if (MediaRecorder.isTypeSupported('video/mp4; codecs="avc1.42E01E"')) {
-      return 'video/mp4; codecs="avc1.42E01E"';
-    }
-    if (MediaRecorder.isTypeSupported('video/mp4')) {
-      return 'video/mp4';
-    }
+    const safariTypes = [
+      'video/mp4',
+      'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+      'video/mp4;codecs="avc1.42E01E"',
+    ];
+    return safariTypes.find((type) => MediaRecorder.isTypeSupported(type)) || '';
   }
-  
+
   // Fallback for other browsers
-  if (MediaRecorder.isTypeSupported('video/webm; codecs="vp9,opus"')) {
-    return 'video/webm; codecs="vp9,opus"';
-  }
-  if (MediaRecorder.isTypeSupported('video/webm')) {
-    return 'video/webm';
-  }
-  
-  return 'video/mp4'; // Final fallback
+  const browserTypes = ['video/webm;codecs="vp9,opus"', 'video/webm', 'video/mp4'];
+  return browserTypes.find((type) => MediaRecorder.isTypeSupported(type)) || '';
 };
 
 export const getFileExtensionFromMimeType = (mimeType: string): string => {
@@ -51,10 +43,9 @@ export const getFileExtensionFromMimeType = (mimeType: string): string => {
 };
 
 export const createSafariCompatibleVideoBlob = (chunks: Blob[], mimeType: string): Blob => {
-  // For Safari, ensure we create a proper MP4 blob
   if (isSafariOrIOS() && !mimeType.includes('mp4')) {
-    // If we don't have MP4, try to use it anyway for Safari compatibility
-    return new Blob(chunks, { type: 'video/mp4' });
+    const recordedType = chunks.find((chunk) => chunk.type)?.type || mimeType;
+    return new Blob(chunks, { type: recordedType });
   }
   return new Blob(chunks, { type: mimeType });
 };

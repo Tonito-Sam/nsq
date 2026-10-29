@@ -2,6 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { toast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -39,9 +40,41 @@ import {
   cleanupVideoURL,
   isSafariOrIOS 
 } from '@/utils/safariVideoUtils';
+import { insertSharedFeedPost, insertVideoMoment } from '@/lib/feedShare';
+import { ShowSlotApplication } from '@/components/studio/ShowSlotApplication';
+import {
+  getAutoCameraTransform,
+  getCaptionWordIndex,
+  renderCaptionedReel,
+  type ReelCaptionSegment,
+  type ReelCaptionStyle,
+} from '@/utils/animatedReelCaptions';
+
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  0?: { transcript: string };
+};
+
+type SpeechRecognitionEventLike = {
+  resultIndex: number;
+  results: ArrayLike<SpeechRecognitionResultLike>;
+};
+
+type SpeechRecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+};
 
 const RecordReel = () => {
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [showCategoryOptions, setShowCategoryOptions] = useState(false);
   const navigate = useNavigate();
   const { user } = useAuth();
   const [caption, setCaption] = useState('');
@@ -53,6 +86,20 @@ const RecordReel = () => {
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [captionSegments, setCaptionSegments] = useState<ReelCaptionSegment[]>([]);
+  const [speechCaptureStatus, setSpeechCaptureStatus] = useState<'idle' | 'listening' | 'ready' | 'unsupported' | 'error'>('idle');
+  const [captionsEnabled, setCaptionsEnabled] = useState(true);
+  const [captionStyle, setCaptionStyle] = useState<ReelCaptionStyle>('kinetic');
+  const [videoAnimationEnabled, setVideoAnimationEnabled] = useState(false);
+  const [previewTime, setPreviewTime] = useState(0);
+  const [captionedVideoBlob, setCaptionedVideoBlob] = useState<Blob | null>(null);
+  const [captionedVideoUrl, setCaptionedVideoUrl] = useState<string | null>(null);
+  const [isRenderingCaptions, setIsRenderingCaptions] = useState(false);
+  const [captionRenderProgress, setCaptionRenderProgress] = useState(0);
+  const captionSegmentsRef = useRef<ReelCaptionSegment[]>([]);
+  const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
+  const recordedPreviewVideoRef = useRef<HTMLVideoElement | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoDeviceId, setVideoDeviceId] = useState<string | null>(null);
@@ -71,6 +118,7 @@ const RecordReel = () => {
   
   // ADDED: Share to feed states
   const [shareToFeed, setShareToFeed] = useState(false);
+  const [shareToMoment, setShareToMoment] = useState(false);
   const [feedCaption, setFeedCaption] = useState('');
   const feedCaptionRef = useRef<HTMLTextAreaElement | null>(null);
   const [feedCategories, setFeedCategories] = useState<string[]>([]);
@@ -155,13 +203,20 @@ const RecordReel = () => {
       if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
       }
+      try { speechRecognitionRef.current?.abort(); } catch {}
       if (orientationTimeoutRef.current) {
         clearTimeout(orientationTimeoutRef.current);
       }
     };
-  }, [videoUrl, mediaStream]);
+    }, [videoUrl, mediaStream]);
 
-  // 360-reels gating and toggle
+    useEffect(() => {
+      return () => {
+        if (captionedVideoUrl) cleanupVideoURL(captionedVideoUrl);
+      };
+    }, [captionedVideoUrl]);
+
+  // 360-reels gating remains in the background; the user no longer chooses duration in UI.
   const location = useLocation();
   const [checking360, setChecking360] = useState(false);
   const [canEnable360, setCanEnable360] = useState(false);
@@ -172,7 +227,6 @@ const RecordReel = () => {
     } catch (e) { return false; }
   });
 
-  // If the page was opened with ?duration=360, pre-enable the toggle if permitted
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const duration = params.get('duration');
@@ -180,15 +234,13 @@ const RecordReel = () => {
       setEnable360(true);
     }
   }, [location.search]);
-  // Selected mode state: '90' or '360'
-  const [selectedMode, setSelectedMode] = useState<'90' | '360'>('90');
 
   // Unlock/locker UI helpers
   const [total90s, setTotal90s] = useState<number>(0);
   const requiredToUnlock360 = 10;
   const percentUnlocked = Math.min(100, Math.round((total90s / requiredToUnlock360) * 100));
   const remainingToUnlock = Math.max(0, requiredToUnlock360 - total90s);
-  const lockerColorClass = canEnable360 ? 'bg-emerald-600/80 text-white' : 'bg-black/60';
+  const effectiveRecordingDuration = canEnable360 ? 360 : 90;
 
   // Fetch user's count of 90s reels to determine unlock progress
   useEffect(() => {
@@ -221,15 +273,15 @@ const RecordReel = () => {
     return () => { mounted = false; };
   }, [user]);
 
-  const toggle360 = async () => {
-    const next = !enable360;
-    if (next && !canEnable360) {
+  useEffect(() => {
+    if (canEnable360) {
+      setEnable360(true);
+      try { localStorage.setItem('enable360', '1'); } catch (e) {}
       return;
     }
-    setEnable360(next);
-    try { localStorage.setItem('enable360', next ? '1' : '0'); } catch (e) {}
-    if (next) setSelectedMode('360'); else setSelectedMode('90');
-  };
+    setEnable360(false);
+    try { localStorage.setItem('enable360', '0'); } catch (e) {}
+  }, [canEnable360]);
 
   // Device orientation detection and management
   useEffect(() => {
@@ -276,12 +328,12 @@ const RecordReel = () => {
     
     // Adjust video display based on orientation
     if (landscapeMode) {
-      video.style.width = 'auto';
+      video.style.width = '100%';
       video.style.height = '100%';
       video.style.objectFit = 'cover';
     } else {
       video.style.width = '100%';
-      video.style.height = 'auto';
+      video.style.height = '100%';
       video.style.objectFit = 'cover';
     }
   };
@@ -404,16 +456,9 @@ const RecordReel = () => {
 
   // Start recording flow helper
   const startRecording = (duration: number) => {
-    if (duration === 360) {
-      if (!canEnable360) return;
-      setEnable360(true);
-      try { localStorage.setItem('enable360', '1'); } catch (e) {}
-      setSelectedMode('360');
-    } else {
-      setEnable360(false);
-      try { localStorage.setItem('enable360', '0'); } catch (e) {}
-      setSelectedMode('90');
-    }
+    if (duration === 360 && !canEnable360) return;
+    setEnable360(duration === 360 && canEnable360);
+    try { localStorage.setItem('enable360', duration === 360 && canEnable360 ? '1' : '0'); } catch (e) {}
     handleStartPreview();
   };
 
@@ -423,7 +468,7 @@ const RecordReel = () => {
       const params = new URLSearchParams(location.search);
       const duration = params.get('duration');
       if (location.pathname && location.pathname.includes('record-preview')) {
-        const durNum = duration ? Number(duration) : (enable360 ? 360 : 90);
+        const durNum = duration ? Number(duration) : effectiveRecordingDuration;
         setTimeout(() => {
           startRecording(durNum);
         }, 50);
@@ -523,14 +568,29 @@ const RecordReel = () => {
     return () => { mounted = false; };
   }, []);
 
+  useEffect(() => {
+    if (!isPreviewing && !videoUrl && !isRecording && !permissionError) {
+      const timer = window.setTimeout(() => {
+        handleStartPreview();
+      }, 150);
+      return () => window.clearTimeout(timer);
+    }
+  }, [isPreviewing, videoUrl, isRecording, permissionError]);
+
   const handleStartPreview = async () => {
     setIsPreviewing(true);
     setPermissionError(null);
+    clearCaptionRender();
     if (videoUrl) {
       cleanupVideoURL(videoUrl);
     }
     setVideoUrl(null);
     setRecordedChunks([]);
+    captionSegmentsRef.current = [];
+    setCaptionSegments([]);
+    setSpeechCaptureStatus('idle');
+    setCaptionsEnabled(true);
+    setPreviewTime(0);
     // Determine effective orientation preference for this preview
     const effectivePref: 'auto' | 'portrait' | 'landscape' = preferredOrientation === 'auto'
       ? (isLandscape ? 'landscape' : 'portrait')
@@ -544,6 +604,80 @@ const RecordReel = () => {
     setCountdown(3);
   };
 
+  const startSpeechCapture = () => {
+    const SpeechRecognitionConstructor = Reflect.get(window, 'SpeechRecognition')
+      || Reflect.get(window, 'webkitSpeechRecognition');
+    if (typeof SpeechRecognitionConstructor !== 'function') {
+      setSpeechCaptureStatus('unsupported');
+      return;
+    }
+
+    const recognition = new (SpeechRecognitionConstructor as new () => SpeechRecognitionLike)();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = navigator.language || 'en-US';
+    recordingStartedAtRef.current = performance.now();
+
+    recognition.onresult = (event: SpeechRecognitionEventLike) => {
+      const additions: ReelCaptionSegment[] = [];
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const text = result?.[0]?.transcript?.trim();
+        if (!result?.isFinal || !text) continue;
+
+        const words = text.split(/\s+/).length;
+        const previousEnd = captionSegmentsRef.current.length
+          ? captionSegmentsRef.current[captionSegmentsRef.current.length - 1].end
+          : 0;
+        const elapsed = recordingStartedAtRef.current === null
+          ? previousEnd
+          : (performance.now() - recordingStartedAtRef.current) / 1000;
+        const end = Math.max(previousEnd + 0.2, elapsed - 0.35);
+        const duration = Math.min(5, Math.max(0.8, words * 0.34));
+        additions.push({
+          id: `${Date.now()}-${index}`,
+          start: Math.max(previousEnd, end - duration),
+          end,
+          text,
+        });
+      }
+
+      if (additions.length) {
+        const updated = [...captionSegmentsRef.current, ...additions];
+        captionSegmentsRef.current = updated;
+        setCaptionSegments(updated);
+      }
+    };
+    recognition.onerror = (event: { error: string }) => {
+      if (event.error !== 'aborted' && event.error !== 'no-speech') {
+        setSpeechCaptureStatus('error');
+      }
+    };
+    recognition.onend = () => {
+      if (speechRecognitionRef.current === recognition) {
+        speechRecognitionRef.current = null;
+      }
+      setSpeechCaptureStatus((current) => current === 'listening' ? 'ready' : current);
+    };
+
+    try {
+      recognition.start();
+      speechRecognitionRef.current = recognition;
+      setSpeechCaptureStatus('listening');
+    } catch (error) {
+      console.warn('[RecordReel] speech recognition could not start', error);
+      setSpeechCaptureStatus('error');
+    }
+  };
+
+  const stopSpeechCapture = () => {
+    try {
+      speechRecognitionRef.current?.stop();
+    } catch (error) {
+      console.warn('[RecordReel] speech recognition could not stop', error);
+    }
+  };
+
   useEffect(() => {
     if (countdown === null) return;
     if (countdown > 0) {
@@ -555,50 +689,73 @@ const RecordReel = () => {
     setTimer(enable360 ? 360 : 90);
     if (!mediaStream) return;
     
-    const mimeType = getSafariCompatibleMimeType();
-    setCurrentMimeType(mimeType);
-    const options: MediaRecorderOptions = {};
-    
-    if (mimeType) {
-      options.mimeType = mimeType;
-    }
-    
-    const recorder = new MediaRecorder(mediaStream, options);
-
-    // Use a local chunks array to avoid stale React state in recorder callbacks
+    const preferredMimeType = getSafariCompatibleMimeType();
+    const safariDevice = isSafariOrIOS();
+    const mimeCandidates = safariDevice
+      ? [preferredMimeType, 'video/mp4', 'video/mp4;codecs="avc1.42E01E"', '']
+      : [preferredMimeType, 'video/webm;codecs="vp8,opus"', 'video/webm', ''];
+    const candidates = [...new Set(mimeCandidates)];
     const localChunks: Blob[] = [];
+    let recorder: MediaRecorder | null = null;
+    let mimeType = '';
+    let lastStartError: unknown;
 
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) {
-        localChunks.push(e.data);
+    for (const candidateType of candidates) {
+      try {
+        const candidateRecorder = new MediaRecorder(
+          mediaStream,
+          candidateType ? { mimeType: candidateType } : undefined,
+        );
+        candidateRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) localChunks.push(event.data);
+        };
+        candidateRecorder.onstop = () => {
+          stopSpeechCapture();
+          const finalMimeType = mimeType || candidateRecorder.mimeType || 'video/mp4';
+          const blob = createSafariCompatibleVideoBlob(
+            localChunks.length ? localChunks : recordedChunks,
+            finalMimeType,
+          );
+          setRecordedChunks(localChunks);
+          setVideoUrl(createOptimizedVideoURL(blob));
+          setIsPreviewing(false);
+          setIsRecording(false);
+          setMediaRecorder(null);
+          if (timerRef.current) clearInterval(timerRef.current);
+          if (document.fullscreenElement) {
+            document.exitFullscreen();
+            setIsFullscreen(false);
+          }
+          if (isOrientationLocked) {
+            const so: any = (typeof screen !== 'undefined' ? (screen as any).orientation : null);
+            if (so && typeof so.unlock === 'function') {
+              try { so.unlock(); } catch (error) { console.warn('Could not unlock screen orientation:', error); }
+            }
+            setIsOrientationLocked(false);
+          }
+        };
+        candidateRecorder.start(safariDevice ? 250 : 250);
+        recorder = candidateRecorder;
+        mimeType = candidateRecorder.mimeType || candidateType;
+        break;
+      } catch (error) {
+        lastStartError = error;
+        console.warn(`[RecordReel] MediaRecorder could not start with ${candidateType || 'the browser default'} format`, error);
       }
-    };
+    }
 
-    recorder.onstop = () => {
-      const finalMimeType = mimeType || 'video/mp4';
-      const blob = createSafariCompatibleVideoBlob(localChunks.length ? localChunks : recordedChunks, finalMimeType);
-      const optimizedUrl = createOptimizedVideoURL(blob);
-      // update state with final chunks
-      setRecordedChunks(localChunks);
-      setVideoUrl(optimizedUrl);
-      setIsPreviewing(false);
+    if (!recorder) {
+      console.error('[RecordReel] No supported video format could start recording', lastStartError);
+      setCurrentMimeType('');
+      setMediaRecorder(null);
       setIsRecording(false);
+      setPermissionError('This browser could not start video recording. Close other camera apps, then retry.');
       if (timerRef.current) clearInterval(timerRef.current);
-      if (document.fullscreenElement) {
-        document.exitFullscreen();
-        setIsFullscreen(false);
-      }
-      // Unlock orientation if locked
-      if (isOrientationLocked) {
-        const so: any = (typeof screen !== 'undefined' ? (screen as any).orientation : null);
-        if (so && typeof so.unlock === 'function') {
-          try { so.unlock(); } catch (e) {}
-        }
-        setIsOrientationLocked(false);
-      }
-    };
-    
-    recorder.start(isSafariOrIOS() ? 100 : 250);
+      return;
+    }
+
+    setCurrentMimeType(mimeType);
+    startSpeechCapture();
     setMediaRecorder(recorder);
     setIsRecording(true);
     timerRef.current = setInterval(() => {
@@ -650,6 +807,59 @@ const RecordReel = () => {
     });
   };
 
+  const clearCaptionRender = () => {
+    if (captionedVideoUrl) URL.revokeObjectURL(captionedVideoUrl);
+    setCaptionedVideoUrl(null);
+    setCaptionedVideoBlob(null);
+    setCaptionRenderProgress(0);
+  };
+
+  const renderCaptionedRecording = async () => {
+    const segmentsToRender = captionsEnabled ? captionSegments : [];
+    if (!videoUrl || (!segmentsToRender.length && !videoAnimationEnabled)) return null;
+    setIsRenderingCaptions(true);
+    setCaptionRenderProgress(0);
+    try {
+      const blob = await renderCaptionedReel(
+        videoUrl,
+        segmentsToRender,
+        captionStyle,
+        videoAnimationEnabled,
+        setCaptionRenderProgress,
+      );
+      if (captionedVideoUrl) URL.revokeObjectURL(captionedVideoUrl);
+      setCaptionedVideoBlob(blob);
+      setCaptionedVideoUrl(URL.createObjectURL(blob));
+      return blob;
+    } finally {
+      setIsRenderingCaptions(false);
+    }
+  };
+
+  const handleRenderCaptions = async () => {
+    try {
+      const blob = await renderCaptionedRecording();
+      if (blob) {
+        toast({ title: 'Captioned reel ready', description: 'The animated captions are now part of your video.' });
+      }
+    } catch (error: any) {
+      toast({
+        title: 'Could not render captions',
+        description: error.message || 'Try again or upload the original recording.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const updateCaptionSegment = (id: string, text: string) => {
+    clearCaptionRender();
+    const updated = captionSegmentsRef.current.map((segment) =>
+      segment.id === id ? { ...segment, text } : segment
+    );
+    captionSegmentsRef.current = updated;
+    setCaptionSegments(updated);
+  };
+
   const handleSwitchCamera = async () => {
     if (isSwitchingCamera || isRecording) return;
 
@@ -686,6 +896,9 @@ const RecordReel = () => {
   const handleCancel = () => {
     setIsPreviewing(false);
     setIsRecording(false);
+    clearCaptionRender();
+    try { speechRecognitionRef.current?.abort(); } catch {}
+    speechRecognitionRef.current = null;
     if (videoUrl) {
       cleanupVideoURL(videoUrl);
     }
@@ -707,6 +920,7 @@ const RecordReel = () => {
       }
       setIsOrientationLocked(false);
     }
+    navigate('/studio');
   };
 
   const toggleFullscreen = () => {
@@ -750,7 +964,7 @@ const RecordReel = () => {
   };
 
   const handleUpload = async () => {
-    if (!user || !caption || !recordedChunks.length || isUploading || selectedCategories.length === 0) {
+    if (!user || !caption || !recordedChunks.length || isUploading) {
       return;
     }
 
@@ -759,7 +973,14 @@ const RecordReel = () => {
     try {
       let mimeType = currentMimeType || getSafariCompatibleMimeType();
       let blob = createSafariCompatibleVideoBlob(recordedChunks, mimeType);
-      let extension = getFileExtensionFromMimeType(mimeType);
+      if ((captionsEnabled && captionSegments.length > 0) || videoAnimationEnabled) {
+        errorStep = 'caption rendering';
+        const renderedBlob = captionedVideoBlob || await renderCaptionedRecording();
+        if (!renderedBlob) throw new Error('Could not render the animated captions.');
+        blob = renderedBlob;
+        mimeType = blob.type || mimeType;
+      }
+      const extension = getFileExtensionFromMimeType(mimeType);
 
       const file = new File([blob], `reel-${Date.now()}.${extension}`, { type: mimeType });
       const videoHash = await hashFile(file);
@@ -827,6 +1048,7 @@ const RecordReel = () => {
         .insert({
           user_id: user.id,
           channel_id: channel.id,
+          is_reel: true,
           video_url: urlData.publicUrl,
           caption: caption.trim(),
           share_to_feeds: shareToFeed,
@@ -846,19 +1068,33 @@ const RecordReel = () => {
         throw dbError;
       }
       
-      // ADDED: Upload to feed if enabled — automatically share publicly using same caption/categories
+      // ADDED: Share to feed as both a reel row and a main feed post so it appears in Shorts and the regular post card feed.
       if (shareToFeed && inserted) {
         try {
-          await uploadToFeed({
-            videoId: inserted.id,
-            caption: caption.trim(),
+          await insertSharedFeedPost({
+            supabaseClient: supabase,
+            userId: user.id,
+            caption,
+            mediaUrl: urlData.publicUrl,
             categories: selectedCategories,
             audience: 'public',
-            userId: user.id
+            sourceType: 'video',
           });
-          console.log('Successfully shared to feed');
+          console.log('Successfully shared to feed post and reel feed');
         } catch (e) {
-          console.warn('Failed to auto-share to feed:', e);
+          console.warn('Failed to auto-share to feed post:', e);
+        }
+      }
+      if (shareToMoment && inserted) {
+        try {
+          await insertVideoMoment({
+            supabaseClient: supabase,
+            userId: user.id,
+            caption,
+            mediaUrl: urlData.publicUrl,
+          });
+        } catch (momentError) {
+          console.warn('Reel uploaded, but sharing it to Moments failed:', momentError);
         }
       }
       
@@ -868,6 +1104,10 @@ const RecordReel = () => {
       setFeedCaption('');
       setFeedCategories([]);
       setShareToFeed(false);
+      setShareToMoment(false);
+      clearCaptionRender();
+      captionSegmentsRef.current = [];
+      setCaptionSegments([]);
       
       if (videoUrl) {
         cleanupVideoURL(videoUrl);
@@ -882,6 +1122,13 @@ const RecordReel = () => {
       }
     } catch (err: any) {
       console.error('Upload error at step:', errorStep, err);
+      if (errorStep === 'caption rendering') {
+        toast({
+          title: 'Caption rendering failed',
+          description: err.message || 'Try rendering again or turn captions off to upload the original video.',
+          variant: 'destructive',
+        });
+      }
       setIsUploading(false);
     }
   };
@@ -1067,7 +1314,7 @@ const RecordReel = () => {
               >
                 Skip Feed
               </button>
-              <button
+                <button
                 onClick={() => {
                   setShowShareSettings(false);
                   handleUpload();
@@ -1075,7 +1322,9 @@ const RecordReel = () => {
                 disabled={isUploading}
                 className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 text-white font-medium hover:from-purple-700 hover:to-pink-700 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
               >
-                {isUploading ? 'Uploading...' : 'Share to Feed'}
+                {isUploading ? (
+                  <span className="inline-flex items-center gap-2"><div className="animate-spin h-4 w-4 rounded-full border-b-2 border-white" /> <span className="text-sm">Uploading</span></span>
+                ) : 'Share to Feed'}
               </button>
             </div>
           </div>
@@ -1087,8 +1336,25 @@ const RecordReel = () => {
   };
 
   // Recorded Video Preview Section
-  const RecordedPreview = () => {
+  const renderRecordedPreview = () => {
     if (!videoUrl) return null;
+
+    const activeSegment = captionsEnabled && !captionedVideoUrl
+      ? captionSegments.find((segment) => previewTime >= segment.start && previewTime <= segment.end)
+      : undefined;
+    const segmentWords = activeSegment?.text.trim().split(/\s+/).filter(Boolean) || [];
+    const segmentProgress = activeSegment
+      ? Math.max(0, Math.min(1, (previewTime - activeSegment.start) / Math.max(0.2, activeSegment.end - activeSegment.start)))
+      : 0;
+    const activeWordIndex = getCaptionWordIndex(segmentWords.length, segmentProgress);
+    const previewVideo = recordedPreviewVideoRef.current;
+    const previewTransform = getAutoCameraTransform(
+      videoAnimationEnabled && !captionedVideoUrl,
+      previewTime,
+      previewVideo?.duration || 0,
+      previewVideo?.videoWidth || 0,
+      previewVideo?.videoHeight || 0,
+    );
 
     return (
       <div className="fixed inset-0 z-[9999] bg-black overflow-y-auto">
@@ -1099,6 +1365,7 @@ const RecordReel = () => {
               onClick={() => {
                 if (videoUrl) cleanupVideoURL(videoUrl);
                 setVideoUrl(null);
+                navigate('/studio');
               }}
               className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors"
             >
@@ -1112,14 +1379,165 @@ const RecordReel = () => {
 
         {/* Video Preview */}
         <div className="flex items-center justify-center bg-black w-full py-6">
-          <video
-            src={videoUrl}
-            controls
-            autoPlay
-            playsInline
-            className="w-full"
-            style={{ maxHeight: '60vh', width: '100%', objectFit: 'cover' }}
-          />
+          <div className="relative w-full overflow-hidden">
+            <video
+              ref={recordedPreviewVideoRef}
+              src={captionedVideoUrl || videoUrl}
+              controls
+              autoPlay
+              playsInline
+              onTimeUpdate={(event) => setPreviewTime(event.currentTarget.currentTime)}
+              className="w-full"
+              style={{
+                maxHeight: '60vh',
+                width: '100%',
+                objectFit: 'cover',
+                transform: `translate3d(${previewVideo?.videoWidth ? (previewTransform.offsetX / previewVideo.videoWidth) * 100 : 0}%, ${previewVideo?.videoHeight ? (previewTransform.offsetY / previewVideo.videoHeight) * 100 : 0}%, 0) scale(${previewTransform.zoom})`,
+              }}
+            />
+            {activeSegment && segmentWords.length > 0 && (
+              <div className="pointer-events-none absolute inset-x-4 bottom-[18%] flex justify-center">
+                <div
+                  className={`max-w-[88%] rounded-xl px-4 py-2 text-center text-lg font-extrabold leading-snug text-white shadow-xl sm:text-2xl ${
+                    captionStyle === 'kinetic'
+                      ? 'bg-fuchsia-600'
+                      : captionStyle === 'karaoke'
+                        ? 'bg-black/75'
+                        : 'bg-black/65'
+                  }`}
+                  style={captionStyle === 'kinetic' ? {
+                    transform: `scale(${0.94 + Math.sin(segmentProgress * Math.PI) * 0.08})`,
+                  } : undefined}
+                >
+                  {captionStyle === 'karaoke' ? segmentWords.map((word, index) => (
+                    <span key={`${activeSegment.id}-${index}`} className={index === activeWordIndex ? 'mx-1 text-yellow-300' : 'mx-1'}>
+                      {word}
+                    </span>
+                  )) : captionStyle === 'kinetic'
+                    ? segmentWords[activeWordIndex]
+                    : activeSegment.text}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Animated captions */}
+        <section className="mx-auto w-full max-w-3xl space-y-4 border-b border-gray-800 px-6 py-6" aria-labelledby="animated-captions-title">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 id="animated-captions-title" className="flex items-center gap-2 font-semibold text-white">
+                <Sparkles className="h-4 w-4 text-fuchsia-300" /> Animated captions
+              </h3>
+              <p className="mt-1 text-xs text-gray-400">
+                {speechCaptureStatus === 'listening'
+                  ? 'Finishing speech recognition…'
+                  : speechCaptureStatus === 'unsupported'
+                    ? 'Speech recognition is not supported by this browser.'
+                    : speechCaptureStatus === 'error'
+                      ? 'Speech recognition stopped. You can still upload without captions.'
+                      : captionSegments.length
+                        ? `${captionSegments.length} spoken lines detected. Edit them before upload.`
+                        : 'No spoken words were detected in this recording.'}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant={captionsEnabled ? 'default' : 'outline'}
+              disabled={!captionSegments.length}
+              aria-pressed={captionsEnabled}
+              onClick={() => {
+                if (captionsEnabled) clearCaptionRender();
+                setCaptionsEnabled((enabled) => !enabled);
+              }}
+              className={captionsEnabled ? 'bg-fuchsia-600 text-white hover:bg-fuchsia-700' : ''}
+            >
+              <Sparkles className="mr-2 h-4 w-4" />
+              {captionsEnabled ? 'Captions on' : 'Animate voice text'}
+            </Button>
+            {((captionsEnabled && captionSegments.length > 0) || videoAnimationEnabled) && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleRenderCaptions}
+                disabled={isRenderingCaptions || Boolean(captionedVideoBlob)}
+              >
+                <Video className="mr-2 h-4 w-4" />
+                {isRenderingCaptions
+                  ? `Rendering ${captionRenderProgress}%`
+                  : captionedVideoBlob
+                    ? 'Effects rendered'
+                    : 'Render video effects'}
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-gray-500">Speech recognition is provided by your browser; review the transcript before rendering.</p>
+
+          <div className="flex items-center justify-between gap-4 rounded-md border border-gray-800 px-4 py-3">
+            <div>
+              <h4 className="text-sm font-medium text-white">Video animation</h4>
+              <p className="text-xs text-gray-500">Automatically pan, zoom, and transition through the recording.</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={videoAnimationEnabled}
+              aria-label="Enable automatic video animation"
+              onClick={() => {
+                clearCaptionRender();
+                setVideoAnimationEnabled((enabled) => !enabled);
+              }}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${videoAnimationEnabled ? 'bg-fuchsia-600' : 'bg-gray-700'}`}
+            >
+              <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-transform ${videoAnimationEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+            </button>
+          </div>
+
+          {captionSegments.length > 0 && (
+            <>
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Caption animation style">
+                {([
+                  ['kinetic', 'Kinetic'],
+                  ['karaoke', 'Word highlight'],
+                  ['classic', 'Classic'],
+                ] as const).map(([style, label]) => (
+                  <button
+                    key={style}
+                    type="button"
+                    aria-pressed={captionStyle === style}
+                    onClick={() => {
+                      clearCaptionRender();
+                      setCaptionStyle(style);
+                    }}
+                    className={`rounded-md border px-3 py-2 text-sm transition-colors ${captionStyle === style
+                      ? 'border-fuchsia-400 bg-fuchsia-500/15 text-white'
+                      : 'border-gray-700 text-gray-300 hover:border-gray-500'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
+                {captionSegments.map((segment, index) => (
+                  <label key={segment.id} className="flex items-start gap-3 text-xs text-gray-400">
+                    <span className="w-10 shrink-0 pt-3 tabular-nums">{index + 1}</span>
+                    <textarea
+                      value={segment.text}
+                      onChange={(event) => updateCaptionSegment(segment.id, event.target.value)}
+                      rows={2}
+                      aria-label={`Edit caption line ${index + 1}`}
+                      className="min-h-10 flex-1 resize-y rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white focus:border-fuchsia-500 focus:outline-none"
+                    />
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
+
+        <div className="mx-auto w-full max-w-3xl px-6 py-4">
+          <ShowSlotApplication />
         </div>
 
         {/* Upload Section */}
@@ -1144,48 +1562,43 @@ const RecordReel = () => {
               </div>
             </div>
 
-            {/* Categories */}
             <div>
-              <label className="text-sm font-medium text-white mb-3 flex items-center gap-2">
-                <Tag className="h-4 w-4 text-gray-400" />
-                Categories
-              </label>
-              <div className="flex flex-wrap gap-2 mb-3">
-                {CATEGORY_OPTIONS.map(cat => {
-                  const selected = selectedCategories.includes(cat);
-                  const disabled = !selected && selectedCategories.length >= 3;
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => {
-                        if (selected) {
-                          setSelectedCategories(selectedCategories.filter(c => c !== cat));
-                        } else if (selectedCategories.length < 3) {
-                          setSelectedCategories([...selectedCategories, cat]);
-                        }
-                      }}
-                      disabled={disabled}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
-                        selected
-                          ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
+              <button
+                type="button"
+                aria-expanded={showCategoryOptions}
+                onClick={() => setShowCategoryOptions((visible) => !visible)}
+                className="flex min-h-10 items-center gap-2 rounded-md border border-gray-700 px-3 text-sm text-gray-300 transition-colors hover:border-gray-500 hover:text-white"
+              >
+                <Tag className="h-4 w-4" />
+                {selectedCategories.length ? `Categories (${selectedCategories.length})` : 'Add categories (optional)'}
+                <span aria-hidden="true">{showCategoryOptions ? '−' : '+'}</span>
+              </button>
+              {showCategoryOptions && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {CATEGORY_OPTIONS.map((category) => {
+                    const selected = selectedCategories.includes(category);
+                    const disabled = !selected && selectedCategories.length >= 3;
+                    return (
+                      <button
+                        key={category}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => setSelectedCategories((current) => selected
+                          ? current.filter((item) => item !== category)
+                          : current.length < 3 ? [...current, category] : current
+                        )}
+                        disabled={disabled}
+                        className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${selected
+                          ? 'bg-fuchsia-600 text-white'
                           : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                      } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      {cat}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="text-xs text-gray-500">
-                {selectedCategories.length === 0 ? (
-                  "Select 1-3 categories"
-                ) : selectedCategories.length === 3 ? (
-                  <span className="text-green-400">✓ Maximum categories selected</span>
-                ) : (
-                  `${3 - selectedCategories.length} more can be selected`
-                )}
-              </div>
+                        } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+                      >
+                        {category}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
@@ -1208,12 +1621,32 @@ const RecordReel = () => {
                 </div>
               </div>
 
+              <div className="flex items-center gap-2 bg-accent/50 rounded-lg px-4 py-2 w-full sm:w-auto justify-center sm:justify-start">
+                <Sparkles className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Share to Moments</span>
+                <div className="relative inline-block w-10 h-5 ml-2">
+                  <input
+                    type="checkbox"
+                    checked={shareToMoment}
+                    onChange={e => setShareToMoment(e.target.checked)}
+                    className="sr-only peer"
+                    id="share-moment-toggle-record"
+                  />
+                  <label
+                    htmlFor="share-moment-toggle-record"
+                    className="absolute cursor-pointer top-0 left-0 right-0 bottom-0 bg-gray-300 dark:bg-gray-700 rounded-full transition-colors peer-checked:bg-primary before:absolute before:content-[''] before:h-3.5 before:w-3.5 before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full before:transition-transform peer-checked:before:translate-x-5"
+                  />
+                </div>
+              </div>
+
               {/* Action Buttons */}
               <div className="flex items-center gap-3 w-full sm:w-auto justify-center sm:justify-end">
                 <Button
                   variant="outline"
                   onClick={() => {
                     if (videoUrl) cleanupVideoURL(videoUrl);
+                    clearCaptionRender();
+                    clearCaptionRender();
                     setVideoUrl(null);
                     setRecordedChunks([]);
                   }}
@@ -1229,14 +1662,14 @@ const RecordReel = () => {
                       handleUpload();
                     }
                   }}
-                  disabled={!caption || selectedCategories.length === 0 || isUploading}
+                  disabled={!caption || isUploading}
                   className="rounded-full px-8 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg w-full sm:w-auto"
                   size="lg"
                 >
                   {isUploading ? (
                     <span className="flex items-center gap-2">
                       <Skeleton className="h-4 w-4 rounded-full" />
-                      Uploading...
+                      <span className="text-sm">Uploading</span>
                     </span>
                   ) : (
                     <span className="flex items-center gap-2">
@@ -1254,7 +1687,7 @@ const RecordReel = () => {
   };
 
   // Preview/Recording UI Component
-  const PreviewUI = () => {
+  const renderPreviewUI = () => {
     if (!isPreviewing) return null;
 
     const videoClass = isLandscape
@@ -1262,14 +1695,32 @@ const RecordReel = () => {
       : 'w-full h-auto object-contain';
 
     return (
-      <div className="fixed inset-0 z-[9999] bg-black">
+      <div className="fixed inset-0 z-[9999] h-[100dvh] w-screen overflow-hidden bg-black">
+        {permissionError && (
+          <div
+            role="alert"
+            className="absolute left-4 right-4 top-16 z-[10010] mx-auto flex max-w-xl items-center justify-between gap-4 rounded-lg border border-amber-400/40 bg-gray-950/95 p-4 text-sm text-white shadow-xl"
+          >
+            <span>{permissionError}</span>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                setPermissionError(null);
+                void handleStartPreview();
+              }}
+            >
+              Retry camera
+            </Button>
+          </div>
+        )}
         <div
           ref={previewContainerRef}
-          className={`relative w-full h-full bg-black ${isLandscape ? 'flex items-center justify-center' : ''}`}
+          className={`relative h-[100dvh] w-screen bg-black ${isLandscape ? 'flex items-center justify-center' : ''}`}
         >
           {/* Camera Preview */}
           <div className={`absolute inset-0 ${isLandscape ? 'flex items-center justify-center' : ''}`}>
-            <div className={`relative ${isLandscape ? 'w-full max-w-6xl' : 'w-full h-full'}`}>
+            <div className={`relative h-full ${isLandscape ? 'w-full max-w-6xl' : 'w-full'}`}>
               {/* Orientation Indicator */}
               <div className={`absolute top-4 left-1/2 transform -translate-x-1/2 z-50 flex items-center gap-2 bg-black/60 backdrop-blur-sm text-white text-xs px-3 py-1.5 rounded-full ${
                 orientation === 'landscape' ? 'border border-yellow-500/50' : ''
@@ -1292,8 +1743,7 @@ const RecordReel = () => {
                 autoPlay
                 playsInline
                 muted
-                className="w-full h-full object-cover"
-                style={{ display: 'block', margin: '0 auto', width: '100%', height: '100vh' }}
+                className="absolute inset-0 block h-full w-full object-cover"
               />
             </div>
             
@@ -1396,22 +1846,22 @@ const RecordReel = () => {
             </div>
             
             {/* Bottom Controls */}
-            <div className="absolute bottom-8 left-0 right-0 flex justify-center items-center gap-6 z-40">
+            <div className="absolute bottom-8 left-0 right-0 flex justify-center items-end gap-5 z-40">
               {/* Camera Flip Button */}
               <button
                 onClick={handleSwitchCamera}
                 disabled={isSwitchingCamera || isRecording}
-                className="w-14 h-14 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center hover:bg-black/80 transition-all hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed group relative"
+                className="w-12 h-12 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center hover:bg-black/80 transition-all hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed group relative"
                 aria-label={`Switch to ${facingMode === 'user' ? 'back' : 'front'} camera`}
               >
                 {isSwitchingCamera ? (
-                  <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                 ) : (
                   <div className="relative">
-                    <FlipHorizontal2 className="w-7 h-7 text-white" />
+                    <FlipHorizontal2 className="w-5 h-5 text-white" />
                     <div className="absolute -top-2 -right-2">
-                      <div className={`w-5 h-5 rounded-full bg-black/80 border border-white/30 flex items-center justify-center ${facingMode === 'environment' ? 'rotate-0' : 'rotate-180'}`}>
-                        <span className="text-xs text-white font-bold">
+                      <div className={`w-4 h-4 rounded-full bg-black/80 border border-white/30 flex items-center justify-center ${facingMode === 'environment' ? 'rotate-0' : 'rotate-180'}`}>
+                        <span className="text-[9px] text-white font-bold">
                           {facingMode === 'user' ? '1' : '2'}
                         </span>
                       </div>
@@ -1424,39 +1874,36 @@ const RecordReel = () => {
               <button
                 onClick={isRecording ? handleStopRecording : handleStartRecording}
                 disabled={isSwitchingCamera || countdown !== null}
-                className={`w-20 h-20 rounded-full flex items-center justify-center transition-all transform hover:scale-105 disabled:opacity-70 disabled:cursor-not-allowed ${
+                className={`relative flex flex-col items-center justify-center rounded-full transition-all transform hover:scale-105 disabled:opacity-70 disabled:cursor-not-allowed ${
                   isRecording 
-                    ? 'bg-red-600 border-4 border-red-300/50 animate-pulse' 
-                    : 'bg-white border-4 border-white/30'
+                    ? 'w-24 h-24 bg-red-600 border-4 border-red-300/50 animate-pulse' 
+                    : 'w-24 h-24 bg-white border-4 border-white/20 shadow-[0_0_0_10px_rgba(255,255,255,0.08)]'
                 }`}
                 aria-label={isRecording ? 'Stop recording' : 'Start recording'}
               >
                 {isRecording ? (
                   <Square className="w-8 h-8 text-white" />
                 ) : (
-                  <div className="w-12 h-12 bg-red-600 rounded-full flex items-center justify-center">
-                    {countdown === null ? (
-                      <Play className="w-6 h-6 text-white ml-1" />
-                    ) : (
-                      <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    )}
-                  </div>
+                  <>
+                    <div className="w-11 h-11 bg-red-600 rounded-full flex items-center justify-center shadow-lg">
+                      {countdown === null ? (
+                        <Play className="w-6 h-6 text-white ml-1" />
+                      ) : (
+                        <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      )}
+                    </div>
+                    <span className="mt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/90">Start</span>
+                  </>
                 )}
               </button>
               
               {/* Orientation Guide */}
-              <div className="w-14 h-14 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center relative group">
+              <div className="w-12 h-12 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center relative group opacity-80">
                 {isLandscape ? (
-                  <Monitor className="w-7 h-7 text-yellow-400" />
+                  <Monitor className="w-5 h-5 text-yellow-400" />
                 ) : (
-                  <Smartphone className="w-7 h-7 text-blue-400" />
+                  <Smartphone className="w-5 h-5 text-blue-400" />
                 )}
-                
-                <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 bg-black/80 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                  {isLandscape ? 'Landscape recording' : 'Portrait recording'}
-                  <br />
-                  {preferredOrientation === 'auto' ? 'Auto orientation' : `${preferredOrientation} preferred`}
-                </div>
               </div>
             </div>
             
@@ -1506,258 +1953,40 @@ const RecordReel = () => {
   if (isPreviewing && isLandscape) {
     return (
       <div className="min-h-screen bg-black">
-        <PreviewUI />
+        {renderPreviewUI()}
+      </div>
+    );
+  }
+
+  if (!isPreviewing && !videoUrl) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-950 via-black to-purple-950 flex items-center justify-center px-4">
+        <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-900/70 p-8 text-center shadow-2xl">
+          <div className="mx-auto mb-5 h-16 w-16 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center animate-pulse">
+            <Camera className="h-8 w-8 text-white" />
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2">Opening camera</h2>
+          <p className="text-sm text-gray-400 mb-6">Preparing your recording countdown…</p>
+          <div className="mx-auto mb-4 h-2 w-32 overflow-hidden rounded-full bg-gray-800">
+            <div className="h-full w-1/2 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 animate-pulse" />
+          </div>
+          <button
+            onClick={() => handleStartPreview()}
+            className="w-full rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-3 font-semibold text-white hover:from-purple-700 hover:to-pink-700"
+          >
+            Retry camera
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-black to-purple-950">
-      <PreviewUI />
-      <RecordedPreview />
+      {renderPreviewUI()}
+      {renderRecordedPreview()}
       <ShareToFeedModal />
 
-      {/* Main Content */}
-      <div className="container mx-auto px-4 py-6 max-w-md">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <button
-            onClick={() => navigate(-1)}
-            className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors group"
-          >
-            <ChevronLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
-            <span className="text-sm font-medium">Back</span>
-          </button>
-          
-          <div className="flex items-center gap-2">
-            <Camera className="w-5 h-5 text-purple-400" />
-            <h1 className="text-lg font-semibold text-white">Create Reel</h1>
-          </div>
-          
-          <div className="w-10"></div> {/* Spacer */}
-        </div>
-
-        {/* Hero Section */}
-        <div className="mb-8 text-center">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 mb-4">
-            <Video className="w-8 h-8 text-white" />
-          </div>
-          <h2 className="text-2xl font-bold text-white mb-2">Record Your Story</h2>
-          <p className="text-gray-400 text-sm">Create engaging short videos for your audience</p>
-          
-          {/* Orientation Indicator */}
-          <div className="mt-4 inline-flex items-center gap-2 bg-gray-800/50 backdrop-blur-sm text-gray-300 text-xs px-3 py-1.5 rounded-full">
-            {orientation === 'landscape' ? (
-              <>
-                <Monitor className="w-3.5 h-3.5" />
-                <span>Landscape view</span>
-              </>
-            ) : (
-              <>
-                <Smartphone className="w-3.5 h-3.5" />
-                <span>Portrait view</span>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Duration Selector Card */}
-        <div className="bg-gradient-to-br from-gray-900/80 to-gray-900/40 backdrop-blur-sm rounded-2xl border border-gray-800 p-6 mb-6 shadow-xl">
-          <div className="flex items-center gap-3 mb-4">
-            <Clock className="w-5 h-5 text-purple-400" />
-            <h3 className="text-lg font-semibold text-white">Select Duration</h3>
-          </div>
-          
-          {/* 90s Option */}
-          <button
-            onClick={() => { setSelectedMode('90'); setEnable360(false); }}
-            className={`w-full p-4 rounded-xl mb-3 transition-all duration-300 ${
-              selectedMode === '90' 
-                ? 'bg-gradient-to-r from-purple-600/20 to-pink-600/20 border border-purple-500/30' 
-                : 'bg-gray-800/30 border border-gray-700/50 hover:border-gray-600'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                  selectedMode === '90' 
-                    ? 'bg-gradient-to-br from-purple-600 to-pink-600' 
-                    : 'bg-gray-700'
-                }`}>
-                  <span className="text-sm font-bold text-white">90</span>
-                </div>
-                <div className="text-left">
-                  <div className="font-semibold text-white">90s Reels</div>
-                  <div className="text-xs text-gray-400">Standard short format</div>
-                </div>
-              </div>
-              <div className={`px-3 py-1 rounded-full text-xs font-medium ${
-                selectedMode === '90' 
-                  ? 'bg-purple-500/20 text-purple-300' 
-                  : 'bg-gray-700/50 text-gray-300'
-              }`}>
-                1:30 min
-              </div>
-            </div>
-          </button>
-          
-          {/* 360s Option */}
-          <div className={`p-4 rounded-xl transition-all duration-300 ${
-            selectedMode === '360' 
-              ? 'bg-gradient-to-r from-emerald-600/20 to-teal-600/20 border border-emerald-500/30' 
-              : 'bg-gray-800/30 border border-gray-700/50'
-          }`}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={toggle360}
-                  disabled={!canEnable360 || checking360}
-                  className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
-                    canEnable360 
-                      ? 'cursor-pointer hover:scale-105' 
-                      : 'cursor-not-allowed opacity-70'
-                  } ${lockerColorClass}`}
-                  title={canEnable360 ? (enable360 ? 'Disable 360' : 'Enable 360') : `${remainingToUnlock} more 90s reels to unlock`}
-                >
-                  <Lock className="w-5 h-5 text-white" />
-                </button>
-                <div className="text-left">
-                  <div className="font-semibold text-white">360s Reels</div>
-                  <div className="text-xs text-gray-400">Extended format</div>
-                </div>
-              </div>
-              <div className={`px-3 py-1 rounded-full text-xs font-medium ${
-                selectedMode === '360' 
-                  ? 'bg-emerald-500/20 text-emerald-300' 
-                  : 'bg-gray-700/50 text-gray-300'
-              }`}>
-                6:00 min
-              </div>
-            </div>
-            
-            {/* Unlock Progress */}
-            {!checking360 && !canEnable360 && (
-              <div className="mt-3 pt-3 border-t border-gray-700/50">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-gray-400">Progress to unlock</span>
-                  <span className="text-xs font-medium text-gray-300">{percentUnlocked}%</span>
-                </div>
-                <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 transition-all duration-500"
-                    style={{ width: `${percentUnlocked}%` }}
-                  />
-                </div>
-                <div className="mt-2 text-xs text-gray-400">
-                  Post {remainingToUnlock} more 90s reels to unlock 360s recording
-                </div>
-              </div>
-            )}
-            
-            {/* Unlocked Status */}
-            {canEnable360 && (
-              <div className="mt-3 pt-3 border-t border-emerald-500/30">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-emerald-400" />
-                  <span className="text-sm text-emerald-400 font-medium">360s Unlocked!</span>
-                </div>
-                <p className="mt-1 text-xs text-gray-400">
-                  You've posted {total90s} reels. 360s recording is now available.
-                </p>
-              </div>
-            )}
-            
-            {/* Checking Status */}
-            {checking360 && (
-              <div className="mt-3 pt-3 border-t border-gray-700/50">
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
-                  <span className="text-sm text-gray-400">Checking eligibility...</span>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Features Card */}
-        <div className="bg-gradient-to-br from-gray-900/60 to-gray-900/30 backdrop-blur-sm rounded-2xl border border-gray-800 p-6 mb-6">
-          <h4 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-            <Zap className="w-4 h-4 text-purple-400" />
-            Recording Features
-          </h4>
-          
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-gray-800/30 rounded-xl p-3 border border-gray-700/50">
-              <div className="w-8 h-8 rounded-lg bg-purple-600/20 flex items-center justify-center mb-2">
-                <Monitor className="w-4 h-4 text-purple-400" />
-              </div>
-              <div className="text-xs font-medium text-white">Auto Orientation</div>
-              <div className="text-xs text-gray-400 mt-1">Supports landscape & portrait</div>
-            </div>
-            
-            <div className="bg-gray-800/30 rounded-xl p-3 border border-gray-700/50">
-              <div className="w-8 h-8 rounded-lg bg-emerald-600/20 flex items-center justify-center mb-2">
-                <Shield className="w-4 h-4 text-emerald-400" />
-              </div>
-              <div className="text-xs font-medium text-white">Copyright Safe</div>
-              <div className="text-xs text-gray-400 mt-1">Original content detection</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Start Button */}
-        <button
-          disabled={checking360 || (selectedMode === '360' && !canEnable360)}
-          onClick={() => {
-            console.log('[RecordReel] Start button clicked', { enable360, selectedMode, canEnable360 });
-            try {
-              const dur = enable360 ? 360 : 90;
-              navigate(`/studio/record-preview?duration=${dur}`);
-            } catch (e) {
-              console.error('[RecordReel] navigation failed:', e);
-              startRecording(enable360 ? 360 : 90);
-            }
-          }}
-          className={`w-full py-4 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center justify-center gap-3 shadow-lg ${
-            checking360 || (selectedMode === '360' && !canEnable360)
-              ? 'bg-gray-700 text-gray-300 cursor-not-allowed opacity-70'
-              : 'bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:from-purple-700 hover:to-pink-700 hover:shadow-xl active:scale-95'
-          }`}
-        >
-          <Camera className="w-5 h-5" />
-          {selectedMode === '360' && !canEnable360
-            ? `Need ${remainingToUnlock} More Reels`
-            : `Start ${enable360 ? '360s' : '90s'} Recording`}
-        </button>
-
-        {/* Orientation Tips */}
-        <div className="mt-6 p-4 bg-gradient-to-r from-gray-900/40 to-gray-900/20 backdrop-blur-sm rounded-xl border border-gray-800">
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 rounded-full bg-blue-600/20 flex items-center justify-center flex-shrink-0">
-              <Monitor className="w-4 h-4 text-blue-400" />
-            </div>
-            <div>
-            
-              <div className="text-xs text-gray-400 space-y-1">
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
-             
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-yellow-500"></div>
-           
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-purple-500"></div>
-                
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Mobile Bottom Navigation */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-30">
         <MobileBottomNav />
       </div>

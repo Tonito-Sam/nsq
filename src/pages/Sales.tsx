@@ -7,6 +7,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { getDisplayPrice } from '@/utils/pricing';
 import { useNavigate } from 'react-router-dom';
 import useMeta from '@/hooks/useMeta';
+import SkeletonCard from '@/components/skeletons/SkeletonCard';
 
 const Sales = () => {
   const navigate = useNavigate();
@@ -50,7 +51,11 @@ const Sales = () => {
         </div>
 
         {isLoading ? (
-          <div>Loading...</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <SkeletonCard key={i} />
+            ))}
+          </div>
         ) : saleItems.length === 0 ? (
           <Card className="p-8 text-center">No sale items found</Card>
         ) : (

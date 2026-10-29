@@ -43,13 +43,23 @@ interface OrderItem {
   product?: {
     title: string;
     images: string[];
+    product_type?: string | null;
   };
+  store_products?: OrderItem['product'] | OrderItem['product'][];
 }
 
 interface ManageOrdersProps {
   storeId?: string;
   storeCurrency: string;
 }
+
+const itemRequiresShipping = (item: OrderItem) => {
+  const productType = (item.product?.product_type || '').toLowerCase();
+  return !['digital', 'download', 'service'].some(type => productType.includes(type));
+};
+
+const orderRequiresShipping = (order: Order) =>
+  !order.items?.length || order.items.some(itemRequiresShipping);
 
 export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurrency }) => {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -90,14 +100,17 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
             .from('order_items')
             .select(`
               *,
-              store_products(title, images)
+              store_products(title, images, product_type)
             `)
             .eq('order_id', order.id);
 
           return {
             ...order,
             customer: customerData || undefined,
-            items: itemsData || []
+            items: (itemsData || []).map((item: any) => ({
+              ...item,
+              product: Array.isArray(item.store_products) ? item.store_products[0] : item.store_products,
+            }))
           };
         })
       );
@@ -195,6 +208,7 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
               <TableHead>Order ID</TableHead>
               <TableHead>Customer</TableHead>
               <TableHead>Items</TableHead>
+              <TableHead>Shipping</TableHead>
               <TableHead>Total</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Date</TableHead>
@@ -212,6 +226,11 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
                 </TableCell>
                 <TableCell>
                   {order.items?.length || 0} items
+                </TableCell>
+                <TableCell>
+                  <Badge variant={orderRequiresShipping(order) ? 'default' : 'secondary'}>
+                    {orderRequiresShipping(order) ? 'Required' : 'Not required'}
+                  </Badge>
                 </TableCell>
                 <TableCell className="font-semibold">
                   {storeCurrency} {Number(order.total_amount).toLocaleString()}
@@ -244,9 +263,9 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
                     {order.status === 'processing' && (
                       <Button
                         size="sm"
-                        onClick={() => updateOrderStatus(order.id, 'shipped')}
+                        onClick={() => updateOrderStatus(order.id, orderRequiresShipping(order) ? 'shipped' : 'completed')}
                       >
-                        Ship
+                        {orderRequiresShipping(order) ? 'Ship' : 'Complete'}
                       </Button>
                     )}
                   </div>
@@ -289,6 +308,10 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
                     <Badge className={getStatusColor(selectedOrder.status)}>
                       {selectedOrder.status}
                     </Badge>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Shipping</p>
+                    <p>{orderRequiresShipping(selectedOrder) ? 'Required' : 'Not required'}</p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-500">Total</p>

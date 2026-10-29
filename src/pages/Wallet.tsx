@@ -17,6 +17,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import CreateVirtualCard from '@/components/CreateVirtualCard';
 import { initializePayment, PaymentGateway } from '@/services/payment';
+import apiUrl from '@/lib/api';
 import { ArrowUpRight, ArrowDownLeft, Plus, CreditCard, Gift, Rocket, ChevronsUpDown, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -50,6 +51,12 @@ interface Profile {
   full_name: string | null;
   username: string | null;
   avatar_url: string | null;
+}
+
+interface OwnedStore {
+  id: string;
+  store_name: string;
+  base_currency: string | null;
 }
 
 interface PromoTransfer {
@@ -96,6 +103,9 @@ const Wallet = () => {
   const [showSendMoneyModal, setShowSendMoneyModal] = useState(false);
   const [sendMoneyAmount, setSendMoneyAmount] = useState('');
   const [sendMoneyBalanceType, setSendMoneyBalanceType] = useState<'real' | 'virtual'>('real');
+  const [sendMoneyTargetType, setSendMoneyTargetType] = useState<'person' | 'store'>('person');
+  const [ownedStores, setOwnedStores] = useState<OwnedStore[]>([]);
+  const [selectedStoreId, setSelectedStoreId] = useState('');
   const [sendMoneyNote, setSendMoneyNote] = useState('');
   const [showRequestPaymentModal, setShowRequestPaymentModal] = useState(false);
   const [requestAmount, setRequestAmount] = useState('');
@@ -116,10 +126,7 @@ const Wallet = () => {
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [recentRecipients, setRecentRecipients] = useState<User[]>([]);
-  const [baseCurrency, _setBaseCurrency] = useState<string>(() => {
-    try { return localStorage.getItem('baseCurrency') || 'USD'; } catch(e) { return 'USD'; }
-  });
-  const { rates, loading: ratesLoading, updatedAt, refresh, isCached: _isCached } = useCurrencyRates(baseCurrency, 5 * 60 * 1000);
+  const { rates, loading: ratesLoading, updatedAt, refresh, isCached: _isCached } = useCurrencyRates('USD', 5 * 60 * 1000);
 
   // Backwards-compatible wrappers for components that expect 2-arg convert functions
   const convertToUSDForModals = (amount: number, fromCurrency: string) => convertToUSD(amount, fromCurrency, rates);
@@ -133,13 +140,18 @@ const Wallet = () => {
       fetchTransactions();
       fetchPromoTransfers();
       fetchRecentRecipients();
+      fetchOwnedStores();
     }
   }, [user]);
 
   const getGatewaysForCurrency = (currency: string): PaymentGateway[] => {
-    if (["ZAR", "BWP"].includes(currency)) return ["paystack", "applepay", "googlepay"];
-    if (["USD", "GBP", "NGN", "KES", "GHS", "TZS", "UGX", "RWF", "MWK", "ZMW", "MZN", "XOF", "XAF"].includes(currency)) return ["flutterwave", "applepay", "googlepay"];
-    return ["applepay", "googlepay"];
+    const env = (import.meta as any).env || {};
+    const gateways: PaymentGateway[] = [];
+    if (env.VITE_PAYSTACK_PUBLIC_KEY && ['ZAR', 'NGN', 'GHS', 'KES', 'USD'].includes(currency)) gateways.push('paystack');
+    if (env.VITE_FLUTTERWAVE_PUBLIC_KEY && ['NGN', 'USD', 'GBP', 'EUR', 'KES', 'GHS', 'UGX', 'TZS'].includes(currency)) {
+      gateways.push('flutterwave');
+    }
+    return gateways;
   };
 
   useEffect(() => {
@@ -174,6 +186,20 @@ const Wallet = () => {
     }
   };
 
+  const fetchOwnedStores = async () => {
+    if (!user) return;
+    const { data, error } = await supabase
+      .from('user_stores')
+      .select('id, store_name, base_currency')
+      .eq('user_id', user.id)
+      .eq('is_active', true);
+    if (error) {
+      console.error('Error loading owned stores for transfer:', error);
+      return;
+    }
+    setOwnedStores(data || []);
+  };
+
   const fetchUserProfile = async () => {
     if (!user) return;
     try {
@@ -202,9 +228,9 @@ const Wallet = () => {
       
       if (!error && data) {
         setWalletBalance({
-          real_balance: data.real_balance || 0,
-          virtual_balance: data.virtual_balance || 100,
-          total_balance: data.total_balance || (data.real_balance || 0) + (data.virtual_balance || 100)
+          real_balance: data.real_balance ?? 0,
+          virtual_balance: data.virtual_balance ?? 100,
+          total_balance: data.total_balance ?? (data.real_balance ?? 0) + (data.virtual_balance ?? 100)
         });
       } else if (error && error.code === 'PGRST116') {
         // No wallet record found, create one with initial virtual balance
@@ -415,106 +441,64 @@ const Wallet = () => {
     setIsPaying(true);
     try {
       const localAmount = Number(topUpAmount);
-      const usdAmount = convertToUSD(localAmount, userCurrency, rates);
-      
-      // Initialize payment with user's local currency
+      if (!user || !Number.isFinite(localAmount) || localAmount <= 0) throw new Error('Enter a valid top-up amount.');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Please sign in again to top up your wallet.');
+
+      const intentResponse = await fetch(apiUrl('/api/wallet/topups/intent'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ amount_local: localAmount, currency: userCurrency, gateway: topUpGateway }),
+      });
+      const intent = await intentResponse.json().catch(() => ({}));
+      if (!intentResponse.ok) throw new Error(intent.error || 'Could not create wallet top-up request');
+
       await initializePayment(topUpGateway, {
-        amount: localAmount,
-        currency: userCurrency,
+        amount: intent.amount_local,
+        currency: intent.currency,
+        accessToken: session.access_token,
         buyerCountry: 'NG',
         buyerCurrency: userCurrency,
-        sellerCountry: 'NG',
-        sellerCurrency: userCurrency,
-        email: user?.email || '',
-        reference: `TOPUP-${Date.now()}`,
-        metadata: { 
-          user_id: user?.id,
-          usd_amount: usdAmount.toFixed(2),
-          local_amount: localAmount,
-          local_currency: userCurrency
+        sellerCountry: 'US',
+        sellerCurrency: 'USD',
+        email: user.email || '',
+        reference: intent.reference,
+        metadata: {
+          user_id: user.id,
+          wallet_topup: true,
+          wallet_topup_reference: intent.reference,
+          local_amount: intent.amount_local,
+          local_currency: intent.currency,
+          usd_amount: intent.amount_usd,
         }
       });
-
-      // Update wallet with REAL balance only
-      const updatedRealBalance = walletBalance.real_balance + usdAmount;
-      const updatedTotalBalance = updatedRealBalance + walletBalance.virtual_balance;
-      
-      // Update wallet in database
-      const { error: walletError } = await supabase
-        .from('wallets')
-        .update({ 
-          real_balance: updatedRealBalance,
-          total_balance: updatedTotalBalance,
-          updated_at: new Date().toISOString()
-        })
-        .eq('user_id', user?.id);
-
-      if (walletError) {
-        // If update failed, try insert
-        await supabase
-          .from('wallets')
-          .insert({ 
-            user_id: user?.id, 
-            real_balance: updatedRealBalance,
-            virtual_balance: walletBalance.virtual_balance,
-            total_balance: updatedTotalBalance,
-            updated_at: new Date().toISOString()
-          });
-      }
-
-      // Update local state
-      setWalletBalance({
-        ...walletBalance,
-        real_balance: updatedRealBalance,
-        total_balance: updatedTotalBalance
-      });
-
-      // Create transaction record
-      await supabase
-        .from('transactions')
-        .insert({
-          user_id: user?.id,
-          type: 'topup',
-          amount_usd: usdAmount,
-          amount_local: localAmount,
-          currency_local: userCurrency,
-          gateway: topUpGateway,
-          status: 'completed',
-          reference: `TOPUP-${Date.now()}`,
-          description: `Wallet top-up via ${topUpGateway}`,
-          is_test: true,
-          balance_type: 'real'
-        });
-
-      // Refresh transactions list
-      fetchTransactions();
-
-      toast({ 
-        title: 'Wallet Topped Up Successfully!', 
-        description: `Added ${localAmount.toLocaleString()} ${userCurrency} (≈ $${usdAmount.toFixed(2)} USD) to your real balance.`
-      });
-
-      setShowTopUpModal(false);
-      setTopUpAmount('');
-      
     } catch (err) {
-      toast({ title: 'Payment Error', description: 'Failed to initialize payment.' });
+      toast({
+        title: 'Payment Error',
+        description: err instanceof Error ? err.message : 'Could not start wallet top-up.',
+        variant: 'destructive',
+      });
     } finally {
       setIsPaying(false);
     }
   };
 
   const handleSendMoney = async () => {
-    if (!sendMoneyAmount || !selectedUser || !user) {
+    const validTarget = sendMoneyTargetType === 'person' ? !!selectedUser : !!selectedStoreId;
+    if (!sendMoneyAmount || !validTarget || !user || (sendMoneyTargetType === 'store' && sendMoneyBalanceType !== 'real')) {
       toast({ title: 'Error', description: 'Please fill all fields.' });
       return;
     }
 
-    const amount = Number(sendMoneyAmount);
-    if (isNaN(amount) || amount <= 0) {
+    const localAmount = Number(sendMoneyAmount);
+    if (!Number.isFinite(localAmount) || localAmount <= 0 || (userCurrency !== 'USD' && !rates)) {
       toast({ title: 'Error', description: 'Please enter a valid amount.' });
       return;
     }
+    const amount = convertToUSD(localAmount, userCurrency, rates);
 
     // Check if user has enough balance
     const availableBalance = sendMoneyBalanceType === 'real' 
@@ -530,174 +514,92 @@ const Wallet = () => {
     }
 
     try {
-      if (sendMoneyBalanceType === 'virtual') {
-        // Handle virtual balance transfer using promo_transfers table
-        await supabase
-          .from('promo_transfers')
-          .insert({
-            from_user_id: user.id,
-            to_user_id: selectedUser.id,
-            amount: amount,
-            note: sendMoneyNote || `Promo money transfer`,
-            metadata: {
-              type: 'promo_transfer',
-              from_balance: 'virtual',
-              transferred_at: new Date().toISOString()
-            }
-          });
-
-        // Update sender's virtual balance
-        const updatedSenderVirtualBalance = walletBalance.virtual_balance - amount;
-        const updatedSenderTotalBalance = walletBalance.real_balance + updatedSenderVirtualBalance;
-
-        // Update sender's wallet in database
-        await supabase
-          .from('wallets')
-          .update({
-            virtual_balance: updatedSenderVirtualBalance,
-            total_balance: updatedSenderTotalBalance,
-            updated_at: new Date().toISOString()
-          })
-          .eq('user_id', user.id);
-
-        // Update receiver's virtual balance
-        // First, get receiver's current balance
-        const { data: receiverWallet } = await supabase
-          .from('wallets')
-          .select('virtual_balance, real_balance')
-          .eq('user_id', selectedUser.id)
-          .single();
-
-        const receiverCurrentVirtual = receiverWallet?.virtual_balance || 100;
-        const receiverCurrentReal = receiverWallet?.real_balance || 0;
-        const updatedReceiverVirtualBalance = receiverCurrentVirtual + amount;
-        const updatedReceiverTotalBalance = receiverCurrentReal + updatedReceiverVirtualBalance;
-
-        // Update or create receiver's wallet
-        await supabase
-          .from('wallets')
-          .upsert({
-            user_id: selectedUser.id,
-            virtual_balance: updatedReceiverVirtualBalance,
-            real_balance: receiverCurrentReal,
-            total_balance: updatedReceiverTotalBalance,
-            updated_at: new Date().toISOString(),
-            created_at: receiverWallet ? undefined : new Date().toISOString()
-          }, {
-            onConflict: 'user_id'
-          });
-
-        // Update local state
-        setWalletBalance({
-          ...walletBalance,
-          virtual_balance: updatedSenderVirtualBalance,
-          total_balance: updatedSenderTotalBalance
+      if (sendMoneyBalanceType === 'real') {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) throw new Error('Please sign in again to transfer wallet funds.');
+        const reference = `WALLET-${crypto.randomUUID()}`;
+        const isStoreTransfer = sendMoneyTargetType === 'store';
+        const response = await fetch(apiUrl(isStoreTransfer ? '/api/wallet/store-transfers' : '/api/wallet/transfers'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify(isStoreTransfer
+            ? { store_id: selectedStoreId, amount_usd: amount, reference }
+            : { recipient_user_id: selectedUser?.id, amount_usd: amount, reference }),
         });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || 'Wallet transfer failed');
 
-        // Create transaction record for sender
-        await supabase
-          .from('transactions')
-          .insert({
-            user_id: user.id,
-            type: 'send',
-            amount_usd: amount,
-            amount_local: amount,
-            currency_local: 'USD',
-            gateway: 'internal',
-            status: 'completed',
-            reference: `PROMO-SEND-${Date.now()}`,
-            description: `Sent promo money to ${selectedUser.full_name || selectedUser.username || selectedUser.email}`,
-            is_test: false,
-            balance_type: 'virtual',
-            recipient_info: selectedUser.email
+        await Promise.all([fetchWalletBalance(), fetchTransactions()]);
+        if (isStoreTransfer) {
+          const store = ownedStores.find(item => item.id === selectedStoreId);
+          toast({
+            title: 'Store wallet funded',
+            description: `${localAmount.toLocaleString()} ${userCurrency} was transferred to ${store?.store_name || 'your store'}.`,
           });
+        } else {
+          const recipientName = selectedUser?.full_name || selectedUser?.username || selectedUser?.email || 'the recipient';
+          toast({ title: 'Money sent', description: `${localAmount.toLocaleString()} ${userCurrency} was transferred to ${recipientName}.` });
+        }
+      } else if (sendMoneyBalanceType === 'virtual') {
+        if (!selectedUser) throw new Error('Choose a recipient for the promo transfer.');
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) throw new Error('Please sign in again to transfer promo balance.');
+        const reference = `PROMO-${crypto.randomUUID()}`;
+        const response = await fetch(apiUrl('/api/wallet/promo-transfers'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            recipient_user_id: selectedUser.id,
+            amount,
+            reference,
+            note: sendMoneyNote || 'Promo money transfer',
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || 'Promo transfer failed');
 
-        // Refresh data
-        fetchPromoTransfers();
-        fetchTransactions();
-        fetchRecentRecipients();
+        await Promise.all([fetchWalletBalance(), fetchPromoTransfers(), fetchRecentRecipients()]);
 
         toast({ 
           title: 'Promo Money Sent Successfully!', 
           description: `Sent $${amount.toFixed(2)} virtual balance to ${selectedUser.full_name || selectedUser.username || selectedUser.email}. They can only use it for post boosting.`
         });
 
-      } else {
-        // Handle real balance transfer (original logic)
-        const updatedSenderRealBalance = walletBalance.real_balance - amount;
-        const updatedSenderTotalBalance = updatedSenderRealBalance + walletBalance.virtual_balance;
-
-        // Update sender's wallet in database
-        await supabase
-          .from('wallets')
-          .update({
-            real_balance: updatedSenderRealBalance,
-            total_balance: updatedSenderTotalBalance,
-            updated_at: new Date().toISOString()
-          })
-          .eq('user_id', user.id);
-
-        // Update local state
-        setWalletBalance({
-          ...walletBalance,
-          real_balance: updatedSenderRealBalance,
-          total_balance: updatedSenderTotalBalance
-        });
-
-        // Create transaction record for sender
-        await supabase
-          .from('transactions')
-          .insert({
-            user_id: user.id,
-            type: 'send',
-            amount_usd: amount,
-            amount_local: amount,
-            currency_local: 'USD',
-            gateway: 'internal',
-            status: 'completed',
-            reference: `REAL-SEND-${Date.now()}`,
-            description: `Sent real money to ${selectedUser.full_name || selectedUser.username || selectedUser.email}`,
-            is_test: false,
-            balance_type: 'real',
-            recipient_info: selectedUser.email
-          });
-
-        fetchTransactions();
-        toast({ 
-          title: 'Money Sent Successfully!', 
-          description: `Sent $${amount.toFixed(2)} real balance to ${selectedUser.full_name || selectedUser.username || selectedUser.email}.`
-        });
       }
 
       setShowSendMoneyModal(false);
       setSendMoneyAmount('');
       setSelectedUser(null);
+      setSelectedStoreId('');
+      setSendMoneyTargetType('person');
       setSendMoneyNote('');
       
     } catch (error) {
       console.error('Error sending money:', error);
-      toast({ title: 'Error', description: 'Failed to send money. Please try again.' });
+      toast({ title: 'Error', description: error instanceof Error ? error.message : 'Failed to send money. Please try again.', variant: 'destructive' });
     }
   };
 
   const handleWithdraw = () => {
-    // Withdraw only from REAL balance
     const amount = Number(withdrawAmount);
-    
-    if (amount > walletBalance.real_balance) {
+    if (!Number.isFinite(amount) || amount <= 0 || amount > walletBalance.real_balance) {
       toast({ 
-        title: 'Insufficient Real Balance', 
-        description: `You can only withdraw from your real balance. Available: $${walletBalance.real_balance.toFixed(2)}` 
+        title: 'Invalid withdrawal amount',
+        description: `Enter a positive amount up to your available real balance.`,
+        variant: 'destructive',
       });
       return;
     }
-
-    setShowWithdrawModal(false);
-    setWithdrawAmount('');
-    setWithdrawBank('');
     toast({ 
-      title: 'Withdrawal Request Submitted', 
-      description: `$${amount.toFixed(2)} will be processed from your real balance.`
+      title: 'Personal wallet withdrawals unavailable',
+      description: 'No personal payout rail is connected yet. Your balance has not been changed.',
+      variant: 'destructive',
     });
   };
 
@@ -839,9 +741,12 @@ const Wallet = () => {
                 <CardContent className="p-4 sm:p-6 lg:p-8">
                   <div className="text-center">
                     <h2 className="text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-900 dark:text-gray-100 mb-2">
-                      ${walletBalance.total_balance.toFixed(2)} <span className="text-base font-semibold text-gray-500 dark:text-gray-400">USD</span>
+                      {new Intl.NumberFormat(undefined, { style: 'currency', currency: userCurrency }).format(convertFromUSD(walletBalance.total_balance, userCurrency, rates))}
                     </h2>
-                    <p className="text-gray-600 dark:text-gray-400 mb-4 text-sm sm:text-base">Total Available Balance</p>
+                    <p className="text-gray-600 dark:text-gray-400 mb-4 text-sm sm:text-base">Total Available Balance in {userCurrency}</p>
+                    {userCurrency !== 'USD' && (
+                      <p className="text-xs text-gray-500">USD ledger equivalent: ${walletBalance.total_balance.toFixed(2)}</p>
+                    )}
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
                       <div className="bg-gradient-to-r from-green-500/10 to-green-600/10 dark:from-green-500/5 dark:to-green-600/5 p-4 rounded-lg">
@@ -852,7 +757,7 @@ const Wallet = () => {
                           </Badge>
                         </div>
                         <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                          ${walletBalance.real_balance.toFixed(2)}
+                          {new Intl.NumberFormat(undefined, { style: 'currency', currency: userCurrency }).format(convertFromUSD(walletBalance.real_balance, userCurrency, rates))}
                         </p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                           Can be withdrawn or used for any purpose
@@ -867,7 +772,7 @@ const Wallet = () => {
                           </Badge>
                         </div>
                         <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                          ${walletBalance.virtual_balance.toFixed(2)}
+                          {new Intl.NumberFormat(undefined, { style: 'currency', currency: userCurrency }).format(convertFromUSD(walletBalance.virtual_balance, userCurrency, rates))}
                         </p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                           Can only be used for post boosting or sent to other users
@@ -876,9 +781,8 @@ const Wallet = () => {
                     </div>
                     
                     {userCurrency !== 'USD' && (
-                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-4">
-                        ≈ {rates ? convertFromUSD(walletBalance.total_balance, userCurrency, rates).toLocaleString() : '...'} {userCurrency}
-                        {ratesLoading ? <span className="ml-2 text-xs text-gray-400">(rates...)</span> : updatedAt ? <span className="ml-2 text-xs text-gray-400">(updated {(new Date(updatedAt)).toLocaleTimeString()})</span> : null}
+                      <p className="text-xs text-gray-400 mt-3">
+                        {ratesLoading ? 'Updating exchange rate...' : updatedAt ? `Exchange rate updated ${new Date(updatedAt).toLocaleTimeString()}` : 'Using latest available exchange rate'}
                       </p>
                     )}
                   </div>
@@ -1120,7 +1024,7 @@ const Wallet = () => {
                       </label>
                     </div>
                     <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="virtual" id="send-virtual" />
+                      <RadioGroupItem value="virtual" id="send-virtual" disabled={sendMoneyTargetType === 'store'} />
                       <label htmlFor="send-virtual" className={`font-medium ${getBalanceColor('virtual')}`}>
                         Virtual Balance: ${walletBalance.virtual_balance.toFixed(2)}
                       </label>
@@ -1153,11 +1057,39 @@ const Wallet = () => {
                     </p>
                   )}
                 </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Send to</label>
+                  <Select
+                    value={sendMoneyTargetType}
+                    onValueChange={(value) => {
+                      const target = value as 'person' | 'store';
+                      setSendMoneyTargetType(target);
+                      if (target === 'store') setSendMoneyBalanceType('real');
+                    }}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="person">Another person</SelectItem>
+                      <SelectItem value="store" disabled={ownedStores.length === 0}>My store</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    Select Recipient
+                    {sendMoneyTargetType === 'person' ? 'Select Recipient' : 'Select Store'}
                   </label>
+                  {sendMoneyTargetType === 'store' ? (
+                    <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
+                      <SelectTrigger><SelectValue placeholder="Select your store" /></SelectTrigger>
+                      <SelectContent>
+                        {ownedStores.map(store => (
+                          <SelectItem key={store.id} value={store.id}>{store.store_name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
                   <Popover open={openUserDropdown} onOpenChange={setOpenUserDropdown}>
                     <PopoverTrigger asChild>
                       <Button
@@ -1222,6 +1154,7 @@ const Wallet = () => {
                       </Command>
                     </PopoverContent>
                   </Popover>
+                  )}
                 </div>
                 
                 <div>
@@ -1236,7 +1169,7 @@ const Wallet = () => {
                   />
                 </div>
                 
-                {sendMoneyBalanceType === 'virtual' && (
+                {sendMoneyBalanceType === 'virtual' && sendMoneyTargetType === 'person' && (
                   <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md">
                     <p className="text-sm text-blue-700 dark:text-blue-300">
                       💡 Virtual Balance can only be used for post boosting. When you send virtual balance to another user, 

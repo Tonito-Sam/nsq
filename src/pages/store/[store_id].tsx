@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Header } from '@/components/Header';
-import { StoreSidebar } from '@/components/StoreSidebar';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { supabase } from '@/integrations/supabase/client';
-import { Package } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
+import { Package, Plus } from 'lucide-react';
 import { getDisplayPrice } from '@/utils/pricing';
 import useMeta from '@/hooks/useMeta';
 
@@ -19,6 +20,7 @@ interface Store {
   logo_url: string;
   verification_status: string;
   is_active: boolean;
+  user_id: string;
 }
 
 interface Product {
@@ -38,6 +40,7 @@ interface Product {
 const StorePage: React.FC = () => {
   const { store_id } = useParams<{ store_id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [store, setStore] = useState<Store | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,9 +119,6 @@ const StorePage: React.FC = () => {
     <div className="min-h-screen bg-gray-50 dark:bg-[#1a1a1a]">
       <Header />
       <div className="max-w-7xl mx-auto px-4 py-8 pb-32 lg:pb-8 flex flex-col lg:flex-row gap-8">
-        <div className="hidden lg:block w-80">
-          <StoreSidebar />
-        </div>
         <main className="flex-1">
           <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div className="flex items-center gap-4">
@@ -140,7 +140,18 @@ const StorePage: React.FC = () => {
             </div>
           </div>
 
-          <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Products</h2>
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Products</h2>
+            {user?.id === store.user_id && (
+              <Button
+                onClick={() => navigate('/my-store', { state: { openAddProduct: true } })}
+                className="shrink-0"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add Product
+              </Button>
+            )}
+          </div>
           {products.length === 0 ? (
             <Card className="dark:bg-[#161616] p-8 text-center">
               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />

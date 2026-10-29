@@ -9,7 +9,11 @@ import { useAdmin } from '@/hooks/useAdmin';
 import { ModeToggle } from '@/components/ModeToggle';
 import { Badge } from '@/components/ui/badge';
 
-export const ProfileDropdown = () => {
+interface ProfileDropdownProps {
+  profileAvatarUrl?: string;
+}
+
+export const ProfileDropdown = ({ profileAvatarUrl = '' }: ProfileDropdownProps) => {
   const { user, signOut } = useAuth();
   const { isAdmin, isSuperAdmin } = useAdmin();
   const navigate = useNavigate();
@@ -56,7 +60,7 @@ export const ProfileDropdown = () => {
 
   // Helper: get avatar, name, username from user object (users table or user_metadata)
   // Prioritize avatar image, then fallback initials
-  const avatarUrl = (user as any).avatar || (user as any).avatar_url || user?.user_metadata?.avatar_url || '';
+  const avatarUrl = profileAvatarUrl || (user as any).avatar || (user as any).avatar_url || user?.user_metadata?.avatar_url || '';
   const firstName = ((user as any).first_name || user?.user_metadata?.first_name || '').trim();
   const lastName = ((user as any).last_name || user?.user_metadata?.last_name || '').trim();
   const username = ((user as any).username || user?.user_metadata?.username || '').trim();
@@ -91,7 +95,7 @@ export const ProfileDropdown = () => {
       </button>
 
       {showProfileDropdown && (
-        <div className="absolute right-0 top-full mt-2 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50">
+        <div className="absolute right-0 top-full z-50 mt-2 w-56 rounded-lg border border-border bg-popover text-popover-foreground shadow-lg">
           {/* User Info Section */}
           <div className="flex items-center space-x-3 px-4 py-3 border-b border-gray-100 dark:border-gray-700">
             <Avatar className="h-10 w-10">

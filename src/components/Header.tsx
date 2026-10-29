@@ -11,13 +11,37 @@ import { HeaderNavigation } from './header/HeaderNavigation';
 import { ProfileDropdown } from './header/ProfileDropdown';
 import { Video, ShoppingBag } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { supabase } from '@/integrations/supabase/client';
 
 export const Header = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [initialShare, setInitialShare] = useState<{ urls?: string[]; text?: string; type?: string } | null>(null);
   const [showMobileOffcanvas, setShowMobileOffcanvas] = useState(false);
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
   const navigate = useNavigate();
   const { user } = useAuth();
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const fetchProfileAvatar = async () => {
+      setProfileAvatarUrl('');
+      if (!user) return;
+
+      const { data } = await supabase
+        .from('users')
+        .select('avatar_url')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (!cancelled) setProfileAvatarUrl(data?.avatar_url || '');
+    };
+
+    void fetchProfileAvatar();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   React.useEffect(() => {
     const handler = (e: any) => {
@@ -55,7 +79,7 @@ export const Header = () => {
 
   return (
     <>
-      <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <header className="sticky top-0 z-50 w-full border-b bg-background shadow-sm">
         <div className="container flex h-16 items-center justify-between px-4">
           {/* Desktop: Logo first, Mobile: Logo first, then hamburger */}
           <div className="flex items-center space-x-4">
@@ -70,7 +94,7 @@ export const Header = () => {
           {/* Right Side Actions */}
           <div className="flex items-center space-x-3">
             <HeaderNavigation />
-            <ProfileDropdown />
+            <ProfileDropdown profileAvatarUrl={profileAvatarUrl} />
 
             {/* Mobile: Avatar button instead of hamburger */}
             <div className="md:hidden ml-auto">
@@ -81,7 +105,7 @@ export const Header = () => {
                 >
                   <Avatar className="h-8 w-8">
                     <AvatarImage src={
-                      (user as any).avatar || (user as any).avatar_url || user?.user_metadata?.avatar_url || ''
+                      profileAvatarUrl || (user as any).avatar || (user as any).avatar_url || user?.user_metadata?.avatar_url || ''
                     } />
                     <AvatarFallback className="bg-gradient-to-r from-blue-500 to-purple-500 text-white text-sm">
                       {(() => {
