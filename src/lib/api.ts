@@ -8,14 +8,14 @@ const env = (import.meta as any).env || {};
 const explicitBase = env?.VITE_API_BASE_URL || env?.VITE_BASE_API_BASE_URL || env?.VITE_BASE_API_URL;
 const legacyBase = env?.VITE_API_URL;
 export const API_BASE = (() => {
-  // If an explicit new base is provided, use it always
-  if (explicitBase) return explicitBase;
-  // If running in a browser on localhost, prefer relative paths so the Vite proxy handles /api
+  // Local development always uses Vite's /api proxy, even if .env has the production URL.
   try {
     if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname === '::1')) {
       return '';
     }
   } catch (e) {}
+  // In deployed environments, an explicit API base takes precedence.
+  if (explicitBase) return explicitBase;
   // In development environments where MODE is explicitly set, prefer relative paths as well
   if ((env?.MODE === 'development' || env?.VITE_DEV_SERVER === 'true')) return '';
   // In production, fall back to legacy VITE_API_URL if present
