@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ExternalLink, FileText, Loader2, Newspaper, RefreshCw, Wand2 } from 'lucide-react';
+import { ExternalLink, FileText, Loader2, Newspaper, RefreshCw, Video, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -28,9 +28,9 @@ const COVERAGE_OPTIONS: { value: CoverageCategory; label: string }[] = [
 ];
 
 export default function DailyPodcastNewsroom({
-  onUseAsDraft,
+  onStartRecording,
 }: {
-  onUseAsDraft: (title: string, script: string) => void;
+  onStartRecording: (title: string, script: string) => void;
 }) {
   const [categories, setCategories] = useState<CoverageCategory[]>(['politics', 'sports']);
   const [country, setCountry] = useState('');
@@ -39,6 +39,8 @@ export default function DailyPodcastNewsroom({
   const [showTitle, setShowTitle] = useState('Africa Today');
   const [hostNames, setHostNames] = useState('Host 1, Host 2');
   const [duration, setDuration] = useState(20);
+  const [customCategory, setCustomCategory] = useState('General topic');
+  const [customTopic, setCustomTopic] = useState('');
   const [script, setScript] = useState('');
   const [loadingStories, setLoadingStories] = useState(false);
   const [generatingScript, setGeneratingScript] = useState(false);
@@ -86,7 +88,7 @@ export default function DailyPodcastNewsroom({
   };
 
   const generateScript = async () => {
-    if (!stories.length) return;
+    if (!stories.length && !customTopic.trim()) return;
     setGeneratingScript(true);
     setError('');
     try {
@@ -101,6 +103,8 @@ export default function DailyPodcastNewsroom({
         },
         body: JSON.stringify({
           stories: stories.slice(0, 12),
+          customCategory,
+          customTopic: customTopic.trim(),
           hostNames,
           showTitle,
           duration,
@@ -182,6 +186,32 @@ export default function DailyPodcastNewsroom({
                 <label htmlFor="newsroom-duration" className="mb-1.5 block text-xs font-semibold uppercase text-muted-foreground">Target runtime (minutes)</label>
                 <Input id="newsroom-duration" type="number" min="10" max="60" value={duration} onChange={(event) => setDuration(Number(event.target.value))} />
               </div>
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]">
+                <div>
+                  <label htmlFor="newsroom-custom-category" className="mb-1.5 block text-xs font-semibold uppercase text-muted-foreground">Extra segment</label>
+                  <select
+                    id="newsroom-custom-category"
+                    value={customCategory}
+                    onChange={(event) => setCustomCategory(event.target.value)}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    <option>General topic</option>
+                    <option>Inspiration</option>
+                    <option>Personal reflection</option>
+                    <option>Culture</option>
+                    <option>Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="newsroom-custom-topic" className="mb-1.5 block text-xs font-semibold uppercase text-muted-foreground">Conversation topic (optional)</label>
+                  <Input
+                    id="newsroom-custom-topic"
+                    value={customTopic}
+                    onChange={(event) => setCustomTopic(event.target.value)}
+                    placeholder="e.g. Finding purpose after a setback"
+                  />
+                </div>
+              </div>
             </CardContent>
           </Card>
 
@@ -231,7 +261,7 @@ export default function DailyPodcastNewsroom({
             <p className="text-xs leading-relaxed text-muted-foreground">
               The built-in generator assembles host dialogue, transitions, discussion prompts, and source references from the headlines and publisher summaries. It does not invent reporting; verify details at the linked sources before recording.
             </p>
-            <Button onClick={() => void generateScript()} disabled={generatingScript || loadingStories || !stories.length} className="gap-2 bg-emerald-700 text-white hover:bg-emerald-800">
+            <Button onClick={() => void generateScript()} disabled={generatingScript || loadingStories || (!stories.length && !customTopic.trim())} className="gap-2 bg-emerald-700 text-white hover:bg-emerald-800">
               {generatingScript ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
               {generatingScript ? 'Producing rundown…' : 'Produce today’s rundown'}
             </Button>
@@ -243,8 +273,8 @@ export default function DailyPodcastNewsroom({
               placeholder="Your sourced host script will appear here after today’s stories load."
               className="min-h-[34rem] w-full resize-y rounded-md border border-input bg-background p-3 font-mono text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-600/30"
             />
-            <Button variant="outline" onClick={() => onUseAsDraft(showTitle, script)} disabled={!script.trim()} className="w-full">
-              Load script into show draft
+            <Button onClick={() => onStartRecording(showTitle, script)} disabled={!script.trim()} className="w-full gap-2 bg-red-700 text-white hover:bg-red-800">
+              <Video className="h-4 w-4" />Start recording in teleprompter
             </Button>
           </CardContent>
         </Card>

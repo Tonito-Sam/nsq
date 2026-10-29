@@ -146,7 +146,6 @@ router.post('/stories', requireAdmin, async (req, res) => {
 
 router.post('/script', requireAdmin, async (req, res) => {
   const stories = Array.isArray(req.body?.stories) ? req.body.stories.slice(0, 12) : [];
-  if (!stories.length) return res.status(400).json({ error: 'Select at least one story for the show' });
 
   const safeStories = stories.map((story) => ({
     category: cleanText(story.category, 80),
@@ -159,6 +158,11 @@ router.post('/script', requireAdmin, async (req, res) => {
   }));
   if (safeStories.some((story) => !story.headline || !story.url)) {
     return res.status(400).json({ error: 'Every selected story must include a headline and source link' });
+  }
+  const customTopic = cleanText(req.body?.customTopic, 500);
+  const customCategory = cleanText(req.body?.customCategory || 'General topic', 80);
+  if (!safeStories.length && !customTopic) {
+    return res.status(400).json({ error: 'Fetch news stories or enter a conversation topic to produce a rundown' });
   }
 
   const hostNames = cleanText(req.body?.hostNames || 'Host 1, Host 2', 120);
@@ -176,8 +180,8 @@ router.post('/script', requireAdmin, async (req, res) => {
     'PRODUCTION NOTE: This rundown is assembled from publisher headlines and RSS summaries. Verify details at the linked sources before recording; do not treat discussion prompts as reported facts.',
     '',
     'OPENING',
-    `${hostOne}: Welcome to ${showTitle}. Here is today’s source-led briefing, beginning with the story receiving the strongest coverage across our selected news feeds.`,
-    `${hostTwo}: We will move through the lead story and today’s selected topics, with time to discuss what the reports say, what remains unclear, and why listeners may want to follow up.`,
+    `${hostOne}: Welcome to ${showTitle}. ${selectedStories.length ? 'Here is today’s source-led briefing, beginning with the story receiving the strongest coverage across our selected news feeds.' : 'Today we are opening a focused conversation around the topic you asked us to explore.'}`,
+    `${hostTwo}: We will move through the selected stories and discussion beats, separating reported facts from questions, perspectives, and personal reflection.`,
     '',
   ];
 
@@ -197,6 +201,18 @@ router.post('/script', requireAdmin, async (req, res) => {
       '',
     );
   });
+
+  if (customTopic) {
+    lines.push(
+      `SEGMENT ${selectedStories.length + 1}: ${customCategory} | ${customTopic}`,
+      `${hostOne}: Let’s turn to our ${customCategory.toLowerCase()} conversation: ${customTopic}.`,
+      `${hostTwo}: To begin, what experiences, ideas, or reliable sources can help us understand this topic without assuming everyone sees it the same way?`,
+      `${hostOne}: What perspective is often missing from this conversation, and what might change if we listened to it more carefully?`,
+      `${hostTwo}: Let’s leave listeners with one useful question to reflect on: what is a practical step or new perspective they can take from this discussion?`,
+      'DISCUSSION POINTERS: context and lived experience; differing perspectives; what is often overlooked; practical takeaways; open questions. These are prompts, not factual claims.',
+      '',
+    );
+  }
 
   lines.push(
     'CLOSING',

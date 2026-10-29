@@ -1086,6 +1086,7 @@ const StudiosPage = () => {
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
 
   const [showStep, setShowStep] = useState(12);
+  const [showModalStep, setShowModalStep] = useState(1);
   const [stagedEpisodes, setStagedEpisodes] = useState<any[]>([]);
   const [stagedEpisodeForm, setStagedEpisodeForm] = useState<any>(defaultEpisode);
   const [stagedEpisodeIdx, setStagedEpisodeIdx] = useState<number | null>(null);
@@ -1094,6 +1095,8 @@ const StudiosPage = () => {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [viewMode, setViewMode] = useState<'guide' | 'grid' | 'calendar'>('guide');
   const [nowPlaying, setNowPlaying] = useState<ExtendedProgramSchedule | null>(null);
+  const [podcastSessionId, setPodcastSessionId] = useState<string | null>(null);
+  const podcastWindowRef = useRef<Window | null>(null);
 
   const activeTab: TabKey =
     showStep === 12
@@ -1350,21 +1353,81 @@ const StudiosPage = () => {
     setNowPlaying(playing);
   };
 
-  const handleLoadPodcastDraft = (title: string, script: string) => {
+  const handleLoadPodcastDraft = (title: string, videoUrl: string) => {
     setForm((current: any) => ({
       ...defaultShow,
       ...current,
       title: title || current.title || defaultShow.title,
-      description: script,
+      description: '',
+      video_type: 'url',
+      video_file: null,
+      video_url: videoUrl,
       category: current.category || 'News',
       show_type: current.show_type || defaultShow.show_type,
     }));
+    setShowModalStep(1);
     setShowModal(true);
-    toast({
-      title: 'Podcast draft loaded',
-      description: 'The generated script is now in the show editor.',
-    });
+    toast({ title: 'Recording ready', description: 'The Supabase video URL is filled into the show draft.' });
   };
+
+  const handleStartPodcastRecording = (title: string, script: string) => {
+    const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(`podcast-recording:${sessionId}`, JSON.stringify({ title, script }));
+    const width = window.screen.availWidth || 1440;
+    const height = window.screen.availHeight || 900;
+    const recordingWindow = window.open(
+      `/podcast-teleprompter/${sessionId}`,
+      'NexSqPodcastRecording',
+      `popup=yes,width=${width},height=${height},left=0,top=0`,
+    );
+    if (!recordingWindow) {
+      localStorage.removeItem(`podcast-recording:${sessionId}`);
+      toast({
+        title: 'Popup blocked',
+        description: 'Allow popups for this site, then open the teleprompter again.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    podcastWindowRef.current = recordingWindow;
+    setPodcastSessionId(sessionId);
+  };
+
+  useEffect(() => {
+    const handleRecordingSaved = async (event: MessageEvent) => {
+      const message = event.data;
+      if (
+        event.origin !== window.location.origin ||
+        event.source !== podcastWindowRef.current ||
+        message?.type !== 'NEXSQ_PODCAST_RECORDING_SAVED' ||
+        message.sessionId !== podcastSessionId ||
+        !(message.recording instanceof Blob)
+      ) return;
+
+      const recording = new File(
+        [message.recording],
+        message.fileName || `podcast-recording-${Date.now()}.webm`,
+        { type: message.recording.type || 'video/webm' },
+      );
+      podcastWindowRef.current = null;
+      setPodcastSessionId(null);
+      toast({ title: 'Uploading recording', description: 'Saving the recorded video to Supabase Storage.' });
+      try {
+        const videoUrl = await uploadToStorage(recording, 'podcast-recordings');
+        handleLoadPodcastDraft(message.title || 'Daily Podcast', videoUrl);
+      } catch (uploadError) {
+        console.error('Podcast recording upload failed:', uploadError);
+        toast({
+          title: 'Recording upload failed',
+          description: uploadError instanceof Error ? uploadError.message : 'Could not save the video to Supabase Storage.',
+          variant: 'destructive',
+        });
+      }
+    };
+
+    window.addEventListener('message', handleRecordingSaved);
+    return () => window.removeEventListener('message', handleRecordingSaved);
+  }, [podcastSessionId, handleLoadPodcastDraft, toast]);
 
   useEffect(() => {
     generateSchedule(selectedDate);
@@ -1394,7 +1457,7 @@ const StudiosPage = () => {
       setForm(defaultShow);
       setStagedEpisodes([]);
     }
-    setShowStep(1);
+    setShowModalStep(1);
     setShowModal(true);
   };
 
@@ -1403,7 +1466,7 @@ const StudiosPage = () => {
     setEditingShow(null);
     setForm(defaultShow);
     setStagedEpisodes([]);
-    setShowStep(1);
+    setShowModalStep(1);
   };
 
   const handleStagedEpisodeFormChange = (e: any) => {
@@ -2215,7 +2278,11 @@ const StudiosPage = () => {
           </div>
         )}
 
-        {activeTab === 'ai-presenter' && <DailyPodcastNewsroom onUseAsDraft={handleLoadPodcastDraft} />}
+        {activeTab === 'ai-presenter' && (
+          <DailyPodcastNewsroom
+            onStartRecording={handleStartPodcastRecording}
+          />
+        )}
 
         {/* ═══════════════════════════════════════════════════════════════
             INSIGHTS TAB
@@ -2745,11 +2812,10 @@ const StudiosPage = () => {
             </div>
 
             <div className="overflow-y-auto flex-1 px-5 py-4">
-              {showStep === 1 && (
+              {showModalStep === 1 && (
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
-                    setShowStep(2);
                   }}
                   className="grid grid-cols-1 md:grid-cols-2 gap-4"
                 >
