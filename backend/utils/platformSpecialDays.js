@@ -280,7 +280,9 @@ async function publishPersonalCelebrations(config, today = new Date().toISOStrin
       moment_font: 'Inter',
       moment_font_size: 32,
       moment_special_name: event.title,
-      moment_special_message: event.message,
+      moment_special_message: event.title === 'Birthday'
+        ? `Happy birthday, ${(profile.first_name || 'friend').slice(0, 35)}!`
+        : `${event.title.slice(0, 25)} for ${(profile.first_name || 'you').slice(0, 25)}!`,
       moment_special_icon: event.icon,
       moment_special_type: event.key === 'birthday' ? 'birthday' : 'anniversary',
       moment_special_id: `profile-${event.key}`,
