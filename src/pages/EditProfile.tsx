@@ -50,18 +50,21 @@ interface UserData {
   anniversary1_person_name?: string | null;
   anniversary1_person_user_id?: string | null;
   anniversary1_photo_urls?: string[] | null;
+  anniversary1_song_url?: string | null;
   anniversary2_date?: string | null;
   anniversary2_label?: string | null;
   anniversary2_relationship?: string | null;
   anniversary2_person_name?: string | null;
   anniversary2_person_user_id?: string | null;
   anniversary2_photo_urls?: string[] | null;
+  anniversary2_song_url?: string | null;
   anniversary3_date?: string | null;
   anniversary3_label?: string | null;
   anniversary3_relationship?: string | null;
   anniversary3_person_name?: string | null;
   anniversary3_person_user_id?: string | null;
   anniversary3_photo_urls?: string[] | null;
+  anniversary3_song_url?: string | null;
 }
 
 interface BankAccount {
@@ -367,8 +370,11 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
     anniversary3_person_name: '',
     anniversary3_person_user_id: '',
     anniversary1_photo_urls: [],
+    anniversary1_song_url: '',
     anniversary2_photo_urls: [],
+    anniversary2_song_url: '',
     anniversary3_photo_urls: []
+    ,anniversary3_song_url: ''
   });
 
   // Handle birthday/anniversary changes
@@ -482,18 +488,21 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
         anniversary1_person_name: data.anniversary1_person_name || '',
         anniversary1_person_user_id: data.anniversary1_person_user_id || '',
         anniversary1_photo_urls: data.anniversary1_photo_urls || [],
+        anniversary1_song_url: data.anniversary1_song_url || '',
         anniversary2_date: data.anniversary2_date || '',
         anniversary2_label: data.anniversary2_label || '',
         anniversary2_relationship: data.anniversary2_relationship || '',
         anniversary2_person_name: data.anniversary2_person_name || '',
         anniversary2_person_user_id: data.anniversary2_person_user_id || '',
         anniversary2_photo_urls: data.anniversary2_photo_urls || [],
+        anniversary2_song_url: data.anniversary2_song_url || '',
         anniversary3_date: data.anniversary3_date || '',
         anniversary3_label: data.anniversary3_label || '',
         anniversary3_relationship: data.anniversary3_relationship || '',
         anniversary3_person_name: data.anniversary3_person_name || '',
         anniversary3_person_user_id: data.anniversary3_person_user_id || '',
         anniversary3_photo_urls: data.anniversary3_photo_urls || [],
+        anniversary3_song_url: data.anniversary3_song_url || '',
       });
 
       // Load events from user profile fields
@@ -517,6 +526,7 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
           person_name: data.anniversary1_person_name || '',
           person_user_id: data.anniversary1_person_user_id || '',
           photo_urls: data.anniversary1_photo_urls || [],
+          song_url: data.anniversary1_song_url || '',
         });
       }
       if (data.anniversary2_date) {
@@ -529,6 +539,7 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
           person_name: data.anniversary2_person_name || '',
           person_user_id: data.anniversary2_person_user_id || '',
           photo_urls: data.anniversary2_photo_urls || [],
+          song_url: data.anniversary2_song_url || '',
         });
       }
       if (data.anniversary3_date) {
@@ -541,6 +552,7 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
           person_name: data.anniversary3_person_name || '',
           person_user_id: data.anniversary3_person_user_id || '',
           photo_urls: data.anniversary3_photo_urls || [],
+          song_url: data.anniversary3_song_url || '',
         });
       }
       setEvents(loadedEvents);
@@ -625,6 +637,7 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
         anniversaryUpdates[`anniversary${slot}_person_name`] = event?.person_name?.trim() || null;
         anniversaryUpdates[`anniversary${slot}_person_user_id`] = event?.person_user_id || null;
         anniversaryUpdates[`anniversary${slot}_photo_urls`] = event?.photo_urls || [];
+        anniversaryUpdates[`anniversary${slot}_song_url`] = event?.song_url || null;
       });
 
       // Update user profile
@@ -672,6 +685,8 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
             moment_special_message: `${label.slice(0, 25)} for ${ownerName.slice(0, 25)}!`,
             tagged_user_ids: event.person_user_id ? [event.person_user_id] : [],
             media_urls: event.photo_urls?.length ? event.photo_urls : null,
+            background_audio_url: event.song_url || null,
+            audio_mix_meta: event.song_url ? { backgroundVolume: 0.2, maxDurationSeconds: 60, backgroundLoop: false } : null,
           })
           .eq('user_id', user?.id)
           .eq('personal_special_day_key', `${user?.id}:anniversary${index + 1}:${today}`);

@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Calendar, ImagePlus, Loader2, Pencil, Plus, Search, X } from 'lucide-react';
+import { Calendar, ImagePlus, Loader2, Music2, Pencil, Plus, Search, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { uploadFile } from '@/utils/mediaUtils';
@@ -21,6 +21,7 @@ export interface EventItem {
   person_name?: string;
   person_user_id?: string;
   photo_urls?: string[];
+  song_url?: string;
 }
 
 interface ProfileMatch {
@@ -69,6 +70,7 @@ const BirthdayAnniversaryCard: React.FC<BirthdayAnniversaryCardProps> = ({
   const [profileMatches, setProfileMatches] = useState<ProfileMatch[]>([]);
   const [searchingProfiles, setSearchingProfiles] = useState(false);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const [uploadingSong, setUploadingSong] = useState(false);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -155,6 +157,29 @@ const BirthdayAnniversaryCard: React.FC<BirthdayAnniversaryCardProps> = ({
       toast({ title: 'Photo upload failed', description: 'Please try again.', variant: 'destructive' });
     } finally {
       setUploadingPhotos(false);
+    }
+  };
+
+  const handleSongUpload = async (file: File | undefined) => {
+    if (!file || !user) return;
+    if (!file.type.startsWith('audio/')) {
+      toast({ title: 'Choose an audio file', description: 'Select an MP3, AAC, WAV, or other supported audio file.', variant: 'destructive' });
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      toast({ title: 'Audio file is too large', description: 'Choose a song file smaller than 20 MB.', variant: 'destructive' });
+      return;
+    }
+
+    setUploadingSong(true);
+    try {
+      const songUrl = await uploadFile(file, 'posts', 'anniversary-songs/', user.id);
+      onNewEventChange('song_url', songUrl);
+    } catch (error) {
+      console.error('Could not upload anniversary song:', error);
+      toast({ title: 'Song upload failed', description: 'Please try again.', variant: 'destructive' });
+    } finally {
+      setUploadingSong(false);
     }
   };
 
@@ -360,6 +385,37 @@ const BirthdayAnniversaryCard: React.FC<BirthdayAnniversaryCardProps> = ({
                   ))}
                 </div>
               )}
+              <div className="mt-5">
+                <Label htmlFor="anniversary-song" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Celebration soundtrack
+                </Label>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label htmlFor="anniversary-song" className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800">
+                    {uploadingSong ? <Loader2 className="h-4 w-4 animate-spin" /> : <Music2 className="h-4 w-4" />}
+                    {uploadingSong ? 'Uploading song...' : newEvent.song_url ? 'Replace song' : 'Add a song'}
+                    <input
+                      id="anniversary-song"
+                      type="file"
+                      accept="audio/*"
+                      disabled={uploadingSong}
+                      className="sr-only"
+                      onChange={(event) => {
+                        void handleSongUpload(event.currentTarget.files?.[0]);
+                        event.currentTarget.value = '';
+                      }}
+                    />
+                  </label>
+                  {newEvent.song_url && (
+                    <button type="button" onClick={() => onNewEventChange('song_url', '')} className="inline-flex items-center gap-1 text-sm text-rose-600 hover:text-rose-700 dark:text-rose-300 dark:hover:text-rose-200">
+                      <X className="h-4 w-4" /> Remove song
+                    </button>
+                  )}
+                </div>
+                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  Plays softly for up to 60 seconds on the celebration card when the viewer’s browser allows autoplay.
+                </p>
+                {newEvent.song_url && <p className="mt-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">A soundtrack is ready for this celebration.</p>}
+              </div>
             </div>
           )}
 

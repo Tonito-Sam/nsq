@@ -128,8 +128,9 @@ export const PostContent: React.FC<PostContentProps> = ({
 }) => {
   const [celebrationCarouselApi, setCelebrationCarouselApi] = useState<CarouselApi | null>(null);
   const [activeCelebrationIndex, setActiveCelebrationIndex] = useState(0);
+  const [activeAnniversaryPhotoIndex, setActiveAnniversaryPhotoIndex] = useState(0);
 
-  const renderMentions = (value: string) => {
+  const renderMentions = (value: string, mentionClassName = 'font-medium text-primary hover:underline') => {
     const parts = value.split(/(@[A-Za-z0-9_.]{2,30})/g);
     return parts.map((part, index) => {
       if (!/^@[A-Za-z0-9_.]{2,30}$/.test(part)) return part;
@@ -138,7 +139,7 @@ export const PostContent: React.FC<PostContentProps> = ({
         <a
           key={`${username}-${index}`}
           href={`/profile/${encodeURIComponent(username)}`}
-          className="font-medium text-primary hover:underline"
+          className={mentionClassName}
           onClick={(event) => event.stopPropagation()}
         >
           {part}
@@ -176,6 +177,10 @@ export const PostContent: React.FC<PostContentProps> = ({
   const personalCelebrationImages = (media_urls?.length ? media_urls : media_url ? [media_url] : [])
     .filter((url) => isImage(url))
     .slice(0, 4);
+
+  useEffect(() => {
+    setActiveAnniversaryPhotoIndex((index) => Math.min(index, Math.max(personalCelebrationImages.length - 1, 0)));
+  }, [personalCelebrationImages.length]);
 
   const renderMomentIcon = () => {
     if (!momentSpecialIcon) return null;
@@ -268,6 +273,31 @@ export const PostContent: React.FC<PostContentProps> = ({
   };
   const containerRef = React.useRef<HTMLDivElement | null>(null);
 
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!isPersonalAnniversary || personalCelebrationImages.length < 2 || !container) return;
+
+    let timer: number | null = null;
+    const stopCarousel = () => {
+      if (timer !== null) window.clearInterval(timer);
+      timer = null;
+    };
+    const observer = new IntersectionObserver(([entry]) => {
+      stopCarousel();
+      if (entry.isIntersecting) {
+        timer = window.setInterval(() => {
+          setActiveAnniversaryPhotoIndex((index) => (index + 1) % personalCelebrationImages.length);
+        }, 5000);
+      }
+    }, { threshold: 0.1 });
+
+    observer.observe(container);
+    return () => {
+      stopCarousel();
+      observer.disconnect();
+    };
+  }, [isPersonalAnniversary, personalCelebrationImages.length]);
+
   // Register only this post's videos with the shared, exclusive feed player.
   useEffect(() => {
     const container = containerRef.current;
@@ -318,8 +348,7 @@ export const PostContent: React.FC<PostContentProps> = ({
         bgRef.current.crossOrigin = 'anonymous';
         bgRef.current.volume = audioMixMeta?.backgroundVolume ?? 0.6;
         bgRef.current.muted = muted;
-        // background soundtrack should loop
-        bgRef.current.loop = true;
+        bgRef.current.loop = audioMixMeta?.backgroundLoop !== false;
         // If a mix offset was provided, try to seek to it before playback.
         try {
           const offsetMs = Number(audioMixMeta?.offsetMs || 0);
@@ -388,7 +417,11 @@ export const PostContent: React.FC<PostContentProps> = ({
       setAutoplayBlocked(false);
       setAudioPlaying(true);
       if (stopTimer) window.clearTimeout(stopTimer);
-      stopTimer = window.setTimeout(pauseAll, 30000);
+      const requestedLimit = Number(audioMixMeta?.maxDurationSeconds);
+      const playbackLimitMs = Number.isFinite(requestedLimit)
+        ? Math.min(60, Math.max(1, requestedLimit)) * 1000
+        : 30000;
+      stopTimer = window.setTimeout(pauseAll, playbackLimitMs);
       return true;
     };
 
@@ -423,7 +456,7 @@ export const PostContent: React.FC<PostContentProps> = ({
     };
     // Audio refs are updated directly by the mute control; do not rebuild them.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backgroundAudioUrl, resolvedBgUrl, voiceNoteUrl, audioMixMeta?.backgroundVolume, audioMixMeta?.voiceVolume]);
+  }, [backgroundAudioUrl, resolvedBgUrl, voiceNoteUrl, audioMixMeta?.backgroundVolume, audioMixMeta?.voiceVolume, audioMixMeta?.backgroundLoop, audioMixMeta?.maxDurationSeconds]);
 
   // If the post provides a backgroundAudioMeta but not a direct URL, try to
   // resolve the URL by looking up the synced sound bank at /sounds.json.
@@ -862,6 +895,7 @@ export const PostContent: React.FC<PostContentProps> = ({
   };
 
   const renderVoiceNote = () => {
+    if (isPersonalAnniversary) return null;
     // If there's a background audio or voice, render compact inline audio info with mute toggle
     if (backgroundAudioUrl || voiceNoteUrl) {
       const bgTitle = backgroundAudioMeta?.title || (backgroundAudioUrl ? backgroundAudioUrl.split('/').pop() : 'Unknown');
@@ -933,32 +967,51 @@ export const PostContent: React.FC<PostContentProps> = ({
         >
           <div style={{ maxWidth: '100%', width: '100%' }}>
             {isPersonalAnniversary ? (
-              <article className="overflow-hidden rounded-xl border border-rose-100 bg-white text-left text-slate-900 shadow-lg">
-                {personalCelebrationImages.length > 0 && (
-                  <div className={`grid h-56 gap-1 bg-rose-50 sm:h-72 ${personalCelebrationImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
-                    {personalCelebrationImages.map((url, index) => (
-                      <button
-                        key={url}
-                        type="button"
-                        onClick={() => setModalImageIndex(index)}
-                        aria-label={`View celebration photo ${index + 1}`}
-                        className={`min-h-0 min-w-0 overflow-hidden ${index === 0 && personalCelebrationImages.length >= 3 ? 'row-span-2' : ''}`}
-                      >
-                        <img src={url} alt={`Celebration photo ${index + 1}`} className="h-full w-full object-cover transition-transform duration-300 hover:scale-[1.03]" loading="lazy" />
-                      </button>
-                    ))}
+              <article className="relative flex min-h-[420px] flex-col justify-end overflow-hidden rounded-xl bg-slate-950 text-left text-white shadow-lg sm:min-h-[480px]">
+                {personalCelebrationImages[activeAnniversaryPhotoIndex] && (
+                  <img
+                    src={personalCelebrationImages[activeAnniversaryPhotoIndex]}
+                    alt=""
+                    aria-hidden="true"
+                    className="absolute inset-0 h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/60 to-black/10" aria-hidden="true" />
+                {personalCelebrationImages.length > 1 && (
+                  <div className="absolute right-4 top-4 z-20 flex items-center gap-2 rounded-full border border-white/20 bg-black/45 p-1.5 text-white shadow-sm backdrop-blur-sm" role="group" aria-label="Celebration photos">
+                    <button
+                      type="button"
+                      onClick={() => setActiveAnniversaryPhotoIndex((index) => (index - 1 + personalCelebrationImages.length) % personalCelebrationImages.length)}
+                      aria-label="Show previous celebration photo"
+                      className="grid h-8 w-8 place-items-center rounded-full hover:bg-white/20"
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                    </button>
+                    <span className="min-w-10 text-center text-xs font-semibold">{activeAnniversaryPhotoIndex + 1} / {personalCelebrationImages.length}</span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveAnniversaryPhotoIndex((index) => (index + 1) % personalCelebrationImages.length)}
+                      aria-label="Show next celebration photo"
+                      className="grid h-8 w-8 place-items-center rounded-full hover:bg-white/20"
+                    >
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
                   </div>
                 )}
-                <div className="bg-gradient-to-br from-rose-50 via-white to-violet-50 px-5 py-6 sm:px-8 sm:py-7">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rose-600">A day worth celebrating</p>
+                <div className="relative z-10 px-5 pb-6 pt-24 sm:px-8 sm:pb-8">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rose-200">A day worth celebrating</p>
                   <div className="mt-3 flex items-center gap-3">
-                    <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-white text-2xl shadow-sm ring-1 ring-rose-100" aria-hidden="true">{momentSpecialIcon || '💐'}</span>
-                    <h3 className="text-xl font-bold leading-tight text-slate-900 sm:text-2xl">{momentSpecialName || 'Anniversary'}</h3>
+                    <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-white/25 bg-black/30 text-2xl shadow-sm backdrop-blur-sm" aria-hidden="true">{momentSpecialIcon || '💐'}</span>
+                    <h3 className="text-xl font-bold leading-tight text-white sm:text-2xl">{momentSpecialName || 'Anniversary'}</h3>
                   </div>
-                  <p className="mt-4 whitespace-pre-wrap break-words text-base leading-relaxed text-slate-700 sm:text-lg">
-                    {renderMentions(content.startsWith(momentSpecialIcon || '\u0000') ? content.slice((momentSpecialIcon || '').length).trim() : content)}
+                  <p className="mt-4 whitespace-pre-wrap break-words text-base leading-relaxed text-white sm:text-lg">
+                    {renderMentions(
+                      content.startsWith(momentSpecialIcon || '\u0000') ? content.slice((momentSpecialIcon || '').length).trim() : content,
+                      'font-semibold text-rose-200 underline decoration-white/70 underline-offset-2 hover:text-white',
+                    )}
                   </p>
-                  <div className="mt-5 border-t border-rose-200/70 pt-4 text-sm font-medium text-rose-700">
+                  <div className="mt-5 border-t border-white/30 pt-4 text-sm font-medium text-white/90">
                     With love, from NexSq
                   </div>
                 </div>

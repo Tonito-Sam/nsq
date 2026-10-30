@@ -199,7 +199,7 @@ async function fetchOptedInProfiles(config) {
   for (let offset = 0; ; offset += pageSize) {
     const response = await axios.get(`${config.url}/rest/v1/users`, {
       params: {
-        select: 'id,first_name,last_name,username,birthday,anniversary1_date,anniversary1_label,anniversary1_relationship,anniversary1_person_name,anniversary1_person_user_id,anniversary1_photo_urls,anniversary2_date,anniversary2_label,anniversary2_relationship,anniversary2_person_name,anniversary2_person_user_id,anniversary2_photo_urls,anniversary3_date,anniversary3_label,anniversary3_relationship,anniversary3_person_name,anniversary3_person_user_id,anniversary3_photo_urls',
+        select: 'id,first_name,last_name,username,birthday,anniversary1_date,anniversary1_label,anniversary1_relationship,anniversary1_person_name,anniversary1_person_user_id,anniversary1_photo_urls,anniversary1_song_url,anniversary2_date,anniversary2_label,anniversary2_relationship,anniversary2_person_name,anniversary2_person_user_id,anniversary2_photo_urls,anniversary2_song_url,anniversary3_date,anniversary3_label,anniversary3_relationship,anniversary3_person_name,anniversary3_person_user_id,anniversary3_photo_urls,anniversary3_song_url',
         auto_share_special_days: 'eq.true',
         order: 'id.asc',
         limit: pageSize,
@@ -252,6 +252,7 @@ function personalEventsForProfile(profile, today) {
       message: `Celebrating ${label.toLowerCase()} for ${ownerName}${personName ? ` and ${personName}` : ` and ${partner}`}! Wishing you many more happy years together.`,
       taggedUserId: profile[`anniversary${slot}_person_user_id`] || null,
       photoUrls: Array.isArray(profile[`anniversary${slot}_photo_urls`]) ? profile[`anniversary${slot}_photo_urls`] : [],
+      songUrl: profile[`anniversary${slot}_song_url`] || null,
     });
   });
   return events;
@@ -291,6 +292,10 @@ async function publishPersonalCelebrations(config, today = new Date().toISOStrin
       tagged_user_ids: taggedPerson ? [taggedPerson.id] : [],
       personal_special_day_key: key,
       media_urls: event.photoUrls.length ? event.photoUrls : null,
+      background_audio_url: event.songUrl,
+      audio_mix_meta: event.songUrl ? { backgroundVolume: 0.2, maxDurationSeconds: 60, backgroundLoop: false } : null,
+            background_audio_url: event.songUrl,
+            audio_mix_meta: event.songUrl ? { backgroundVolume: 0.2, maxDurationSeconds: 60, backgroundLoop: false } : null,
     };
 
     try {
