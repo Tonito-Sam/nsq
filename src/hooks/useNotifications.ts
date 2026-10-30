@@ -64,6 +64,9 @@ export const useNotifications = () => {
 
       const normalized = (data || []).map((n: any) => ({
         ...n,
+        title: n.title ?? n.payload?.title ?? '',
+        message: n.message ?? n.payload?.message ?? '',
+        data: n.data ?? n.payload ?? {},
         read: typeof n.read !== 'undefined' ? n.read : (typeof n.is_read !== 'undefined' ? n.is_read : false)
       }));
 

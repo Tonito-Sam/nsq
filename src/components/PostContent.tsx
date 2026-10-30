@@ -129,6 +129,24 @@ export const PostContent: React.FC<PostContentProps> = ({
   const [celebrationCarouselApi, setCelebrationCarouselApi] = useState<CarouselApi | null>(null);
   const [activeCelebrationIndex, setActiveCelebrationIndex] = useState(0);
 
+  const renderMentions = (value: string) => {
+    const parts = value.split(/(@[A-Za-z0-9_.]{2,30})/g);
+    return parts.map((part, index) => {
+      if (!/^@[A-Za-z0-9_.]{2,30}$/.test(part)) return part;
+      const username = part.slice(1);
+      return (
+        <a
+          key={`${username}-${index}`}
+          href={`/profile/${encodeURIComponent(username)}`}
+          className="font-medium text-primary hover:underline"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {part}
+        </a>
+      );
+    });
+  };
+
   useEffect(() => {
     if (!celebrationCarouselApi) return;
     const updateSelectedSlide = () => setActiveCelebrationIndex(celebrationCarouselApi.selectedScrollSnap());
@@ -1016,7 +1034,7 @@ export const PostContent: React.FC<PostContentProps> = ({
       {/* When the postcard is shown the canvas already contains the text, so avoid duplicating */}
       {!showMomentPostcard && content && (
         <p className="text-gray-900 dark:text-gray-100 leading-relaxed whitespace-pre-wrap">
-          {content}
+          {renderMentions(content)}
         </p>
       )}
       {/* Location and Feeling */}

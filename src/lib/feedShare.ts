@@ -7,6 +7,7 @@ export type SharedFeedPostPayload = {
   share_to_feed: boolean;
   audience?: string;
   categories?: string[] | null;
+  tagged_user_ids?: string[];
   created_at: string;
 };
 
@@ -17,6 +18,7 @@ export function buildSharedFeedPostPayload({
   categories,
   audience,
   sourceType = 'video',
+  taggedUserIds,
 }: {
   userId: string;
   caption?: string | null;
@@ -24,11 +26,12 @@ export function buildSharedFeedPostPayload({
   categories?: string[] | null;
   audience?: string | null;
   sourceType?: string;
+  taggedUserIds?: string[];
 }): SharedFeedPostPayload {
   const normalizedMediaUrl = mediaUrl && mediaUrl.trim() ? mediaUrl.trim() : null;
   const normalizedCategories = Array.isArray(categories) ? categories.filter(Boolean) : [];
 
-  return {
+  const payload: SharedFeedPostPayload = {
     user_id: userId,
     content: caption?.trim() ?? '',
     media_url: normalizedMediaUrl,
@@ -39,6 +42,8 @@ export function buildSharedFeedPostPayload({
     categories: normalizedCategories,
     created_at: new Date().toISOString(),
   };
+  if (taggedUserIds?.length) payload.tagged_user_ids = [...new Set(taggedUserIds)];
+  return payload;
 }
 
 export async function insertSharedFeedPost({
@@ -49,6 +54,7 @@ export async function insertSharedFeedPost({
   categories,
   audience,
   sourceType,
+  taggedUserIds,
 }: {
   supabaseClient: {
     from: (table: string) => {
@@ -65,6 +71,7 @@ export async function insertSharedFeedPost({
   categories?: string[] | null;
   audience?: string | null;
   sourceType?: string;
+  taggedUserIds?: string[];
 }) {
   const payload = buildSharedFeedPostPayload({
     userId,
@@ -73,6 +80,7 @@ export async function insertSharedFeedPost({
     categories,
     audience,
     sourceType,
+    taggedUserIds,
   });
 
   const response = await supabaseClient.from('posts').insert(payload).select().single();
@@ -84,6 +92,7 @@ export async function insertSharedFeedPost({
   delete fallbackPayload.audience;
   delete fallbackPayload.categories;
   delete fallbackPayload.media_urls;
+  delete fallbackPayload.tagged_user_ids;
 
   return supabaseClient.from('posts').insert(fallbackPayload).select().single();
 }

@@ -18,6 +18,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { applyMemeFilter } from '../../lib/image-processing';
 import { specialBackgrounds, SpecialBackground } from './specialBackgrounds';
 import { cn } from '@/lib/utils';
+import { insertSharedFeedPost } from '@/lib/feedShare';
+import { sendNotification } from '@/lib/notifications';
 
 // Types
 interface SpecialDay {
@@ -31,7 +33,11 @@ interface SpecialDay {
   fixed_date?: string;
   country_codes?: string[];
   is_global: boolean;
-  category: 'holiday' | 'observance' | 'birthday' | 'custom';
+  category: 'holiday' | 'observance' | 'birthday' | 'anniversary' | 'custom';
+  personName?: string;
+  personRelationship?: string;
+  personUserId?: string;
+  personUsername?: string;
 }
 
 interface BirthdayUser {
@@ -183,6 +189,203 @@ function generateBirthdaySpecialDay(user: BirthdayUser): SpecialDay {
   };
 }
 
+async function fetchProfileCelebrations(userId: string): Promise<SpecialDay[]> {
+  const { data, error } = await supabase
+    .from('users')
+    .select('first_name, last_name, birthday, anniversary1_date, anniversary1_label, anniversary1_relationship, anniversary1_person_name, anniversary1_person_user_id, anniversary2_date, anniversary2_label, anniversary2_relationship, anniversary2_person_name, anniversary2_person_user_id, anniversary3_date, anniversary3_label, anniversary3_relationship, anniversary3_person_name, anniversary3_person_user_id')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error || !data) {
+    if (error) console.warn('Could not load profile celebrations:', error.message);
+    return [];
+  }
+
+  const colors = [
+    'linear-gradient(135deg, #F6A6B2 0%, #C9B6E4 100%)',
+    'linear-gradient(135deg, #F7C59F 0%, #F2A7A0 100%)',
+    'linear-gradient(135deg, #84C7C1 0%, #A6C8E8 100%)',
+    'linear-gradient(135deg, #EDB7D2 0%, #F5D79A 100%)',
+  ];
+  const profileName = [data.first_name, data.last_name].filter(Boolean).join(' ').trim();
+  const linkedPersonIds = [1, 2, 3]
+    .map((number) => data[`anniversary${number}_person_user_id` as keyof typeof data] as string | null)
+    .filter((id): id is string => Boolean(id));
+  const { data: linkedPeople } = linkedPersonIds.length
+    ? await supabase.from('users').select('id, username').in('id', linkedPersonIds)
+    : { data: [] as Array<{ id: string; username: string }> };
+  const usernamesById = new Map((linkedPeople || []).map((person: any) => [person.id, person.username]));
+  const days: SpecialDay[] = [];
+
+  if (data.birthday) {
+    days.push({
+      id: 'profile-birthday',
+      name: profileName ? `${profileName}'s Birthday` : 'My Birthday',
+      description: `Celebrate your birthday${dayjs(data.birthday).isValid() ? ` on ${dayjs(data.birthday).format('MMM D')}` : ''}!`,
+      icon: '🎂',
+      background: colors[0],
+      date_type: 'birthday',
+      fixed_date: data.birthday,
+      is_global: false,
+      category: 'birthday',
+    });
+  }
+
+  [1, 2, 3].forEach((number) => {
+    const date = data[`anniversary${number}_date` as keyof typeof data] as string | null;
+    if (!date) return;
+    const label = (data[`anniversary${number}_label` as keyof typeof data] as string | null)?.trim() || 'Anniversary';
+    const personName = (data[`anniversary${number}_person_name` as keyof typeof data] as string | null)?.trim() || '';
+    const personRelationship = (data[`anniversary${number}_relationship` as keyof typeof data] as string | null)?.trim() || '';
+    const personUserId = (data[`anniversary${number}_person_user_id` as keyof typeof data] as string | null) || undefined;
+    const dateLabel = dayjs(date).isValid() ? ` on ${dayjs(date).format('MMM D')}` : '';
+    days.push({
+      id: `profile-anniversary-${number}`,
+      name: label,
+      description: `Celebrate your ${label.toLowerCase()}${personName ? ` with ${personName}` : ''}${dateLabel}!`,
+      icon: '💐',
+      background: colors[number],
+      date_type: 'fixed',
+      fixed_date: date,
+      is_global: false,
+      category: 'anniversary',
+      personName: personName || undefined,
+      personRelationship: personRelationship || undefined,
+      personUserId,
+      personUsername: personUserId ? usernamesById.get(personUserId) : undefined,
+    });
+  });
+
+  return days;
+}
+
+async function createCelebrationCard({
+  title,
+  message,
+  icon,
+  background,
+  photoFiles = [],
+  photoLabels = [],
+}: {
+  title: string;
+  message: string;
+  icon: string;
+  background: string;
+  photoFiles?: File[];
+  photoLabels?: string[];
+}): Promise<File> {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1080;
+  canvas.height = 1350;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not create the celebration card.');
+
+  const colors = background.match(/#[\da-f]{6}/gi) || ['#187C75', '#224A5A'];
+  const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+  gradient.addColorStop(0, colors[0]);
+  gradient.addColorStop(1, colors[1] || colors[0]);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  context.fillStyle = 'rgba(10, 24, 34, 0.22)';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.strokeStyle = 'rgba(255,255,255,0.16)';
+  context.lineWidth = 2;
+  context.beginPath();
+  context.arc(900, 190, 250, 0, Math.PI * 2);
+  context.stroke();
+  context.beginPath();
+  context.arc(125, 1170, 190, 0, Math.PI * 2);
+  context.stroke();
+
+  context.fillStyle = 'rgba(255,255,255,0.10)';
+  context.beginPath();
+  context.roundRect(70, 70, 940, 1210, 48);
+  context.fill();
+  context.strokeStyle = 'rgba(255,255,255,0.55)';
+  context.lineWidth = 2;
+  context.stroke();
+
+  context.textAlign = 'center';
+  context.fillStyle = '#FFFFFF';
+  context.font = '600 30px Arial, sans-serif';
+  context.fillText('A MOMENT TO CELEBRATE', 540, 235);
+
+  const photos = photoFiles.slice(0, 2);
+  if (photos.length) {
+    const frameSize = photos.length === 1 ? 360 : 300;
+    const frameY = 295;
+    const frameXs = photos.length === 1 ? [360] : [210, 570];
+    for (let index = 0; index < photos.length; index += 1) {
+      const bitmap = await createImageBitmap(photos[index]);
+      const scale = Math.max(frameSize / bitmap.width, frameSize / bitmap.height);
+      const cropWidth = frameSize / scale;
+      const cropHeight = frameSize / scale;
+      const cropX = (bitmap.width - cropWidth) / 2;
+      const cropY = (bitmap.height - cropHeight) / 2;
+      const frameX = frameXs[index];
+
+      context.save();
+      context.beginPath();
+      context.roundRect(frameX, frameY, frameSize, frameSize, 32);
+      context.clip();
+      context.drawImage(bitmap, cropX, cropY, cropWidth, cropHeight, frameX, frameY, frameSize, frameSize);
+      context.restore();
+      bitmap.close();
+
+      context.strokeStyle = 'rgba(255,255,255,0.9)';
+      context.lineWidth = 8;
+      context.beginPath();
+      context.roundRect(frameX, frameY, frameSize, frameSize, 32);
+      context.stroke();
+      context.fillStyle = 'rgba(10, 24, 34, 0.6)';
+      context.beginPath();
+      context.roundRect(frameX + 18, frameY + frameSize - 62, frameSize - 36, 44, 18);
+      context.fill();
+      context.fillStyle = '#FFFFFF';
+      context.font = '600 24px Arial, sans-serif';
+      context.fillText(photoLabels[index] || `Photo ${index + 1}`, frameX + frameSize / 2, frameY + frameSize - 32, frameSize - 48);
+    }
+  }
+
+  context.font = '120px Arial, sans-serif';
+  context.fillText(icon, 540, photos.length ? 790 : 500);
+
+  const drawWrappedText = (value: string, startY: number, font: string, lineHeight: number, maxLines: number) => {
+    context.font = font;
+    const words = value.split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let line = '';
+    words.forEach((word) => {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && context.measureText(candidate).width > 820) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    });
+    if (line) lines.push(line);
+    lines.slice(0, maxLines).forEach((textLine, index) => {
+      context.fillText(textLine, 540, startY + index * lineHeight, 840);
+    });
+    return Math.min(lines.length, maxLines) * lineHeight;
+  };
+
+  const titleStartY = photos.length ? 875 : 650;
+  const titleHeight = drawWrappedText(title, titleStartY, '700 64px Arial, sans-serif', 78, photos.length ? 2 : 3);
+  context.fillStyle = 'rgba(255,255,255,0.88)';
+  drawWrappedText(message, titleStartY + titleHeight + 20, '400 38px Arial, sans-serif', 54, photos.length ? 3 : 5);
+  context.fillStyle = 'rgba(255,255,255,0.72)';
+  context.font = '500 24px Arial, sans-serif';
+  context.fillText('NEXSQ  •  CELEBRATIONS', 540, photos.length ? 1300 : 1190);
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((value) => value ? resolve(value) : reject(new Error('Could not export the celebration card.')), 'image/png');
+  });
+  return new File([blob], `celebration-${Date.now()}.png`, { type: 'image/png' });
+}
+
 interface TextMomentCreatorProps {
   user: any;
   onMomentCreated?: (inserted?: any) => void;
@@ -203,6 +406,8 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
   const [customColor, setCustomColor] = useState('');
   const [selectedSpecial, setSelectedSpecial] = useState<SpecialDay | null>(null);
   const [customSpecialMessage, setCustomSpecialMessage] = useState('');
+  const [celebrationPhotos, setCelebrationPhotos] = useState<Array<File | null>>([]);
+  const [celebrationPhotoPreviews, setCelebrationPhotoPreviews] = useState<Array<string | null>>([]);
   const [error, setError] = useState<string | null>(null);
   const [localIsUploading, setLocalIsUploading] = useState(false);
   const isUploading = propsIsUploading ?? localIsUploading;
@@ -228,6 +433,18 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
   
   const queryClient = useQueryClient();
   const userCountry = getUserCountry(user);
+  const isCelebration = Boolean(selectedSpecial || customSpecialActive);
+  const celebrationPhotoSlots = selectedSpecial?.category === 'anniversary'
+    ? ['You', selectedSpecial.personName || 'Spouse / Partner']
+    : selectedSpecial?.category === 'birthday'
+      ? [selectedSpecial.id === 'profile-birthday' ? 'Your photo' : 'Celebrant photo']
+      : [];
+
+  const clearCelebrationPhotos = () => {
+    celebrationPhotoPreviews.forEach((preview) => preview && URL.revokeObjectURL(preview));
+    setCelebrationPhotos([]);
+    setCelebrationPhotoPreviews([]);
+  };
   
   // Detect mobile device
   useEffect(() => {
@@ -283,22 +500,33 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
     queryFn: fetchBirthdayUsers,
     enabled: !!user,
   });
+
+  const { data: profileCelebrations = [] } = useQuery({
+    queryKey: ['profile-celebrations', user?.id],
+    queryFn: () => fetchProfileCelebrations(user.id),
+    enabled: !!user?.id,
+    staleTime: 5 * 60 * 1000,
+  });
   
   // Combine all special days
   const allSpecialDays = React.useMemo(() => {
     const birthdays = birthdayUsers.map(generateBirthdaySpecialDay);
-    const combined = [...staticSpecialDays, ...platformSpecialDays, ...birthdays];
+    const combined = [...profileCelebrations, ...staticSpecialDays, ...platformSpecialDays, ...birthdays];
     
     if (countryFilter !== 'all') {
+      if (countryFilter === 'profile') return combined.filter(day => day.id.startsWith('profile-'));
+      if (countryFilter === 'birthday') return combined.filter(day => day.category === 'birthday' || day.category === 'anniversary');
+      if (countryFilter === 'global') return combined.filter(day => day.is_global);
       return combined.filter(day => 
         day.is_global || 
         day.country_codes?.includes(countryFilter) ||
-        day.category === 'birthday'
+        day.category === 'birthday' ||
+        day.category === 'anniversary'
       );
     }
     
     return combined;
-  }, [staticSpecialDays, platformSpecialDays, birthdayUsers, countryFilter]);
+  }, [staticSpecialDays, platformSpecialDays, birthdayUsers, profileCelebrations, countryFilter]);
   
   // Get unique countries
   const availableCountries = React.useMemo(() => {
@@ -315,6 +543,7 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
   // Handler functions
   const handleBgSelect = (color: string) => {
     setSelectedSpecial(null);
+    clearCelebrationPhotos();
     setBg(color);
     setCustomSpecialActive(false);
     setUploadedImage(null);
@@ -322,11 +551,43 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
   };
   
   const handleSpecialSelect = (day: SpecialDay) => {
+    clearCelebrationPhotos();
     setSelectedSpecial(day);
     setBg(day.background);
     setUploadedImage(null);
     setImagePreview(null);
     setActiveTab('special');
+    setText((current) => current.trim() || (
+      day.category === 'birthday'
+        ? `Happy birthday, ${day.name.replace(/'s Birthday$| Bday$/, '')}!`
+        : day.category === 'anniversary'
+          ? `Happy ${day.name.toLowerCase()}!`
+          : `Celebrating ${day.name}!`
+    ));
+  };
+
+  const handleCelebrationPhotoChange = (index: number, file?: File) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Choose an image file for the celebration card.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Each celebration photo must be 5MB or less.');
+      return;
+    }
+
+    setCelebrationPhotos((current) => {
+      const next = [...current];
+      next[index] = file;
+      return next;
+    });
+    setCelebrationPhotoPreviews((current) => {
+      const next = [...current];
+      if (next[index]) URL.revokeObjectURL(next[index]!);
+      next[index] = URL.createObjectURL(file);
+      return next;
+    });
   };
   
   const handleImageUpload = async (file: File) => {
@@ -382,7 +643,8 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
       return;
     }
     
-    if (!text.trim()) {
+    const isCelebration = Boolean(selectedSpecial || customSpecialActive);
+    if (!text.trim() && !isCelebration) {
       setError('Text is required');
       toast.error('Please add some text to your moment');
       return;
@@ -393,18 +655,57 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
       toast.error('Special message is too long');
       return;
     }
+
+    const requiredCelebrationPhotos = selectedSpecial?.category === 'anniversary'
+      ? 2
+      : selectedSpecial?.category === 'birthday'
+        ? 1
+        : 0;
+    const selectedCelebrationPhotos = celebrationPhotos.filter((file): file is File => Boolean(file));
+    if (selectedCelebrationPhotos.length < requiredCelebrationPhotos) {
+      setError(requiredCelebrationPhotos === 2
+        ? 'Add both your photo and your spouse/partner photo for an anniversary card.'
+        : 'Add a birthday photo before creating this celebration card.');
+      toast.error(requiredCelebrationPhotos === 2
+        ? 'Choose both anniversary photos.'
+        : 'Choose a birthday photo.');
+      return;
+    }
     
     setError(null);
     setIsUploading(true);
     
     try {
       let imageUrl = null;
-      if (uploadedImage) {
-        const fileExt = uploadedImage.name.split('.').pop();
+      const celebrationTitle = customSpecialActive ? customSpecialName : selectedSpecial?.name || '';
+      const celebrationIcon = customSpecialActive ? customSpecialIcon : selectedSpecial?.icon || '🎉';
+      const celebrationBackground = customSpecialActive ? customSpecialBg : selectedSpecial?.background || bg;
+      const celebrationMessage = customSpecialActive
+        ? customSpecialMsg.trim() || text.trim()
+        : customSpecialMessage.trim() || selectedSpecial?.description || text.trim();
+      const taggedPersonId = selectedSpecial?.personUserId;
+      const taggedPersonUsername = selectedSpecial?.personUsername;
+      const caption = [
+        text.trim() || celebrationMessage,
+        taggedPersonId && taggedPersonUsername ? `Celebrating with @${taggedPersonUsername}` : '',
+      ].filter(Boolean).join('\n');
+      const cardFile = isCelebration
+        ? await createCelebrationCard({
+            title: celebrationTitle,
+            message: celebrationMessage,
+            icon: celebrationIcon,
+            background: celebrationBackground,
+            photoFiles: selectedCelebrationPhotos,
+            photoLabels: celebrationPhotoSlots,
+          })
+        : uploadedImage;
+
+      if (cardFile) {
+        const fileExt = cardFile.name.split('.').pop();
         const fileName = `${user.id}/${Date.now()}.${fileExt}`;
         const { error: uploadError } = await supabase.storage
           .from('moment-images')
-          .upload(fileName, uploadedImage);
+          .upload(fileName, cardFile);
         
         if (uploadError) throw uploadError;
         
@@ -417,16 +718,16 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
       
       const insertObj: any = {
         user_id: user.id,
-        content: text,
+        content: caption,
         post_type: 'moment',
         privacy: 'public',
-        moment_type: uploadedImage ? 'image' : 'text',
+        moment_type: cardFile ? 'image' : 'text',
         moment_bg: imageUrl ? `url('${imageUrl}')` : bg,
         moment_font: font,
         moment_font_size: fontSize,
         processed_image_url: imageUrl || null,
-        meme_filter: uploadedImage ? selectedFilter : null,
-        share_to_feed: shareToFeed,
+        meme_filter: uploadedImage && !isCelebration ? selectedFilter : null,
+        share_to_feed: isCelebration ? false : shareToFeed,
       };
       
       if (selectedSpecial) {
@@ -464,6 +765,40 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
         .single();
       
       if (insertError) throw insertError;
+
+      let feedShareFailed = false;
+      if (isCelebration && imageUrl) {
+        try {
+          const { data: feedPost, error: feedError } = await insertSharedFeedPost({
+            supabaseClient: supabase,
+            userId: user.id,
+            caption,
+            mediaUrl: imageUrl,
+            audience: 'public',
+            sourceType: 'image',
+            taggedUserIds: taggedPersonId ? [taggedPersonId] : [],
+          });
+          if (feedError) throw feedError;
+          if (taggedPersonId && feedPost?.id) {
+            const actorName = [user.user_metadata?.first_name, user.user_metadata?.last_name]
+              .filter(Boolean)
+              .join(' ') || user.user_metadata?.username || 'Someone';
+            await sendNotification({
+              user_id: taggedPersonId,
+              actor_id: user.id,
+              type: 'mention',
+              object_type: 'posts',
+              object_id: feedPost.id,
+              title: 'You were tagged in a celebration',
+              message: `${actorName} tagged you in a celebration post.`,
+              data: { postId: feedPost.id, userId: user.id },
+            });
+          }
+        } catch (feedError) {
+          feedShareFailed = true;
+          console.error('Celebration Moment created but feed post failed:', feedError);
+        }
+      }
       
       queryClient.invalidateQueries({ queryKey: ['posts'] });
       
@@ -494,7 +829,13 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
       
       if (onMomentCreated) onMomentCreated(inserted);
       
-      toast.success('Moment shared successfully!');
+      if (feedShareFailed) {
+        toast.warning('Your celebration Moment is live, but its feed post could not be created.');
+      } else if (isCelebration) {
+        toast.success('Celebration card shared to Moments and the main feed!');
+      } else {
+        toast.success('Moment shared successfully!');
+      }
       
       // Reset form
       setText('');
@@ -506,6 +847,7 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
       setCustomSpecialIcon('🎉');
       setCustomSpecialName('My Special Day');
       setCustomSpecialMsg('');
+      clearCelebrationPhotos();
       setBg(PRESET_COLORS[0]);
       setFont(FONTS[0]);
       setFontSize(FONT_SIZES[2]);
@@ -722,9 +1064,11 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
                 )}>
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-2">
                     <div className="space-y-1">
-                      <Label className="text-sm font-medium">Today's Special Days</Label>
+                      <Label className="text-sm font-medium">Special Days & Profile Dates</Label>
                       <p className="text-xs text-muted-foreground">
-                        {isLoadingBirthdays ? <Skeleton className="h-3 w-20" /> : `${birthdayUsers.length} birthdays`}
+                        {isLoadingBirthdays
+                          ? <Skeleton className="h-3 w-20" />
+                          : `${profileCelebrations.length} saved profile dates · ${birthdayUsers.length} birthdays today`}
                       </p>
                     </div>
                     
@@ -740,6 +1084,9 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="all">All Countries</SelectItem>
+                            <SelectItem value="profile">My Profile Dates</SelectItem>
+                            <SelectItem value="birthday">Birthdays & Anniversaries</SelectItem>
+                            <SelectItem value="global">Global</SelectItem>
                             {availableCountries.map(country => (
                               <SelectItem key={country} value={country}>
                                 {country}
@@ -772,7 +1119,15 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
                         onClick={() => setCountryFilter('birthday')}
                         className="text-xs whitespace-nowrap"
                       >
-                        🎂 Birthdays
+                        🎂 Birthdays & anniversaries
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={countryFilter === 'profile' ? 'default' : 'outline'}
+                        onClick={() => setCountryFilter('profile')}
+                        className="text-xs whitespace-nowrap"
+                      >
+                        💐 My profile dates
                       </Button>
                       <Button
                         size="sm"
@@ -1098,26 +1453,63 @@ const TextMomentCreator: React.FC<TextMomentCreatorProps> = ({
                 </div>
               </div>
             )}
+
+            {celebrationPhotoSlots.length > 0 && (
+              <section className="space-y-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+                <div>
+                  <h3 className="text-sm font-semibold">
+                    {selectedSpecial?.category === 'anniversary' ? 'Photos for your anniversary card' : 'Photo for the birthday card'}
+                  </h3>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {selectedSpecial?.category === 'anniversary'
+                      ? 'Add both partners. The photos will be cropped into the generated card.'
+                      : 'Add the celebrant’s photo to the generated card.'}
+                  </p>
+                </div>
+                <div className={cn('grid gap-3', celebrationPhotoSlots.length === 2 ? 'sm:grid-cols-2' : 'grid-cols-1')}>
+                  {celebrationPhotoSlots.map((label, index) => (
+                    <div key={label} className="space-y-2">
+                      <Label htmlFor={`celebration-photo-${index}`} className="text-xs font-medium">{label}</Label>
+                      {celebrationPhotoPreviews[index] && (
+                        <img
+                          src={celebrationPhotoPreviews[index] || ''}
+                          alt={`${label} preview`}
+                          className="h-36 w-full rounded-lg border object-cover"
+                        />
+                      )}
+                      <Input
+                        id={`celebration-photo-${index}`}
+                        type="file"
+                        accept="image/*"
+                        onChange={(event) => handleCelebrationPhotoChange(index, event.target.files?.[0])}
+                        className="text-xs file:mr-2 file:rounded file:border-0 file:bg-primary file:px-2 file:py-1 file:text-primary-foreground"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
             
             {/* Share to Feed Option */}
             <div className="flex items-center gap-4 mb-6 p-4 bg-muted/30 rounded-xl">
               <Switch
                 id="share-to-feed"
-                checked={shareToFeed}
+                checked={isCelebration || shareToFeed}
+                disabled={isCelebration}
                 onCheckedChange={(v: boolean) => setShareToFeed(Boolean(v))}
                 className={"transform scale-150 "+
                   "data-[state=checked]:bg-gradient-to-r data-[state=checked]:from-purple-600 data-[state=checked]:to-pink-500 "+
                   "data-[state=unchecked]:bg-purple-200 dark:data-[state=unchecked]:bg-purple-800 "+
                   "[&>div]:bg-white dark:[&>div]:bg-white shadow-lg border-2 data-[state=checked]:border-purple-600"
                 }
-                aria-label="Share to Main Feed"
+                aria-label={isCelebration ? 'Celebration will be shared to Moments and main feed' : 'Share to Main Feed'}
               />
               <div className="flex-1">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="share-to-feed" className="text-base font-semibold cursor-pointer">
-                    Share to Main Feed
+                    {isCelebration ? 'Share card as Moment + post' : 'Share to Main Feed'}
                   </Label>
-                  <span className="text-xs text-muted-foreground">{shareToFeed ? 'Visible' : 'Hidden'}</span>
+                  <span className="text-xs text-muted-foreground">{isCelebration ? 'Automatic' : shareToFeed ? 'Visible' : 'Hidden'}</span>
                 </div>
               </div>
               <Eye className="w-5 h-5 text-muted-foreground" />

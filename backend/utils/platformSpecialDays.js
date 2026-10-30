@@ -9,6 +9,11 @@ const BACKGROUNDS = [
   'linear-gradient(135deg, #9a3412 0%, #be123c 55%, #7e22ce 100%)',
   'linear-gradient(135deg, #854d0e 0%, #b45309 55%, #be123c 100%)',
 ];
+const PERSONAL_BACKGROUNDS = [
+  'linear-gradient(135deg, #be185d 0%, #7c3aed 55%, #1d4ed8 100%)',
+  'linear-gradient(135deg, #0f766e 0%, #2563eb 55%, #7c3aed 100%)',
+  'linear-gradient(135deg, #c2410c 0%, #be185d 55%, #7e22ce 100%)',
+];
 
 let workerStarted = false;
 let lastCalendarSyncAt = 0;
@@ -182,6 +187,145 @@ async function publishToday(config) {
   }
 }
 
+function dateMatchesToday(value, today) {
+  const match = String(value || '').trim().replace(/\//g, '-').match(/^\d{4}-(\d{1,2})-(\d{1,2})/);
+  if (!match) return false;
+  return `${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}` === today.slice(5);
+}
+
+async function fetchOptedInProfiles(config) {
+  const profiles = [];
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
+    const response = await axios.get(`${config.url}/rest/v1/users`, {
+      params: {
+        select: 'id,first_name,last_name,username,birthday,anniversary1_date,anniversary1_label,anniversary1_relationship,anniversary1_person_name,anniversary1_person_user_id,anniversary2_date,anniversary2_label,anniversary2_relationship,anniversary2_person_name,anniversary2_person_user_id,anniversary3_date,anniversary3_label,anniversary3_relationship,anniversary3_person_name,anniversary3_person_user_id',
+        auto_share_special_days: 'eq.true',
+        order: 'id.asc',
+        limit: pageSize,
+        offset,
+      },
+      headers: headers(config.key),
+      timeout: 15000,
+    });
+    const batch = Array.isArray(response.data) ? response.data : [];
+    profiles.push(...batch);
+    if (batch.length < pageSize) return profiles;
+  }
+}
+
+async function fetchTaggedProfiles(config, profileIds) {
+  const ids = [...new Set(profileIds.filter(Boolean))];
+  if (!ids.length) return new Map();
+  const response = await axios.get(`${config.url}/rest/v1/users`, {
+    params: { select: 'id,username', id: `in.(${ids.join(',')})` },
+    headers: headers(config.key),
+    timeout: 10000,
+  });
+  return new Map((response.data || []).map(profile => [profile.id, profile]));
+}
+
+function personalEventsForProfile(profile, today) {
+  const events = [];
+  if (dateMatchesToday(profile.birthday, today)) {
+    events.push({
+      key: 'birthday',
+      title: 'Birthday',
+      icon: '🎂',
+      message: `Happy birthday, ${[profile.first_name, profile.last_name].filter(Boolean).join(' ').trim() || profile.username || 'friend'}! Wishing you a joyful year ahead.`,
+      taggedUserId: null,
+    });
+  }
+
+  [1, 2, 3].forEach(slot => {
+    const date = profile[`anniversary${slot}_date`];
+    if (!dateMatchesToday(date, today)) return;
+    const label = String(profile[`anniversary${slot}_label`] || 'Anniversary').trim();
+    const personName = String(profile[`anniversary${slot}_person_name`] || '').trim();
+    const relationship = String(profile[`anniversary${slot}_relationship`] || '').trim();
+    const ownerName = [profile.first_name, profile.last_name].filter(Boolean).join(' ').trim() || profile.username || 'friend';
+    const partner = personName || (relationship && relationship !== 'Self' ? relationship : 'your loved one');
+    events.push({
+      key: `anniversary${slot}`,
+      title: label,
+      icon: '💐',
+      message: `Celebrating ${label.toLowerCase()} for ${ownerName}${personName ? ` and ${personName}` : ` and ${partner}`}! Wishing you many more happy years together.`,
+      taggedUserId: profile[`anniversary${slot}_person_user_id`] || null,
+    });
+  });
+  return events;
+}
+
+async function publishPersonalCelebrations(config, today = new Date().toISOString().slice(0, 10)) {
+  const profiles = await fetchOptedInProfiles(config);
+  const events = profiles.flatMap(profile => personalEventsForProfile(profile, today).map(event => ({ profile, event })));
+  if (!events.length) return;
+
+  const taggedProfiles = await fetchTaggedProfiles(config, events.map(({ event }) => event.taggedUserId));
+  for (const { profile, event } of events) {
+    const taggedPerson = event.taggedUserId ? taggedProfiles.get(event.taggedUserId) : null;
+    const taggedUsername = taggedPerson?.username ? `@${taggedPerson.username}` : '';
+    const content = `${event.icon} ${event.message}${taggedUsername ? `\nCelebrating with ${taggedUsername}` : ''}`;
+    const key = `${profile.id}:${event.key}:${today}`;
+    const backgroundIndex = [...key].reduce((sum, character) => sum + character.charCodeAt(0), 0) % PERSONAL_BACKGROUNDS.length;
+    const post = {
+      user_id: profile.id,
+      content,
+      post_type: 'moment',
+      privacy: 'public',
+      share_to_feed: true,
+      moment_type: 'text',
+      moment_bg: PERSONAL_BACKGROUNDS[backgroundIndex],
+      moment_special_bg: PERSONAL_BACKGROUNDS[backgroundIndex],
+      moment_font: 'Inter',
+      moment_font_size: 32,
+      moment_special_name: event.title,
+      moment_special_message: event.message,
+      moment_special_icon: event.icon,
+      moment_special_type: event.key === 'birthday' ? 'birthday' : 'anniversary',
+      moment_special_id: `profile-${event.key}`,
+      is_custom_special_day: true,
+      tagged_user_ids: taggedPerson ? [taggedPerson.id] : [],
+      personal_special_day_key: key,
+    };
+
+    try {
+      const response = await axios.post(
+        `${config.url}/rest/v1/posts?on_conflict=personal_special_day_key`,
+        [post],
+        { headers: headers(config.key, { Prefer: 'resolution=ignore-duplicates,return=representation' }), timeout: 15000 }
+      );
+      const publishedPost = response.data?.[0];
+      if (!publishedPost) continue;
+
+      if (taggedPerson && taggedPerson.id !== profile.id) {
+        const actorName = [profile.first_name, profile.last_name].filter(Boolean).join(' ').trim() || profile.username || 'Someone';
+        try {
+          await axios.post(`${config.url}/rest/v1/notifications`, [{
+            user_id: taggedPerson.id,
+            actor_id: profile.id,
+            type: 'mention',
+            object_type: 'posts',
+            object_id: publishedPost.id,
+            payload: {
+              title: 'You were tagged in a celebration',
+              message: `${actorName} tagged you in a celebration post.`,
+              postId: publishedPost.id,
+              userId: profile.id,
+            },
+            is_read: false,
+          }], { headers: headers(config.key, { Prefer: 'return=minimal' }), timeout: 10000 });
+        } catch (notificationError) {
+          console.warn(`Personal celebration published, but tag notification failed for ${taggedPerson.id}:`, notificationError.response?.data || notificationError.message);
+        }
+      }
+      console.log(`Published personal ${event.key} celebration for ${profile.username || profile.id}`);
+    } catch (error) {
+      console.error(`Could not publish personal ${event.key} celebration for ${profile.id}:`, error.response?.data || error.message);
+    }
+  }
+}
+
 async function runPlatformSpecialDayWorker() {
   if (running) return;
   running = true;
@@ -196,6 +340,7 @@ async function runPlatformSpecialDayWorker() {
     }
     await expireCelebrationPins(config);
     await publishToday(config);
+    await publishPersonalCelebrations(config);
   } catch (error) {
     console.error('Platform special-day worker failed:', error.response?.data || error.message);
   } finally {

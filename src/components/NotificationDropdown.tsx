@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bell, Heart, MessageCircle, UserPlus, Share, ShoppingBag } from 'lucide-react';
+import { AtSign, Bell, Heart, MessageCircle, UserPlus, Share, ShoppingBag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useNotifications } from '@/hooks/useNotifications';
@@ -31,6 +31,8 @@ export const NotificationDropdown = () => {
         return <UserPlus className="h-4 w-4 text-green-500" />;
       case 'repost':
         return <Share className="h-4 w-4 text-purple-500" />;
+      case 'mention':
+        return <AtSign className="h-4 w-4 text-blue-500" />;
       case 'store_visit':
       case 'purchase':
         return <ShoppingBag className="h-4 w-4 text-orange-500" />;
