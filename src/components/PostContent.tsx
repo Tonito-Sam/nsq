@@ -172,6 +172,10 @@ export const PostContent: React.FC<PostContentProps> = ({
     momentType === 'text' ||
     Boolean(momentSpecialMessage)
   ) && (!media_url || momentType === 'text');
+  const isPersonalAnniversary = Boolean(isCustomSpecialDay && momentSpecialId?.startsWith('profile-anniversary'));
+  const personalCelebrationImages = (media_urls?.length ? media_urls : media_url ? [media_url] : [])
+    .filter((url) => isImage(url))
+    .slice(0, 4);
 
   const renderMomentIcon = () => {
     if (!momentSpecialIcon) return null;
@@ -928,7 +932,38 @@ export const PostContent: React.FC<PostContentProps> = ({
           }}
         >
           <div style={{ maxWidth: '100%', width: '100%' }}>
-            {specialDayEvents && specialDayEvents.length > 1 ? (
+            {isPersonalAnniversary ? (
+              <article className="overflow-hidden rounded-xl border border-rose-100 bg-white text-left text-slate-900 shadow-lg">
+                {personalCelebrationImages.length > 0 && (
+                  <div className={`grid h-56 gap-1 bg-rose-50 sm:h-72 ${personalCelebrationImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                    {personalCelebrationImages.map((url, index) => (
+                      <button
+                        key={url}
+                        type="button"
+                        onClick={() => setModalImageIndex(index)}
+                        aria-label={`View celebration photo ${index + 1}`}
+                        className={`min-h-0 min-w-0 overflow-hidden ${index === 0 && personalCelebrationImages.length >= 3 ? 'row-span-2' : ''}`}
+                      >
+                        <img src={url} alt={`Celebration photo ${index + 1}`} className="h-full w-full object-cover transition-transform duration-300 hover:scale-[1.03]" loading="lazy" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="bg-gradient-to-br from-rose-50 via-white to-violet-50 px-5 py-6 sm:px-8 sm:py-7">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-rose-600">A day worth celebrating</p>
+                  <div className="mt-3 flex items-center gap-3">
+                    <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-white text-2xl shadow-sm ring-1 ring-rose-100" aria-hidden="true">{momentSpecialIcon || '💐'}</span>
+                    <h3 className="text-xl font-bold leading-tight text-slate-900 sm:text-2xl">{momentSpecialName || 'Anniversary'}</h3>
+                  </div>
+                  <p className="mt-4 whitespace-pre-wrap break-words text-base leading-relaxed text-slate-700 sm:text-lg">
+                    {renderMentions(content.startsWith(momentSpecialIcon || '\u0000') ? content.slice((momentSpecialIcon || '').length).trim() : content)}
+                  </p>
+                  <div className="mt-5 border-t border-rose-200/70 pt-4 text-sm font-medium text-rose-700">
+                    With love, from NexSq
+                  </div>
+                </div>
+              </article>
+            ) : specialDayEvents && specialDayEvents.length > 1 ? (
               <div className="overflow-hidden rounded-xl text-left text-white" aria-label="Today's special day celebrations">
                 <Carousel
                   setApi={setCelebrationCarouselApi}
@@ -1052,7 +1087,7 @@ export const PostContent: React.FC<PostContentProps> = ({
           )}
         </div>
       )}
-      {renderMedia()}
+      {!isPersonalAnniversary && renderMedia()}
       {renderEventDetails()}
       {renderVoiceNote()}
       {modalImageIndex !== null && imageUrls[modalImageIndex] && (

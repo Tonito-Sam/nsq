@@ -6,8 +6,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Calendar, Loader2, Plus, Search, X } from 'lucide-react';
+import { Calendar, ImagePlus, Loader2, Pencil, Plus, Search, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/hooks/useAuth';
+import { uploadFile } from '@/utils/mediaUtils';
+import { toast } from '@/hooks/use-toast';
 
 export interface EventItem {
   id: string;
@@ -17,6 +20,7 @@ export interface EventItem {
   relationship?: string;
   person_name?: string;
   person_user_id?: string;
+  photo_urls?: string[];
 }
 
 interface ProfileMatch {
@@ -33,10 +37,13 @@ interface BirthdayAnniversaryCardProps {
   newEvent?: Omit<EventItem, 'id'>;
   onAddEvent?: () => void;
   onRemoveEvent?: (id: string) => void;
-  onNewEventChange?: (field: keyof Omit<EventItem, 'id'>, value: string) => void;
+  onNewEventChange?: (field: keyof Omit<EventItem, 'id'>, value: string | string[]) => void;
+  onEditEvent?: (event: EventItem) => void;
+  onCancelEventEdit?: () => void;
   setIsAddingEvent?: (val: boolean) => void;
   autoShareSpecialDays?: boolean;
   onAutoShareSpecialDaysChange?: (enabled: boolean) => void;
+  isEditingEvent?: boolean;
 }
 
 const relationshipOptions = [
@@ -51,13 +58,18 @@ const BirthdayAnniversaryCard: React.FC<BirthdayAnniversaryCardProps> = ({
   onAddEvent = () => {},
   onRemoveEvent = () => {},
   onNewEventChange = () => {},
+  onEditEvent = () => {},
+  onCancelEventEdit = () => {},
   setIsAddingEvent = () => {},
   autoShareSpecialDays = false,
   onAutoShareSpecialDaysChange = () => {},
+  isEditingEvent = false,
 }) => {
   const [personSearch, setPersonSearch] = useState(newEvent.person_name || '');
   const [profileMatches, setProfileMatches] = useState<ProfileMatch[]>([]);
   const [searchingProfiles, setSearchingProfiles] = useState(false);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const { user } = useAuth();
 
   useEffect(() => {
     setPersonSearch(newEvent.person_name || '');
@@ -119,6 +131,31 @@ const BirthdayAnniversaryCard: React.FC<BirthdayAnniversaryCardProps> = ({
     onNewEventChange('person_user_id', profile.id);
     setPersonSearch(fullName);
     setProfileMatches([]);
+  };
+
+  const handlePhotoUpload = async (files: FileList | null) => {
+    if (!files || !user) return;
+    const existingPhotos = newEvent.photo_urls || [];
+    const selectedFiles = Array.from(files)
+      .filter((file) => file.type.startsWith('image/'))
+      .slice(0, Math.max(0, 6 - existingPhotos.length));
+    if (selectedFiles.length === 0) {
+      toast({ title: 'Photo limit reached', description: 'Add up to 6 photos to each anniversary.' });
+      return;
+    }
+
+    setUploadingPhotos(true);
+    try {
+      const uploadedPhotos = await Promise.all(
+        selectedFiles.map((file) => uploadFile(file, 'posts', 'anniversary-photos/', user.id)),
+      );
+      onNewEventChange('photo_urls', [...existingPhotos, ...uploadedPhotos]);
+    } catch (error) {
+      console.error('Could not upload anniversary photos:', error);
+      toast({ title: 'Photo upload failed', description: 'Please try again.', variant: 'destructive' });
+    } finally {
+      setUploadingPhotos(false);
+    }
   };
 
   return (
@@ -277,7 +314,7 @@ const BirthdayAnniversaryCard: React.FC<BirthdayAnniversaryCardProps> = ({
             </Label>
             <Input
               id="event-date"
-              type="text"
+              type="date"
               value={newEvent.date}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => onNewEventChange('date', e.target.value)}
               placeholder="yyyy/mm/dd"
@@ -285,16 +322,59 @@ const BirthdayAnniversaryCard: React.FC<BirthdayAnniversaryCardProps> = ({
             />
           </div>
 
+          {newEvent.type === 'anniversary' && (
+            <div className="mb-5">
+              <Label htmlFor="anniversary-photos" className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Celebration photos
+              </Label>
+              <label htmlFor="anniversary-photos" className="flex min-h-20 cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-3 text-sm text-gray-600 hover:border-rose-400 hover:bg-rose-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700">
+                {uploadingPhotos ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
+                {uploadingPhotos ? 'Uploading photos...' : 'Choose up to 6 photos'}
+                <input
+                  id="anniversary-photos"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={uploadingPhotos || (newEvent.photo_urls?.length || 0) >= 6}
+                  className="sr-only"
+                  onChange={(event) => {
+                    void handlePhotoUpload(event.currentTarget.files);
+                    event.currentTarget.value = '';
+                  }}
+                />
+              </label>
+              {(newEvent.photo_urls || []).length > 0 && (
+                <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-6">
+                  {newEvent.photo_urls?.map((url, index) => (
+                    <div key={url} className="group relative aspect-square overflow-hidden rounded-md">
+                      <img src={url} alt={`Anniversary photo ${index + 1}`} className="h-full w-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => onNewEventChange('photo_urls', (newEvent.photo_urls || []).filter((photo) => photo !== url))}
+                        aria-label={`Remove anniversary photo ${index + 1}`}
+                        className="absolute right-1 top-1 rounded-full bg-black/70 p-1 text-white opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-3">
-            <Button 
-              onClick={onAddEvent} 
+            <Button
+              type="button"
+              onClick={onAddEvent}
               className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-md"
             >
-              Add Event
+              {isEditingEvent ? 'Update Event' : 'Save Event'}
             </Button>
-            <Button 
+            <Button
+              type="button"
               variant="outline" 
-              onClick={() => setIsAddingEvent(false)}
+              onClick={() => { setIsAddingEvent(false); onCancelEventEdit(); }}
               className="border-gray-600 text-gray-300 hover:bg-gray-800 px-6 py-2 rounded-md"
             >
               Cancel
@@ -312,24 +392,25 @@ const BirthdayAnniversaryCard: React.FC<BirthdayAnniversaryCardProps> = ({
         )}
 
         {events.map((event) => (
-          <div key={event.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+          <div key={event.id} className="flex items-center justify-between gap-3 rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
             <div className="flex items-center gap-3">
               <Calendar className="h-4 w-4 text-blue-500" />
               <div>
-                <p className="font-medium text-gray-900 dark:text-gray-100">{event.title}</p>
+                <p className="font-medium text-gray-900 dark:text-gray-100">{event.title || 'Anniversary'}</p>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  {new Date(event.date).toLocaleDateString()} • {event.relationship}
+                  {new Date(`${event.date}T00:00:00`).toLocaleDateString()} • {event.relationship || event.person_name || 'Personal celebration'}
                 </p>
+                {event.photo_urls?.length ? <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{event.photo_urls.length} celebration photo{event.photo_urls.length === 1 ? '' : 's'}</p> : null}
               </div>
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onRemoveEvent(event.id)}
-              className="text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
-            >
-              <X className="h-4 w-4" />
-            </Button>
+            <div className="flex shrink-0 items-center">
+              <Button type="button" variant="ghost" size="sm" onClick={() => onEditEvent(event)} aria-label={`Edit ${event.title || 'anniversary'}`} className="text-gray-500 hover:text-gray-900 dark:hover:text-white">
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => onRemoveEvent(event.id)} aria-label={`Remove ${event.title || 'event'}`} className="text-red-500 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-900/20">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         ))}
       </div>

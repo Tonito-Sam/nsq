@@ -49,16 +49,19 @@ interface UserData {
   anniversary1_relationship?: string | null;
   anniversary1_person_name?: string | null;
   anniversary1_person_user_id?: string | null;
+  anniversary1_photo_urls?: string[] | null;
   anniversary2_date?: string | null;
   anniversary2_label?: string | null;
   anniversary2_relationship?: string | null;
   anniversary2_person_name?: string | null;
   anniversary2_person_user_id?: string | null;
+  anniversary2_photo_urls?: string[] | null;
   anniversary3_date?: string | null;
   anniversary3_label?: string | null;
   anniversary3_relationship?: string | null;
   anniversary3_person_name?: string | null;
   anniversary3_person_user_id?: string | null;
+  anniversary3_photo_urls?: string[] | null;
 }
 
 interface BankAccount {
@@ -224,6 +227,7 @@ interface EditProfileProps {
 }
 
 const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
+  const queryClient = useQueryClient();
   // Minor Accounts (PGP) state and handlers
   const [minorAccounts, setMinorAccounts] = useState<MinorAccount[]>([]);
   const [isAddingAccount, setIsAddingAccount] = useState(false);
@@ -285,11 +289,12 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
 
   // Birthdays & Anniversaries event state
   const [events, setEvents] = useState<EventItem[]>([]);
-  const [newEvent, setNewEvent] = useState<Omit<EventItem, 'id'>>({ title: '', date: '', type: 'birthday', relationship: '', person_name: '', person_user_id: '' });
+  const [newEvent, setNewEvent] = useState<Omit<EventItem, 'id'>>({ title: '', date: '', type: 'birthday', relationship: '', person_name: '', person_user_id: '', photo_urls: [] });
   const [isAddingEvent, setIsAddingEvent] = useState(false);
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
 
   // Handler for new event form field changes
-  const handleNewEventChange = (field: keyof Omit<EventItem, 'id'>, value: string) => {
+  const handleNewEventChange = (field: keyof Omit<EventItem, 'id'>, value: string | string[]) => {
     setNewEvent(prev => ({ ...prev, [field]: value }));
   };
 
@@ -297,17 +302,34 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
   const handleAddEvent = () => {
     if (!newEvent.title || !newEvent.date) return;
     if (newEvent.type === 'anniversary' && newEvent.relationship !== 'Self' && !newEvent.person_name?.trim()) return;
-    setEvents(prev => [
-      ...prev,
-      { ...newEvent, id: Date.now().toString(), type: newEvent.type }
-    ]);
-    setNewEvent({ title: '', date: '', type: 'birthday', relationship: '', person_name: '', person_user_id: '' });
+    if (editingEventId) {
+      setEvents(prev => prev.map(event => event.id === editingEventId ? { ...newEvent, id: editingEventId } : event));
+      setEditingEventId(null);
+    } else {
+      setEvents(prev => [...prev, { ...newEvent, id: Date.now().toString(), type: newEvent.type }]);
+    }
+    setNewEvent({ title: '', date: '', type: 'birthday', relationship: '', person_name: '', person_user_id: '', photo_urls: [] });
     setIsAddingEvent(false);
+  };
+
+  const handleEditEvent = (event: EventItem) => {
+    setEditingEventId(event.id);
+    setNewEvent({ ...event, photo_urls: event.photo_urls || [] });
+    setIsAddingEvent(true);
+  };
+
+  const handleCancelEventEdit = () => {
+    setEditingEventId(null);
+    setNewEvent({ title: '', date: '', type: 'birthday', relationship: '', person_name: '', person_user_id: '', photo_urls: [] });
   };
 
   // Handler to remove event by id
   const handleRemoveEvent = (id: string) => {
     setEvents(prev => prev.filter(event => event.id !== id));
+    if (editingEventId === id) {
+      setEditingEventId(null);
+      setIsAddingEvent(false);
+    }
   };
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -343,7 +365,10 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
     anniversary3_label: '',
     anniversary3_relationship: '',
     anniversary3_person_name: '',
-    anniversary3_person_user_id: ''
+    anniversary3_person_user_id: '',
+    anniversary1_photo_urls: [],
+    anniversary2_photo_urls: [],
+    anniversary3_photo_urls: []
   });
 
   // Handle birthday/anniversary changes
@@ -456,16 +481,19 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
         anniversary1_relationship: data.anniversary1_relationship || '',
         anniversary1_person_name: data.anniversary1_person_name || '',
         anniversary1_person_user_id: data.anniversary1_person_user_id || '',
+        anniversary1_photo_urls: data.anniversary1_photo_urls || [],
         anniversary2_date: data.anniversary2_date || '',
         anniversary2_label: data.anniversary2_label || '',
         anniversary2_relationship: data.anniversary2_relationship || '',
         anniversary2_person_name: data.anniversary2_person_name || '',
         anniversary2_person_user_id: data.anniversary2_person_user_id || '',
+        anniversary2_photo_urls: data.anniversary2_photo_urls || [],
         anniversary3_date: data.anniversary3_date || '',
         anniversary3_label: data.anniversary3_label || '',
         anniversary3_relationship: data.anniversary3_relationship || '',
         anniversary3_person_name: data.anniversary3_person_name || '',
         anniversary3_person_user_id: data.anniversary3_person_user_id || '',
+        anniversary3_photo_urls: data.anniversary3_photo_urls || [],
       });
 
       // Load events from user profile fields
@@ -488,6 +516,7 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
           relationship: data.anniversary1_relationship || '',
           person_name: data.anniversary1_person_name || '',
           person_user_id: data.anniversary1_person_user_id || '',
+          photo_urls: data.anniversary1_photo_urls || [],
         });
       }
       if (data.anniversary2_date) {
@@ -499,6 +528,7 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
           relationship: data.anniversary2_relationship || '',
           person_name: data.anniversary2_person_name || '',
           person_user_id: data.anniversary2_person_user_id || '',
+          photo_urls: data.anniversary2_photo_urls || [],
         });
       }
       if (data.anniversary3_date) {
@@ -510,6 +540,7 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
           relationship: data.anniversary3_relationship || '',
           person_name: data.anniversary3_person_name || '',
           person_user_id: data.anniversary3_person_user_id || '',
+          photo_urls: data.anniversary3_photo_urls || [],
         });
       }
       setEvents(loadedEvents);
@@ -585,7 +616,7 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
 
       // Find up to 3 anniversary events
       const anniversaryEvents = events.filter(ev => ev.type === 'anniversary').slice(0, 3);
-      const anniversaryUpdates: Record<string, string | null> = {};
+      const anniversaryUpdates: Record<string, string | string[] | null> = {};
       [1, 2, 3].forEach((slot, index) => {
         const event = anniversaryEvents[index];
         anniversaryUpdates[`anniversary${slot}_date`] = event?.date || null;
@@ -593,6 +624,7 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
         anniversaryUpdates[`anniversary${slot}_relationship`] = event?.relationship || null;
         anniversaryUpdates[`anniversary${slot}_person_name`] = event?.person_name?.trim() || null;
         anniversaryUpdates[`anniversary${slot}_person_user_id`] = event?.person_user_id || null;
+        anniversaryUpdates[`anniversary${slot}_photo_urls`] = event?.photo_urls || [];
       });
 
       // Update user profile
@@ -621,6 +653,34 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
         throw userError;
       }
       console.log('User profile updated successfully:', userData);
+
+      const today = new Date().toISOString().slice(0, 10);
+      const todayMonthDay = today.slice(5);
+      const ownerName = [formData.first_name, formData.last_name].filter(Boolean).join(' ').trim() || formData.username || 'friend';
+      for (const [index, event] of anniversaryEvents.entries()) {
+        const dateParts = String(event.date || '').replace(/\//g, '-').match(/^\d{4}-(\d{1,2})-(\d{1,2})/);
+        if (!dateParts || `${dateParts[1].padStart(2, '0')}-${dateParts[2].padStart(2, '0')}` !== todayMonthDay) continue;
+
+        const label = event.title.trim() || 'Anniversary';
+        const partner = event.person_name?.trim() || (event.relationship && event.relationship !== 'Self' ? event.relationship : 'your loved one');
+        const celebrationMessage = `Celebrating ${label.toLowerCase()} for ${ownerName} and ${partner}! Wishing you many more happy years together.`;
+        const { error: celebrationError } = await supabase
+          .from('posts')
+          .update({
+            content: `💐 ${celebrationMessage}`,
+            moment_special_name: label,
+            moment_special_message: `${label.slice(0, 25)} for ${ownerName.slice(0, 25)}!`,
+            tagged_user_ids: event.person_user_id ? [event.person_user_id] : [],
+            media_urls: event.photo_urls?.length ? event.photo_urls : null,
+          })
+          .eq('user_id', user?.id)
+          .eq('personal_special_day_key', `${user?.id}:anniversary${index + 1}:${today}`);
+
+        if (celebrationError) {
+          console.warn('Could not refresh today’s anniversary celebration:', celebrationError);
+        }
+      }
+      await queryClient.invalidateQueries({ queryKey: ['posts'] });
 
       // Update bank account details
       if (bankAccount.id) {
@@ -1102,6 +1162,9 @@ const EditProfile: React.FC<EditProfileProps> = ({ inline = false }) => {
             onAddEvent={handleAddEvent}
             onRemoveEvent={handleRemoveEvent}
             onNewEventChange={handleNewEventChange}
+            onEditEvent={handleEditEvent}
+            onCancelEventEdit={handleCancelEventEdit}
+            isEditingEvent={Boolean(editingEventId)}
             setIsAddingEvent={setIsAddingEvent}
           />
 

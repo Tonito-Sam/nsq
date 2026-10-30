@@ -199,7 +199,7 @@ async function fetchOptedInProfiles(config) {
   for (let offset = 0; ; offset += pageSize) {
     const response = await axios.get(`${config.url}/rest/v1/users`, {
       params: {
-        select: 'id,first_name,last_name,username,birthday,anniversary1_date,anniversary1_label,anniversary1_relationship,anniversary1_person_name,anniversary1_person_user_id,anniversary2_date,anniversary2_label,anniversary2_relationship,anniversary2_person_name,anniversary2_person_user_id,anniversary3_date,anniversary3_label,anniversary3_relationship,anniversary3_person_name,anniversary3_person_user_id',
+        select: 'id,first_name,last_name,username,birthday,anniversary1_date,anniversary1_label,anniversary1_relationship,anniversary1_person_name,anniversary1_person_user_id,anniversary1_photo_urls,anniversary2_date,anniversary2_label,anniversary2_relationship,anniversary2_person_name,anniversary2_person_user_id,anniversary2_photo_urls,anniversary3_date,anniversary3_label,anniversary3_relationship,anniversary3_person_name,anniversary3_person_user_id,anniversary3_photo_urls',
         auto_share_special_days: 'eq.true',
         order: 'id.asc',
         limit: pageSize,
@@ -251,6 +251,7 @@ function personalEventsForProfile(profile, today) {
       icon: '💐',
       message: `Celebrating ${label.toLowerCase()} for ${ownerName}${personName ? ` and ${personName}` : ` and ${partner}`}! Wishing you many more happy years together.`,
       taggedUserId: profile[`anniversary${slot}_person_user_id`] || null,
+      photoUrls: Array.isArray(profile[`anniversary${slot}_photo_urls`]) ? profile[`anniversary${slot}_photo_urls`] : [],
     });
   });
   return events;
@@ -289,9 +290,24 @@ async function publishPersonalCelebrations(config, today = new Date().toISOStrin
       is_custom_special_day: true,
       tagged_user_ids: taggedPerson ? [taggedPerson.id] : [],
       personal_special_day_key: key,
+      media_urls: event.photoUrls.length ? event.photoUrls : null,
     };
 
     try {
+      const existingResponse = await axios.get(`${config.url}/rest/v1/posts`, {
+        params: { select: 'id', personal_special_day_key: `eq.${key}`, limit: 1 },
+        headers: headers(config.key),
+        timeout: 10000,
+      });
+      if (existingResponse.data?.[0]) {
+        await axios.patch(
+          `${config.url}/rest/v1/posts?personal_special_day_key=eq.${encodeURIComponent(key)}`,
+          post,
+          { headers: headers(config.key, { Prefer: 'return=minimal' }), timeout: 15000 },
+        );
+        continue;
+      }
+
       const response = await axios.post(
         `${config.url}/rest/v1/posts?on_conflict=personal_special_day_key`,
         [post],
