@@ -23,6 +23,10 @@ interface Product {
   sale_starts?: string | null;
   sale_ends?: string | null;
   is_deals_of_day?: boolean;
+  shipping_weight_kg?: number | null;
+  shipping_length_cm?: number | null;
+  shipping_width_cm?: number | null;
+  shipping_height_cm?: number | null;
   created_at: string;
   store_id: string;
   // debug/diagnostic fields (may be present from the DB)
@@ -76,6 +80,8 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           ...prev, 
           [name]: numericValue === null ? null : (isNaN(numericValue) ? 0 : numericValue)
         };
+      } else if (['shipping_weight_kg', 'shipping_length_cm', 'shipping_width_cm', 'shipping_height_cm'].includes(name)) {
+        return { ...prev, [name]: value === '' ? null : Number(value) };
       } else {
         return { ...prev, [name]: value };
       }
@@ -104,6 +110,10 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
     if (form?.is_on_sale && (!form.sale_price || form.sale_price <= 0 || form.sale_price >= form.price)) {
       newErrors.sale_price = 'Sale price must be greater than zero and lower than the regular price';
+    }
+
+    if (form?.product_type === 'physical' && [form.shipping_weight_kg, form.shipping_length_cm, form.shipping_width_cm, form.shipping_height_cm].some(value => !Number.isFinite(Number(value)) || Number(value) <= 0)) {
+      newErrors.shipping = 'Add valid packed weight and dimensions for live courier quotes';
     }
     
     setErrors(newErrors);
@@ -181,6 +191,26 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               <p className="text-sm text-red-500">{errors.price}</p>
             )}
           </div>
+
+          {form.product_type === 'physical' && (
+            <div className="space-y-3 rounded-md border p-3">
+              <div><Label>Packed parcel measurements</Label><p className="text-xs text-muted-foreground">Required for live South African courier pricing.</p></div>
+              <div className="grid grid-cols-2 gap-3">
+                {([
+                  ['shipping_weight_kg', 'Weight (kg)', '0.01'],
+                  ['shipping_length_cm', 'Length (cm)', '1'],
+                  ['shipping_width_cm', 'Width (cm)', '1'],
+                  ['shipping_height_cm', 'Height (cm)', '1'],
+                ] as const).map(([name, label, min]) => (
+                  <div key={name} className="space-y-1">
+                    <Label htmlFor={name}>{label}</Label>
+                    <Input id={name} name={name} type="number" min={min} step="0.01" value={form[name] ?? ''} onChange={handleChange} />
+                  </div>
+                ))}
+              </div>
+              {errors.shipping && <p className="text-sm text-red-500">{errors.shipping}</p>}
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="category">Category</Label>

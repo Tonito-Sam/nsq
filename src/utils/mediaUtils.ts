@@ -42,6 +42,24 @@ export const uploadFile = async (
   }
 };
 
+export const uploadPrivateFile = async (
+  file: File,
+  bucket: string,
+  folder: string = '',
+  userId: string
+): Promise<string> => {
+  const fileExtension = file.name.includes('.') ? file.name.split('.').pop() : '';
+  const random = Math.random().toString(36).slice(2, 8);
+  const fileName = `${userId}/${folder}${Date.now()}-${random}${fileExtension ? `.${fileExtension}` : ''}`;
+  const { data, error } = await supabase.storage.from(bucket).upload(fileName, file, {
+    cacheControl: '3600',
+    upsert: false,
+  });
+
+  if (error) throw error;
+  return data.path;
+};
+
 export const getMediaUrl = (url?: string, bucket?: string): string => {
   if (!url) return '';
   

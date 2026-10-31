@@ -22,6 +22,10 @@ interface ProductFormData {
 	sale_starts?: string;
 	sale_ends?: string;
 	is_deals_of_day?: boolean;
+	shipping_weight_kg: string;
+	shipping_length_cm: string;
+	shipping_width_cm: string;
+	shipping_height_cm: string;
 }
 
 interface ProductFormFieldsProps {
@@ -230,6 +234,21 @@ export const ProductFormFields: FC<ProductFormFieldsProps> = ({
 					))}
 				</select>
 			</div>
+
+			{formData.product_type === 'physical' && (
+				<div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
+					<div>
+						<Label className="font-semibold">Packed parcel measurements</Label>
+						<p className="mt-1 text-sm text-gray-600 dark:text-gray-400">Required for live South African courier pricing. Measure the packed item.</p>
+					</div>
+					<div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+						<div className="space-y-1"><Label htmlFor="shipping_weight_kg">Weight (kg)</Label><Input id="shipping_weight_kg" type="number" min="0.01" step="0.01" value={formData.shipping_weight_kg} onChange={event => onInputChange('shipping_weight_kg', event.target.value)} required /></div>
+						<div className="space-y-1"><Label htmlFor="shipping_length_cm">Length (cm)</Label><Input id="shipping_length_cm" type="number" min="1" step="0.1" value={formData.shipping_length_cm} onChange={event => onInputChange('shipping_length_cm', event.target.value)} required /></div>
+						<div className="space-y-1"><Label htmlFor="shipping_width_cm">Width (cm)</Label><Input id="shipping_width_cm" type="number" min="1" step="0.1" value={formData.shipping_width_cm} onChange={event => onInputChange('shipping_width_cm', event.target.value)} required /></div>
+						<div className="space-y-1"><Label htmlFor="shipping_height_cm">Height (cm)</Label><Input id="shipping_height_cm" type="number" min="1" step="0.1" value={formData.shipping_height_cm} onChange={event => onInputChange('shipping_height_cm', event.target.value)} required /></div>
+					</div>
+				</div>
+			)}
 
 			<div className="space-y-2">
 				<Label htmlFor="description">Description</Label>

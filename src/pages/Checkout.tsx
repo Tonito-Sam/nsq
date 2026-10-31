@@ -41,6 +41,11 @@ interface CartItem {
     sale_ends?: string | null;
     discount_price?: number | null;
     images?: string[];
+    description?: string | null;
+    shipping_weight_kg?: number | null;
+    shipping_length_cm?: number | null;
+    shipping_width_cm?: number | null;
+    shipping_height_cm?: number | null;
   };
 }
 
@@ -122,13 +127,20 @@ const Checkout = () => {
   const [availableGateways, setAvailableGateways] = useState<PaymentGateway[]>([]);
   const [selectedGateway, setSelectedGateway] = useState<PaymentGateway | null>(null);
   const [cartItemsCount, setCartItemsCount] = useState(0);
-  const hasPhysicalItems = cartItems.some(item => {
-    const productType = (item.product.product_type || '').toLowerCase();
-    return !(productType.includes('digital') || productType.includes('download'));
+  const physicalStoreIds = Array.from(new Set(
+    cartItems
+      .filter(item => {
+        const type = (item.product.product_type || '').toLowerCase();
+        return !['digital', 'download', 'service'].some(nonShippingType => type.includes(nonShippingType));
+      })
+      .map(item => item.product.store_id)
+      .filter(Boolean)
+  )) as string[];
+  const checkoutCountries = countries;
+  const hasUnquotedPhysicalStore = physicalStoreIds.some(storeId => {
+    const shipping = storeShipping[storeId];
+    return !shipping || shipping.loading || Boolean(shipping.error) || shipping.cost === null;
   });
-  const checkoutCountries = hasPhysicalItems
-    ? countries.filter(country => country.code === 'ZA')
-    : countries;
 
   useEffect(() => {
     if (user) {
@@ -261,17 +273,6 @@ const Checkout = () => {
       }));
       setCartItems(normalized);
 
-      const storeIdsForShipping = Array.from(new Set(
-        normalized
-          .filter(i => {
-            const pt = (i.product.product_type || '').toString().toLowerCase();
-            return !(pt.includes('digital') || pt.includes('download'));
-          })
-          .map(i => i.product.store_id)
-          .filter(Boolean)
-      )) as string[];
-      await calculateShippingForStores(storeIdsForShipping);
-
     } catch (error) {
       console.error('Error fetching cart items:', error);
       toast({
@@ -285,29 +286,12 @@ const Checkout = () => {
   };
 
   const calculateShippingForStores = async (storeIds: string[]) => {
-    const collection: Address = {
-      country: 'ZA',
-      postal_code: '2196',
-      city: 'Johannesburg',
-      street: '123 Test St',
-      province: 'Gauteng',
-      suburb: 'Sandton'
-    };
-
     const delivery: Address = {
-      country: shippingInfo.country || 'ZA',
-      postal_code: shippingInfo.postalCode || '8001',
-      city: shippingInfo.city || 'Cape Town',
-      street: shippingInfo.address || '456 Demo Ave',
-      province: shippingInfo.state || 'Western Cape'
-    };
-
-    const totalWeight = cartItems.reduce((sum, item) => sum + (item.quantity * 0.5), 2.5);
-    const parcel: Parcel = {
-      weight: totalWeight,
-      length: 30,
-      width: 20,
-      height: 10
+      country: shippingInfo.country,
+      postal_code: shippingInfo.postalCode.trim(),
+      city: shippingInfo.city.trim(),
+      street: [shippingInfo.address, shippingInfo.address2].map(value => value.trim()).filter(Boolean).join(', '),
+      province: shippingInfo.state.trim(),
     };
 
     for (const storeId of storeIds) {
@@ -317,13 +301,111 @@ const Checkout = () => {
       }));
 
       try {
+        if (!delivery.country || !delivery.city || !delivery.street || !delivery.province) {
+          setStoreShipping(prev => ({
+            ...prev,
+            [storeId]: { cost: null, loading: false, error: 'Enter a complete delivery address to get a live quote' }
+          }));
+          continue;
+        }
+
         const { data: storeData } = await supabase
           .from('user_stores')
-          .select('id, base_currency, country')
+          .select('id, base_currency, country, shipping_pickup_address, shipping_pickup_suburb, shipping_pickup_city, shipping_pickup_province, shipping_pickup_postal_code')
           .eq('id', storeId)
           .single();
-        const vendorCountry = storeData?.country || 'ZA';
-        const buyerCountry = shippingInfo.country || 'ZA';
+        const vendorCountry = String(storeData?.country || '').trim().toUpperCase();
+        const buyerCountry = delivery.country.toUpperCase();
+        if (!storeData || !vendorCountry) {
+          setStoreShipping(prev => ({
+            ...prev,
+            [storeId]: { cost: null, loading: false, error: 'Seller country is missing from store settings' }
+          }));
+          continue;
+        }
+
+        const nigeriaLane = vendorCountry === 'NG' || buyerCountry === 'NG';
+        const southAfricaDomestic = vendorCountry === 'ZA' && buyerCountry === 'ZA';
+        if (!nigeriaLane && !southAfricaDomestic) {
+          setStoreShipping(prev => ({
+            ...prev,
+            [storeId]: { cost: null, loading: false, error: 'Live shipping is available for South African domestic and Nigeria routes' }
+          }));
+          continue;
+        }
+
+        const collection: Address = {
+          country: vendorCountry,
+          postal_code: String(storeData.shipping_pickup_postal_code || '').trim(),
+          city: String(storeData.shipping_pickup_city || '').trim(),
+          street: String(storeData.shipping_pickup_address || '').trim(),
+          province: String(storeData.shipping_pickup_province || '').trim(),
+          suburb: String(storeData.shipping_pickup_suburb || '').trim(),
+        };
+        if (!collection.street || !collection.city || !collection.province || (vendorCountry === 'ZA' && !collection.postal_code)) {
+          setStoreShipping(prev => ({
+            ...prev,
+            [storeId]: { cost: null, loading: false, error: 'Seller must complete the courier pickup address in Store Settings' }
+          }));
+          continue;
+        }
+
+        const storeItems = cartItems.filter(item => {
+          const type = (item.product.product_type || '').toLowerCase();
+          return item.product.store_id === storeId && !['digital', 'download', 'service'].some(nonShippingType => type.includes(nonShippingType));
+        });
+        const quoteItems = storeItems.map(item => ({
+          item,
+          weight: Number(item.product.shipping_weight_kg),
+          length: Number(item.product.shipping_length_cm),
+          width: Number(item.product.shipping_width_cm),
+          height: Number(item.product.shipping_height_cm),
+        }));
+        if (!quoteItems.length || quoteItems.length > 100 || quoteItems.some(line =>
+          ![line.weight, line.length, line.width, line.height].every(Number.isFinite) ||
+          line.weight <= 0 || line.length <= 0 || line.width <= 0 || line.height <= 0 ||
+          !Number.isInteger(line.item.quantity) || line.item.quantity < 1
+        )) {
+          setStoreShipping(prev => ({
+            ...prev,
+            [storeId]: { cost: null, loading: false, error: 'Each physical product needs valid packed weight and dimensions in its listing' }
+          }));
+          continue;
+        }
+
+        const totalParcelCount = quoteItems.reduce((sum, line) => sum + line.item.quantity, 0);
+        if (totalParcelCount > 100) {
+          setStoreShipping(prev => ({
+            ...prev,
+            [storeId]: { cost: null, loading: false, error: 'A shipment can contain at most 100 parcels' }
+          }));
+          continue;
+        }
+
+        const totalWeight = quoteItems.reduce((sum, line) => sum + line.weight * line.item.quantity, 0);
+        const parcel: Parcel = {
+          weight: totalWeight,
+          length: Math.max(...quoteItems.map(line => line.length)),
+          width: Math.max(...quoteItems.map(line => line.width)),
+          height: Math.max(...quoteItems.map(line => line.height)),
+          description: quoteItems.map(line => line.item.product.title).join(', ').slice(0, 500),
+          items: quoteItems.map(line => ({
+            name: line.item.product.title,
+            description: (line.item.product.description || line.item.product.title).slice(0, 500),
+            type: 'parcel',
+            currency: String(storeData.base_currency || 'ZAR').toUpperCase(),
+            value: Math.max(0, Number(line.item.product.price) || 0),
+            quantity: line.item.quantity,
+            weight: line.weight,
+          })),
+          parcels: quoteItems.flatMap(line => Array.from({ length: line.item.quantity }, () => ({
+            weight: line.weight,
+            length: line.length,
+            width: line.width,
+            height: line.height,
+          }))),
+        };
+
         const defaultPartner = selectDefaultShippingPartner(vendorCountry, buyerCountry, undefined);
         const settings = await getShippingSettingsForStore(storeId);
         
@@ -338,6 +420,7 @@ const Checkout = () => {
         if (defaultPartner && settings.partner_code !== defaultPartner) {
           settings.partner_code = defaultPartner;
         }
+        settings.cost_type = 'api';
         const result = await calculateShippingCost(settings, collection, delivery, parcel);
 
         setStoreShipping(prev => ({
@@ -360,19 +443,8 @@ const Checkout = () => {
   };
 
   useEffect(() => {
-    if (cartItems.length > 0 && shippingInfo.city && shippingInfo.country) {
-      const uniqueStoreIds = Array.from(new Set(
-        cartItems
-          .filter(i => {
-            const pt = (i.product.product_type || '').toString().toLowerCase();
-            return !(pt.includes('digital') || pt.includes('download'));
-          })
-          .map(i => i.product.store_id)
-          .filter(Boolean)
-      )) as string[];
-      calculateShippingForStores(uniqueStoreIds);
-    }
-  }, [shippingInfo.city, shippingInfo.country, shippingInfo.postalCode, shippingInfo.state]);
+    if (physicalStoreIds.length > 0) calculateShippingForStores(physicalStoreIds);
+  }, [cartItems, shippingInfo.address, shippingInfo.address2, shippingInfo.city, shippingInfo.country, shippingInfo.postalCode, shippingInfo.state]);
 
   const getSubtotal = () => {
     return cartItems.reduce((total, item) => {
@@ -386,9 +458,7 @@ const Checkout = () => {
   };
 
   const getTotalShipping = () => {
-    return Object.values(storeShipping).reduce((sum, shipping) => {
-      return sum + (shipping.cost || 0);
-    }, 0);
+    return physicalStoreIds.reduce((sum, storeId) => sum + (storeShipping[storeId]?.cost || 0), 0);
   };
 
   const getServiceFee = () => {
@@ -441,10 +511,10 @@ const Checkout = () => {
   }, [userCurrency, shippingInfo.country]);
 
   const handlePayment = async () => {
-    if (hasPhysicalItems && shippingInfo.country !== 'ZA') {
+    if (hasUnquotedPhysicalStore) {
       toast({
-        title: 'Physical products ship within South Africa',
-        description: 'Remove physical products or use a South African delivery address.',
+        title: 'Live shipping quote required',
+        description: 'Complete your delivery address and ensure each seller has a valid pickup address and product parcel measurements.',
         variant: 'destructive'
       });
       return;
@@ -983,7 +1053,7 @@ const Checkout = () => {
                   </div>
 
                   {/* Shipping per store */}
-                  {Array.from(new Set(cartItems.map(item => item.product.store_id).filter(Boolean))).map(storeId => {
+                  {physicalStoreIds.map(storeId => {
                     const shipping = storeShipping[storeId];
                     return (
                       <div key={storeId} className="flex flex-col">
@@ -1003,10 +1073,10 @@ const Checkout = () => {
                                 <AlertCircle className="h-3 w-3" />
                                 Error
                               </span>
-                            ) : shipping?.cost ? (
+                            ) : shipping?.cost !== null && shipping?.cost !== undefined ? (
                               formatAmount(shipping.cost, 'ZAR')
                             ) : (
-                              'Free'
+                              'Quote required'
                             )}
                           </span>
                         </div>
@@ -1073,7 +1143,7 @@ const Checkout = () => {
                 <Button 
                   className="w-full mt-6 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white py-3 text-lg font-semibold shadow-lg"
                   onClick={handlePayment}
-                  disabled={processing || !selectedGateway || Object.values(storeShipping).some(s => s.loading)}
+                  disabled={processing || !selectedGateway || hasUnquotedPhysicalStore}
                 >
                   {processing ? (
                     <div className="flex items-center gap-2">

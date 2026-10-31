@@ -87,6 +87,55 @@ async function buildStoreOrderRows({ userId, reference, amount, currency, gatewa
   });
 }
 
+async function persistOrderItems(order, metadata) {
+  const cartItems = Array.isArray(metadata?.cart_items) ? metadata.cart_items : [];
+  if (!cartItems.length) return;
+
+  const existingResponse = await axios.get(
+    `${restUrl('/rest/v1/order_items')}?select=id&order_id=eq.${encodeURIComponent(order.id)}&limit=1`,
+    { headers: supabaseAuthHeaders() }
+  );
+  if (existingResponse.data?.length) return;
+
+  const requestedItems = cartItems.map(item => {
+    const product = item.product || item.store_products || item;
+    return {
+      productId: String(product.id || item.product_id || ''),
+      quantity: Number(item.quantity || 1),
+    };
+  }).filter(item => item.productId && Number.isInteger(item.quantity) && item.quantity > 0);
+  const productIds = [...new Set(requestedItems.map(item => item.productId))];
+  if (!productIds.length) return;
+
+  const productResponse = await axios.get(
+    `${restUrl('/rest/v1/store_products')}?select=id,store_id,price,is_on_sale,sale_price,sale_starts,sale_ends&id=in.(${productIds.join(',')})`,
+    { headers: supabaseAuthHeaders() }
+  );
+  const productsById = new Map((productResponse.data || []).map(product => [product.id, product]));
+  const now = Date.now();
+  const rows = requestedItems.flatMap(item => {
+    const product = productsById.get(item.productId);
+    if (!product || product.store_id !== order.store_id) return [];
+    const saleStarts = product.sale_starts ? Date.parse(product.sale_starts) : Number.NEGATIVE_INFINITY;
+    const saleEnds = product.sale_ends ? Date.parse(product.sale_ends) : Number.POSITIVE_INFINITY;
+    const saleActive = product.is_on_sale && Number(product.sale_price) > 0 && saleStarts <= now && saleEnds >= now;
+    const unitPrice = Number(saleActive ? product.sale_price : product.price) || 0;
+    return [{
+      order_id: order.id,
+      product_id: item.productId,
+      quantity: item.quantity,
+      unit_price: unitPrice,
+      total_price: Number((unitPrice * item.quantity).toFixed(2)),
+    }];
+  });
+
+  if (rows.length) {
+    await axios.post(`${restUrl('/rest/v1/order_items')}`, rows, {
+      headers: { ...supabaseAuthHeaders(), Prefer: 'return=minimal' },
+    });
+  }
+}
+
 async function recordPaidStoreOrders({ userId, reference, amount, currency, gateway, metadata }) {
   const existingResponse = await axios.get(
     `${restUrl('/rest/v1/orders')}?select=id,store_id,status,payment_method&payment_reference=eq.${encodeURIComponent(reference)}&payment_method=eq.${encodeURIComponent(gateway)}`,
@@ -118,6 +167,7 @@ async function recordPaidStoreOrders({ userId, reference, amount, currency, gate
 
   if (!orders.length) throw new Error('No store orders exist for this confirmed payment');
   for (const order of orders) {
+    await persistOrderItems(order, metadata);
     await axios.post(`${restUrl('/rest/v1/rpc/wallet_credit_paid_order')}`, {
       p_order_id: order.id,
     }, { headers: supabaseAuthHeaders() });
@@ -515,6 +565,7 @@ router.post('/payfast/init', async (req, res) => {
       headers: { ...supabaseAuthHeaders(), Prefer: 'resolution=merge-duplicates,return=representation' },
     });
     if (!orderResponse.data?.length) throw new Error('Could not create the pending orders');
+    for (const order of orderResponse.data) await persistOrderItems(order, metadata);
 
     const fields = {
       merchant_id: merchantId,
@@ -652,6 +703,97 @@ router.get('/payfast/status/:reference', async (req, res) => {
   } catch (error) {
     console.error('PayFast order status lookup failed:', error.response?.data || error.message);
     return res.status(502).json({ error: 'Could not check PayFast order status' });
+  }
+});
+
+function getDigitalStorageObject(fileReference) {
+  if (typeof fileReference !== 'string' || !fileReference.trim()) return null;
+  const value = fileReference.trim();
+  if (!/^https?:\/\//i.test(value)) {
+    return { bucket: 'digital-products', path: value.replace(/^\/+/, '') };
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.origin !== new URL(SUPABASE_URL).origin) return null;
+    const match = parsed.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)$/);
+    if (!match) return null;
+    return { bucket: decodeURIComponent(match[1]), path: decodeURIComponent(match[2]) };
+  } catch (error) {
+    return null;
+  }
+}
+
+router.get('/orders/:orderId/downloads', async (req, res) => {
+  const accessToken = req.get('authorization')?.replace(/^Bearer\s+/i, '');
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE;
+  if (!accessToken) return res.status(401).json({ error: 'Sign in to access purchased downloads' });
+  if (!serviceKey || !SUPABASE_URL) return res.status(503).json({ error: 'Download access is not configured' });
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.orderId)) return res.status(404).json({ error: 'Order not found' });
+
+  try {
+    const authResponse = await axios.get(`${SUPABASE_URL.replace(/\/+$/, '')}/auth/v1/user`, {
+      headers: { apikey: serviceKey, Authorization: `Bearer ${accessToken}` },
+      timeout: 10000,
+    });
+    const userId = authResponse.data?.id;
+    if (!userId) return res.status(401).json({ error: 'Your session is invalid or expired' });
+
+    const orderResponse = await axios.get(
+      `${restUrl('/rest/v1/orders')}?select=id,user_id,status&id=eq.${encodeURIComponent(req.params.orderId)}&user_id=eq.${encodeURIComponent(userId)}&status=eq.paid&limit=1`,
+      { headers: supabaseAuthHeaders(), timeout: 10000 }
+    );
+    const order = orderResponse.data?.[0];
+    if (!order) return res.status(404).json({ error: 'Paid order not found' });
+
+    const itemsResponse = await axios.get(
+      `${restUrl('/rest/v1/order_items')}?select=product_id,quantity&order_id=eq.${encodeURIComponent(order.id)}`,
+      { headers: supabaseAuthHeaders(), timeout: 10000 }
+    );
+    const productIds = [...new Set((itemsResponse.data || []).map(item => item.product_id).filter(Boolean))];
+    if (!productIds.length) return res.json({ downloads: [], expires_in: 3600 });
+
+    const productsResponse = await axios.get(
+      `${restUrl('/rest/v1/store_products')}?select=id,title,product_type,files&id=in.(${productIds.join(',')})`,
+      { headers: supabaseAuthHeaders(), timeout: 10000 }
+    );
+    const productsById = new Map((productsResponse.data || []).map(product => [product.id, product]));
+    const expiresIn = 3600;
+    const downloads = [];
+
+    for (const item of itemsResponse.data || []) {
+      const product = productsById.get(item.product_id);
+      const productType = String(product?.product_type || '').toLowerCase();
+      if (!product || !(productType.includes('digital') || productType.includes('download'))) continue;
+
+      const fileReferences = Array.isArray(product.files) ? product.files : [];
+      const files = [];
+      for (const fileReference of fileReferences) {
+        const storageObject = getDigitalStorageObject(fileReference);
+        if (!storageObject || !['digital-products', 'products'].includes(storageObject.bucket) || !storageObject.path) continue;
+        const objectPath = storageObject.path.split('/').map(encodeURIComponent).join('/');
+        const signedResponse = await axios.post(
+          `${SUPABASE_URL.replace(/\/+$/, '')}/storage/v1/object/sign/${encodeURIComponent(storageObject.bucket)}/${objectPath}`,
+          { expiresIn, download: true },
+          { headers: supabaseAuthHeaders(), timeout: 10000 }
+        );
+        const signedPath = signedResponse.data?.signedURL || signedResponse.data?.signedUrl;
+        if (!signedPath) continue;
+        const root = SUPABASE_URL.replace(/\/+$/, '');
+        const url = /^https?:\/\//i.test(signedPath)
+          ? signedPath
+          : `${root}/storage/v1${String(signedPath).startsWith('/') ? '' : '/'}${signedPath}`;
+        files.push({ name: decodeURIComponent(storageObject.path.split('/').pop()), url });
+      }
+
+      if (files.length) downloads.push({ product_id: product.id, title: product.title, quantity: item.quantity, files });
+    }
+
+    res.set('Cache-Control', 'no-store');
+    return res.json({ downloads, expires_in: expiresIn });
+  } catch (error) {
+    console.error('Could not create paid-order download links:', error.response?.data || error.message);
+    return res.status(502).json({ error: 'Could not load downloads for this order' });
   }
 });
 

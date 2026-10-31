@@ -288,6 +288,8 @@ const App = () => {
                     <Route path="/cart" element={<Cart />} />
                     <Route path="/checkout" element={<Checkout />} />
                     <Route path="/order/summary" element={<OrderSummary />} />
+                    <Route path="/order-summary/:orderId" element={<OrderSummary />} />
+                    <Route path="/order-summary" element={<OrderSummary />} />
                     <Route path="/order/failed" element={<OrderSummaryFailed />} />
                     <Route path="/hashtag/:tag" element={<HashtagPage />} />
                     <Route path="/saved" element={<SavedPostsPage />} />

@@ -1,47 +1,102 @@
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Header } from '@/components/Header';
-import { Home, ShoppingBag } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
+import apiUrl from '@/lib/api';
+import { Download, Home, ShoppingBag } from 'lucide-react';
+
+interface DownloadFile {
+  name: string;
+  url: string;
+}
+
+interface PurchasedDownload {
+  product_id: string;
+  title: string;
+  quantity: number;
+  files: DownloadFile[];
+}
 
 export default function OrderSummary() {
-  const { orderId } = useParams();
+  const { orderId: pathOrderId } = useParams();
+  const [searchParams] = useSearchParams();
+  const orderId = pathOrderId || searchParams.get('order_id');
+  const { user } = useAuth();
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [products, setProducts] = useState([]);
+  const [products, setProducts] = useState<any[]>([]);
+  const [downloads, setDownloads] = useState<PurchasedDownload[]>([]);
+  const [downloadsLoading, setDownloadsLoading] = useState(false);
+  const [downloadsError, setDownloadsError] = useState('');
 
   useEffect(() => {
-    if (!orderId) return;
-    setLoading(true);
-    supabase
-      .from('orders')
-      .select('*')
-      .eq('id', orderId)
-      .single()
-      .then(async ({ data, error }) => {
-        if (error || !data) {
-          setNotFound(true);
-        } else {
-          setOrder(data);
-          // Try to get product details from cart_items metadata if available
-          if (data.payment_reference && data.payment_method) {
-            // Try to fetch cart_items by payment_reference if you store them
-            // Otherwise, try to get from metadata
-            const cartItems = data.cart_items || (data.metadata && data.metadata.cart_items);
-            if (cartItems && Array.isArray(cartItems)) {
-              setProducts(cartItems.map(item => ({
-                title: item.product?.title || 'Product',
-                quantity: item.quantity,
-                price: item.product?.price || 0,
-                currency: data.currency || 'ZAR'
-              })));
-            }
-          }
-        }
+    let active = true;
+    const loadOrder = async () => {
+      if (!orderId) {
+        setNotFound(true);
         setLoading(false);
-      });
-  }, [orderId]);
+        return;
+      }
+      if (!user) {
+        setLoading(false);
+        return;
+      }
+
+      setNotFound(false);
+      setLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('orders')
+          .select('*')
+          .eq('id', orderId)
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (error || !data) {
+          if (active) setNotFound(true);
+          return;
+        }
+        if (!active) return;
+        setOrder(data);
+
+        const { data: itemRows } = await supabase
+          .from('order_items')
+          .select('id, quantity, unit_price, total_price, store_products(title, product_type)')
+          .eq('order_id', orderId);
+        if (!active) return;
+        setProducts((itemRows || []).map((item: any) => ({
+          title: item.store_products?.title || 'Product',
+          quantity: item.quantity,
+          price: item.unit_price,
+          currency: data.currency || 'ZAR',
+        })));
+
+        if (data.status === 'paid') {
+          setDownloadsLoading(true);
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session?.access_token) throw new Error('Sign in again to access your downloads.');
+          const response = await fetch(apiUrl(`/api/payments/orders/${encodeURIComponent(orderId)}/downloads`), {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+            cache: 'no-store',
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.error || 'Could not load your downloads.');
+          if (active) setDownloads(result.downloads || []);
+        }
+      } catch (error: any) {
+        if (active) setDownloadsError(error.message || 'Could not load your downloads.');
+      } finally {
+        if (active) {
+          setDownloadsLoading(false);
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadOrder();
+    return () => { active = false; };
+  }, [orderId, user]);
 
   if (loading) return (
     <div className="min-h-screen bg-gray-50 dark:bg-[#18181b]">
@@ -179,6 +234,42 @@ export default function OrderSummary() {
             <div className="text-gray-500">No product details available.</div>
           )}
         </div>
+        {order.status === 'paid' && (
+          <section className="w-full mb-6" aria-labelledby="digital-downloads-heading">
+            <h2 id="digital-downloads-heading" className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3 flex items-center gap-2">
+              <Download className="h-5 w-5" /> Your digital downloads
+            </h2>
+            {downloadsLoading ? (
+              <p className="text-sm text-gray-500 dark:text-gray-400">Preparing secure download links...</p>
+            ) : downloadsError ? (
+              <p className="text-sm text-red-600 dark:text-red-400">{downloadsError}</p>
+            ) : downloads.length > 0 ? (
+              <div className="space-y-3">
+                {downloads.map(product => (
+                  <div key={product.product_id} className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+                    <p className="font-semibold text-gray-900 dark:text-gray-100">{product.title}</p>
+                    <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">Quantity: {product.quantity}. Links expire in one hour.</p>
+                    <div className="flex flex-wrap gap-2">
+                      {product.files.map((file, index) => (
+                        <a
+                          key={`${product.product_id}-${index}`}
+                          href={file.url}
+                          download
+                          className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        >
+                          <Download className="h-4 w-4" />
+                          Download file {index + 1}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 dark:text-gray-400">This order has no downloadable products.</p>
+            )}
+          </section>
+        )}
         <div className="flex flex-col sm:flex-row gap-3 w-full">
           <a
             href="/"

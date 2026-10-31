@@ -5,7 +5,7 @@ import { Package, X, AlertCircle, Save } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { uploadFile } from '@/utils/mediaUtils';
+import { uploadFile, uploadPrivateFile } from '@/utils/mediaUtils';
 import { removeBgUsingRemoveBgApi } from '@/utils/imageProcessing';
 import { StoreRequiredModal } from './StoreRequiredModal';
 import { EnhancedStoreSetupModal } from './EnhancedStoreSetupModal';
@@ -27,6 +27,10 @@ interface ProductFormData {
   sale_starts?: string;
   sale_ends?: string;
   is_deals_of_day?: boolean;
+  shipping_weight_kg: string;
+  shipping_length_cm: string;
+  shipping_width_cm: string;
+  shipping_height_cm: string;
 }
 
 interface EnhancedAddProductFormProps {
@@ -125,6 +129,10 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
     sale_starts: '',
     sale_ends: '',
     is_deals_of_day: false,
+    shipping_weight_kg: '',
+    shipping_length_cm: '',
+    shipping_width_cm: '',
+    shipping_height_cm: '',
   });
 
   useEffect(() => {
@@ -305,6 +313,14 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
       return;
     }
 
+    if (formData.product_type === 'physical') {
+      const parcelMeasurements = [formData.shipping_weight_kg, formData.shipping_length_cm, formData.shipping_width_cm, formData.shipping_height_cm].map(Number);
+      if (parcelMeasurements.some(value => !Number.isFinite(value) || value <= 0)) {
+        toast({ title: 'Parcel details required', description: 'Add the packed weight and dimensions so buyers can get an accurate courier quote.', variant: 'destructive' });
+        return;
+      }
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -333,7 +349,7 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
       );
 
       const fileUrls = formData.product_type === 'digital' ? await Promise.all(
-        formData.files.map(file => uploadFile(file, 'products', 'files/', user.id))
+        formData.files.map(file => uploadPrivateFile(file, 'digital-products', 'files/', user.id))
       ) : [];
 
       console.log('Files uploaded successfully');
@@ -348,6 +364,12 @@ export const EnhancedAddProductForm: React.FC<EnhancedAddProductFormProps> = ({ 
         product_type: formData.product_type,
         is_active: true,
       };
+      if (formData.product_type === 'physical') {
+        productData.shipping_weight_kg = Number(formData.shipping_weight_kg);
+        productData.shipping_length_cm = Number(formData.shipping_length_cm);
+        productData.shipping_width_cm = Number(formData.shipping_width_cm);
+        productData.shipping_height_cm = Number(formData.shipping_height_cm);
+      }
 
       // Only add optional fields if they have a value
       if (formData.description?.trim()) productData.description = formData.description.trim();
