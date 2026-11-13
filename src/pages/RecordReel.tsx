@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/hooks/use-toast';
@@ -49,6 +49,11 @@ import {
   type ReelCaptionSegment,
   type ReelCaptionStyle,
 } from '@/utils/animatedReelCaptions';
+import {
+  createReelBackgroundProcessor,
+  type ReelBackgroundEffect,
+  type ReelBackgroundProcessor,
+} from '@/utils/reelBackgroundEffects';
 
 type SpeechRecognitionResultLike = {
   isFinal: boolean;
@@ -82,6 +87,11 @@ const RecordReel = () => {
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
+  const [backgroundEffect, setBackgroundEffect] = useState<ReelBackgroundEffect>('original');
+  const [isBackgroundProcessorLoading, setIsBackgroundProcessorLoading] = useState(false);
+  const [isBackgroundProcessorReady, setIsBackgroundProcessorReady] = useState(false);
+  const [isBackgroundProcessorFailed, setIsBackgroundProcessorFailed] = useState(false);
+  const [backgroundEffectError, setBackgroundEffectError] = useState<string | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
@@ -127,6 +137,12 @@ const RecordReel = () => {
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const backgroundCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const backgroundEffectRef = useRef<ReelBackgroundEffect>('original');
+  const backgroundProcessorRef = useRef<ReelBackgroundProcessor | null>(null);
+  const backgroundProcessorPromiseRef = useRef<Promise<void> | null>(null);
+  const backgroundProcessorSessionRef = useRef(0);
+  const isPreviewingRef = useRef(false);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const orientationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -143,6 +159,120 @@ const RecordReel = () => {
     { id: 'followers', label: 'Followers', icon: Users, description: 'Only your followers' },
     { id: 'private', label: 'Private', icon: Lock, description: 'Only you' }
   ];
+
+  const startBackgroundProcessor = useCallback(async () => {
+    if (!mediaStream || backgroundProcessorRef.current || backgroundProcessorPromiseRef.current) return;
+
+    const sourceVideo = videoRef.current;
+    const outputCanvas = backgroundCanvasRef.current;
+    if (!sourceVideo || !outputCanvas) return;
+
+    const sessionId = backgroundProcessorSessionRef.current;
+    setBackgroundEffectError(null);
+    setIsBackgroundProcessorLoading(true);
+
+    const processorPromise = createReelBackgroundProcessor(
+      sourceVideo,
+      mediaStream,
+      outputCanvas,
+      () => backgroundEffectRef.current,
+      (error) => {
+        console.error('[RecordReel] Background effect processing failed:', error);
+        if (sessionId !== backgroundProcessorSessionRef.current) return;
+
+        setIsBackgroundProcessorFailed(true);
+        setIsBackgroundProcessorReady(true);
+        setBackgroundEffectError('The effect stopped. The recording is continuing with the original camera view.');
+        if (backgroundEffectRef.current !== 'original') {
+          backgroundEffectRef.current = 'original';
+          setBackgroundEffect('original');
+        }
+        toast({
+          title: 'Background effect stopped',
+          description: 'The recording will continue with your original camera view.',
+          variant: 'destructive',
+        });
+      },
+    )
+      .then((processor) => {
+        if (sessionId !== backgroundProcessorSessionRef.current || !isPreviewingRef.current) {
+          processor.dispose();
+          return;
+        }
+        backgroundProcessorRef.current = processor;
+        setIsBackgroundProcessorReady(true);
+      })
+      .catch((error: unknown) => {
+        console.error('[RecordReel] Could not start background effects:', error);
+        if (sessionId !== backgroundProcessorSessionRef.current) return;
+
+        setIsBackgroundProcessorReady(false);
+        setIsBackgroundProcessorFailed(false);
+        setBackgroundEffectError('Could not load the on-device background model. Check your connection and retry.');
+        toast({
+          title: 'Background effect unavailable',
+          description: 'Could not load the on-device background model. Check your connection and try again.',
+          variant: 'destructive',
+        });
+      })
+      .finally(() => {
+        if (sessionId === backgroundProcessorSessionRef.current) {
+          setIsBackgroundProcessorLoading(false);
+        }
+        if (backgroundProcessorPromiseRef.current === processorPromise) {
+          backgroundProcessorPromiseRef.current = null;
+        }
+      });
+
+    backgroundProcessorPromiseRef.current = processorPromise;
+    await processorPromise;
+  }, [mediaStream]);
+
+  const handleBackgroundEffectChange = (effect: ReelBackgroundEffect) => {
+    if (isBackgroundProcessorFailed && !isRecording) {
+      backgroundProcessorRef.current?.dispose();
+      backgroundProcessorRef.current = null;
+      setIsBackgroundProcessorReady(false);
+      setIsBackgroundProcessorFailed(false);
+    }
+
+    setBackgroundEffectError(null);
+    backgroundEffectRef.current = effect;
+    setBackgroundEffect(effect);
+    if (backgroundEffectError && effect === backgroundEffect && effect !== 'original') {
+      void startBackgroundProcessor();
+    }
+  };
+
+  useEffect(() => {
+    isPreviewingRef.current = isPreviewing;
+  }, [isPreviewing]);
+
+  useEffect(() => {
+    backgroundEffectRef.current = backgroundEffect;
+  }, [backgroundEffect]);
+
+  useEffect(() => {
+    backgroundProcessorSessionRef.current += 1;
+    backgroundProcessorRef.current?.dispose();
+    backgroundProcessorRef.current = null;
+    backgroundProcessorPromiseRef.current = null;
+    setIsBackgroundProcessorReady(false);
+    setIsBackgroundProcessorLoading(false);
+    setIsBackgroundProcessorFailed(false);
+
+    return () => {
+      backgroundProcessorSessionRef.current += 1;
+      backgroundProcessorRef.current?.dispose();
+      backgroundProcessorRef.current = null;
+    };
+  }, [isPreviewing, mediaStream]);
+
+  useEffect(() => {
+    if (isPreviewing && mediaStream && backgroundEffect !== 'original') {
+      void startBackgroundProcessor();
+    }
+  }, [isPreviewing, mediaStream, backgroundEffect, startBackgroundProcessor]);
 
   // Hash a file using SHA-256
   async function hashFile(file: File): Promise<string> {
@@ -601,6 +731,7 @@ const RecordReel = () => {
 
   const handleStartRecording = () => {
     if (!mediaStream) return;
+    if (backgroundEffect !== 'original' && !isBackgroundProcessorReady) return;
     setCountdown(3);
   };
 
@@ -687,7 +818,8 @@ const RecordReel = () => {
     setCountdown(null);
     setRecordedChunks([]);
     setTimer(enable360 ? 360 : 90);
-    if (!mediaStream) return;
+    const recordingStream = backgroundProcessorRef.current?.stream || mediaStream;
+    if (!recordingStream) return;
     
     const preferredMimeType = getSafariCompatibleMimeType();
     const safariDevice = isSafariOrIOS();
@@ -703,7 +835,7 @@ const RecordReel = () => {
     for (const candidateType of candidates) {
       try {
         const candidateRecorder = new MediaRecorder(
-          mediaStream,
+          recordingStream,
           candidateType ? { mimeType: candidateType } : undefined,
         );
         candidateRecorder.ondataavailable = (event) => {
@@ -767,7 +899,7 @@ const RecordReel = () => {
         return prev - 1;
       });
     }, 1000);
-  }, [countdown, recordedChunks, enable360]);
+  }, [countdown, recordedChunks, enable360, mediaStream]);
 
   const handleStopRecording = () => {
     if (mediaRecorder) mediaRecorder.stop();
@@ -1693,6 +1825,19 @@ const RecordReel = () => {
     const videoClass = isLandscape
       ? 'w-auto h-full object-contain'
       : 'w-full h-auto object-contain';
+    const backgroundChoices: {
+      effect: ReelBackgroundEffect;
+      label: string;
+      swatch: string;
+    }[] = [
+      { effect: 'original', label: 'Original', swatch: 'linear-gradient(135deg, #475569, #0f172a)' },
+      { effect: 'blur', label: 'Portrait blur', swatch: 'linear-gradient(135deg, #64748b, #cbd5e1)' },
+      { effect: 'studio', label: 'Soft studio', swatch: 'linear-gradient(135deg, #f5f5f4, #a8a29e)' },
+      { effect: 'slate', label: 'Slate', swatch: 'linear-gradient(135deg, #e2e8f0, #475569)' },
+      { effect: 'warm', label: 'Warm', swatch: 'linear-gradient(135deg, #fef3c7, #a16255)' },
+    ];
+    const processedBackgroundVisible =
+      backgroundEffect !== 'original' && isBackgroundProcessorReady && !isBackgroundProcessorFailed;
 
     return (
       <div className="fixed inset-0 z-[9999] h-[100dvh] w-screen overflow-hidden bg-black">
@@ -1743,7 +1888,16 @@ const RecordReel = () => {
                 autoPlay
                 playsInline
                 muted
-                className="absolute inset-0 block h-full w-full object-cover"
+                className={`absolute inset-0 block h-full w-full object-cover ${
+                  processedBackgroundVisible ? 'opacity-0' : 'opacity-100'
+                }`}
+              />
+              <canvas
+                ref={backgroundCanvasRef}
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-0 block h-full w-full object-cover ${
+                  processedBackgroundVisible ? 'opacity-100' : 'opacity-0'
+                }`}
               />
             </div>
             
@@ -1844,6 +1998,59 @@ const RecordReel = () => {
                 <X className="w-5 h-5 text-white" />
               </button>
             </div>
+
+            {/* Live background effects */}
+            <div className="absolute bottom-44 left-1/2 z-40 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2">
+              <div className="rounded-2xl border border-white/15 bg-black/55 px-3 py-2.5 text-white shadow-xl backdrop-blur-md">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold">
+                    <Sparkles className="h-3.5 w-3.5 text-purple-300" />
+                    <span>Background</span>
+                  </div>
+                  <span className="truncate text-[10px] text-white/65">
+                    {isBackgroundProcessorLoading
+                      ? 'Preparing on-device effects…'
+                      : backgroundEffectError
+                        ? backgroundEffectError
+                      : isBackgroundProcessorFailed
+                        ? 'Effect stopped; recording continues with the original view.'
+                        : backgroundEffect === 'original'
+                          ? 'Choose an effect for your recording'
+                          : 'Effect will be included in the saved Reel'}
+                  </span>
+                </div>
+                <div className="flex gap-2 overflow-x-auto pb-0.5">
+                  {backgroundChoices.map(({ effect, label, swatch }) => {
+                    const selected = backgroundEffect === effect;
+                    const disabled =
+                      countdown !== null ||
+                      isSwitchingCamera ||
+                      (isRecording && isBackgroundProcessorFailed && effect !== 'original');
+
+                    return (
+                      <button
+                        key={effect}
+                        type="button"
+                        onClick={() => handleBackgroundEffectChange(effect)}
+                        disabled={disabled}
+                        aria-pressed={selected}
+                        className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition ${
+                          selected
+                            ? 'border-white bg-white/20 text-white'
+                            : 'border-white/10 bg-black/20 text-white/75 hover:bg-white/10'
+                        } disabled:cursor-not-allowed disabled:opacity-50`}
+                      >
+                        <span
+                          className="h-3.5 w-3.5 rounded-full border border-white/40"
+                          style={{ background: swatch }}
+                        />
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
             
             {/* Bottom Controls */}
             <div className="absolute bottom-8 left-0 right-0 flex justify-center items-end gap-5 z-40">
@@ -1873,7 +2080,11 @@ const RecordReel = () => {
               {/* Record Button */}
               <button
                 onClick={isRecording ? handleStopRecording : handleStartRecording}
-                disabled={isSwitchingCamera || countdown !== null}
+                disabled={
+                  isSwitchingCamera ||
+                  countdown !== null ||
+                  (!isRecording && backgroundEffect !== 'original' && !isBackgroundProcessorReady)
+                }
                 className={`relative flex flex-col items-center justify-center rounded-full transition-all transform hover:scale-105 disabled:opacity-70 disabled:cursor-not-allowed ${
                   isRecording 
                     ? 'w-24 h-24 bg-red-600 border-4 border-red-300/50 animate-pulse' 

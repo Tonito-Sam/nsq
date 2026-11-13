@@ -650,6 +650,12 @@ const Studio = () => {
     if (activeIndex > 0) handleIndexChange(activeIndex - 1);
   }, [activeIndex, handleIndexChange]);
 
+  const wheelNavigationRef = useRef({ next: goToNextVideo, previous: goToPreviousVideo });
+
+  useEffect(() => {
+    wheelNavigationRef.current = { next: goToNextVideo, previous: goToPreviousVideo };
+  }, [goToNextVideo, goToPreviousVideo]);
+
   // Scroll the reel strip so the active slide is visible
   useEffect(() => {
     if (!isDesktop) return;
@@ -688,8 +694,8 @@ const Studio = () => {
         wheelAccumRef.current = 0;
         wheelLockRef.current = true;
 
-        if (direction === 'down') goToNextVideo();
-        else goToPreviousVideo();
+        if (direction === 'down') wheelNavigationRef.current.next();
+        else wheelNavigationRef.current.previous();
 
         if (wheelUnlockTimerRef.current) window.clearTimeout(wheelUnlockTimerRef.current);
         wheelUnlockTimerRef.current = window.setTimeout(() => {
@@ -706,8 +712,10 @@ const Studio = () => {
         window.clearTimeout(wheelUnlockTimerRef.current);
         wheelUnlockTimerRef.current = null;
       }
+      wheelLockRef.current = false;
+      wheelAccumRef.current = 0;
     };
-  }, [isDesktop, goToNextVideo, goToPreviousVideo]);
+  }, [isDesktop]);
 
   // Desktop touch swipe
   useEffect(() => {

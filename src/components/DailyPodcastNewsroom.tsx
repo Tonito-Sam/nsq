@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { supabase } from '@/integrations/supabase/client';
 import apiUrl from '@/lib/api';
+import { readJsonResponse } from '@/lib/readJsonResponse';
 
 type NewsStory = {
   id: string;
@@ -19,6 +20,14 @@ type NewsStory = {
 };
 
 type CoverageCategory = 'politics' | 'sports' | 'geopolitics' | 'entertainment';
+
+type NewsroomResponse = {
+  error?: string;
+  stories?: NewsStory[];
+  generatedAt?: string;
+  feedErrors?: string[];
+  script?: string;
+};
 
 const COVERAGE_OPTIONS: { value: CoverageCategory; label: string }[] = [
   { value: 'politics', label: 'Politics' },
@@ -61,8 +70,8 @@ export default function DailyPodcastNewsroom({
         },
         body: JSON.stringify({ categories: ['top', ...categories], country: country.trim() }),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Could not fetch current stories.');
+      const result = await readJsonResponse<NewsroomResponse>(response);
+      if (!response.ok) throw new Error(result.error || `Could not fetch current stories (HTTP ${response.status}).`);
 
       setStories(result.stories || []);
       setGeneratedAt(result.generatedAt || new Date().toISOString());
@@ -110,8 +119,8 @@ export default function DailyPodcastNewsroom({
           duration,
         }),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Could not generate the podcast script.');
+      const result = await readJsonResponse<NewsroomResponse>(response);
+      if (!response.ok) throw new Error(result.error || `Could not generate the podcast script (HTTP ${response.status}).`);
       setScript(result.script || '');
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : 'Could not generate the podcast script.');
