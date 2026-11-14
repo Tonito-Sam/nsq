@@ -2,7 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, Maximize, Mic, Pause, Play, RotateCcw, Save, Square, Video } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { MediaEnhancementTabs } from '@/components/studio/MediaEnhancementTabs';
+import { useReelAudioPreview } from '@/hooks/useReelAudioPreview';
 import { supabase } from '@/integrations/supabase/client';
+import { getPodcastStudioEligibility } from '@/lib/podcastStudioEligibility';
+import {
+  getReelVideoFilter,
+  renderCaptionedReel,
+  type ReelAudioPreset,
+  type ReelVideoPreset,
+} from '@/utils/animatedReelCaptions';
 import {
   drawPodcastIntroFrame,
   drawPodcastOutroFrame,
@@ -109,6 +118,12 @@ export default function PodcastTeleprompter() {
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingUrl, setRecordingUrl] = useState('');
+  const [audioPreset, setAudioPreset] = useState<ReelAudioPreset>('original');
+  const [videoPreset, setVideoPreset] = useState<ReelVideoPreset>('original');
+  const [effectsRendered, setEffectsRendered] = useState(false);
+  const [isRenderingEffects, setIsRenderingEffects] = useState(false);
+  const [renderProgress, setRenderProgress] = useState(0);
+  const [isSavingRecording, setIsSavingRecording] = useState(false);
   const [introMontageActive, setIntroMontageActive] = useState(false);
   const [introScene, setIntroScene] = useState(0);
   const [outroActive, setOutroActive] = useState(false);
@@ -116,10 +131,12 @@ export default function PodcastTeleprompter() {
   const [error, setError] = useState('');
   const prompterRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLVideoElement>(null);
+  const { applyPreset: applyPreviewAudioPreset } = useReelAudioPreview(previewRef, setError);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingBlobRef = useRef<Blob | null>(null);
+  const originalRecordingBlobRef = useRef<Blob | null>(null);
   const recordingStateRef = useRef<RecordingState>('idle');
   const introElapsedMsRef = useRef(0);
   const animationFrameRef = useRef<number | null>(null);
@@ -159,17 +176,16 @@ export default function PodcastTeleprompter() {
           if (parsedDraft.ownerId !== user.id || !parsedDraft.draftId) {
             throw new Error('This private creator recording session belongs to another account.');
           }
-          const [eligibilityResult, draftResult] = await Promise.all([
-            supabase.rpc('creator_can_use_podcast_studio'),
+          const [eligibility, draftResult] = await Promise.all([
+            getPodcastStudioEligibility(user.id),
             supabase.from('creator_podcast_drafts')
               .select('id, status')
               .eq('id', parsedDraft.draftId)
               .eq('owner_id', user.id)
               .maybeSingle(),
           ]);
-          if (eligibilityResult.error) throw eligibilityResult.error;
           if (draftResult.error) throw draftResult.error;
-          if (!eligibilityResult.data || !draftResult.data || !['draft', 'changes_requested'].includes(draftResult.data.status)) {
+          if (!eligibility.eligible || !draftResult.data || !['draft', 'changes_requested'].includes(draftResult.data.status)) {
             throw new Error('This creator podcast draft is no longer available for recording.');
           }
         } else {
@@ -205,6 +221,8 @@ export default function PodcastTeleprompter() {
       video.src = recordingUrl;
       video.controls = true;
       video.muted = false;
+      video.load();
+      void video.play().catch(() => undefined);
     } else if (streamRef.current) {
       video.src = '';
       video.srcObject = streamRef.current;
@@ -213,6 +231,12 @@ export default function PodcastTeleprompter() {
       void video.play().catch(() => undefined);
     }
   }, [authorized, recordingUrl]);
+
+  useEffect(() => {
+    if (recordingUrl) {
+      applyPreviewAudioPreset(effectsRendered ? 'original' : audioPreset);
+    }
+  }, [audioPreset, effectsRendered, recordingUrl, applyPreviewAudioPreset]);
 
   useEffect(() => {
     if (recordingState !== 'recording') return;
@@ -482,6 +506,12 @@ export default function PodcastTeleprompter() {
       const recorder = new MediaRecorder(recordingStream, mimeType ? { mimeType } : undefined);
       recordingChunksRef.current = [];
       recordingBlobRef.current = null;
+      originalRecordingBlobRef.current = null;
+      setAudioPreset('original');
+      setVideoPreset('original');
+      setEffectsRendered(false);
+      setRenderProgress(0);
+      applyPreviewAudioPreset('original');
       setRecordingUrl('');
       setRecordingSeconds(0);
       recorder.ondataavailable = (event) => {
@@ -504,6 +534,7 @@ export default function PodcastTeleprompter() {
         void audioContextRef.current?.close();
         audioContextRef.current = null;
         recordingBlobRef.current = blob;
+        originalRecordingBlobRef.current = blob;
         setRecordingUrl(URL.createObjectURL(blob));
         setRecordingState('recorded');
       };
@@ -542,29 +573,108 @@ export default function PodcastTeleprompter() {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') recorderRef.current.stop();
   };
 
-  const saveAndLoadDraft = () => {
-    const blob = recordingBlobRef.current;
-    if (!blob || !draft) return;
+  const restoreOriginalRecording = () => {
+    const originalBlob = originalRecordingBlobRef.current;
+    if (!effectsRendered || !originalBlob) return;
+    recordingBlobRef.current = originalBlob;
+    setRecordingUrl(URL.createObjectURL(originalBlob));
+    setEffectsRendered(false);
+  };
+
+  const handleAudioPresetChange = (preset: ReelAudioPreset) => {
+    if (isRenderingEffects || isSavingRecording) return;
+    if (preset === audioPreset && (effectsRendered || (preset === 'original' && videoPreset === 'original'))) return;
+    if (!applyPreviewAudioPreset(effectsRendered ? 'original' : preset)) return;
+    restoreOriginalRecording();
+    setAudioPreset(preset);
+    setError('');
+    if (preset !== 'original' || videoPreset !== 'original') {
+      void renderPodcastEffects(preset, videoPreset).catch((renderError: unknown) => {
+        setError(renderError instanceof Error ? renderError.message : 'Could not render podcast effects.');
+      });
+    }
+  };
+
+  const handleVideoPresetChange = (preset: ReelVideoPreset) => {
+    if (isRenderingEffects || isSavingRecording) return;
+    if (preset === videoPreset && (effectsRendered || (preset === 'original' && audioPreset === 'original'))) return;
+    restoreOriginalRecording();
+    setVideoPreset(preset);
+    setError('');
+    if (audioPreset !== 'original' || preset !== 'original') {
+      void renderPodcastEffects(audioPreset, preset).catch((renderError: unknown) => {
+        setError(renderError instanceof Error ? renderError.message : 'Could not render podcast effects.');
+      });
+    }
+  };
+
+  const renderPodcastEffects = async (
+    selectedAudioPreset: ReelAudioPreset = audioPreset,
+    selectedVideoPreset: ReelVideoPreset = videoPreset,
+  ) => {
+    const sourceBlob = originalRecordingBlobRef.current;
+    if (!sourceBlob) throw new Error('Record a podcast before applying effects.');
+    if (selectedAudioPreset === 'original' && selectedVideoPreset === 'original') return sourceBlob;
+
+    setIsRenderingEffects(true);
+    setRenderProgress(0);
+    const sourceUrl = URL.createObjectURL(sourceBlob);
+    try {
+      const renderedBlob = await renderCaptionedReel(
+        sourceUrl,
+        [],
+        'classic',
+        false,
+        setRenderProgress,
+        { audioPreset: selectedAudioPreset, videoPreset: selectedVideoPreset },
+      );
+      recordingBlobRef.current = renderedBlob;
+      setRecordingUrl(URL.createObjectURL(renderedBlob));
+      setEffectsRendered(true);
+      return renderedBlob;
+    } finally {
+      URL.revokeObjectURL(sourceUrl);
+      setIsRenderingEffects(false);
+    }
+  };
+
+  const saveAndLoadDraft = async () => {
+    const currentRecording = recordingBlobRef.current;
+    if (!currentRecording || !draft) return;
     if (!window.opener || window.opener.closed) {
       setError('The Podcast Studio window is no longer available. Keep this recording open and return to Podcast Studio to reopen the session.');
       return;
     }
-    if (draft.mode === 'creator') setHandoffSaving(true);
-    window.opener.postMessage({
-      type: 'NEXSQ_PODCAST_RECORDING_SAVED',
-      sessionId,
-      mode: draft.mode || 'admin',
-      ownerId: draft.ownerId,
-      draftId: draft.draftId,
-      title: draft.title,
-      script: draft.script,
-      hostNames: draft.hostNames,
-      recording: blob,
-      fileName: `${draft.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'podcast'}-${Date.now()}.webm`,
-    }, window.location.origin);
-    if (draft.mode !== 'creator') {
-      localStorage.removeItem(handoffKey(sessionId));
-      window.close();
+    setIsSavingRecording(true);
+    setError('');
+    try {
+      let blob = currentRecording;
+      if ((audioPreset !== 'original' || videoPreset !== 'original') && !effectsRendered) {
+        blob = await renderPodcastEffects();
+      }
+      if (draft.mode === 'creator') setHandoffSaving(true);
+      const extension = blob.type.toLowerCase().includes('mp4') ? 'mp4' : 'webm';
+      window.opener.postMessage({
+        type: 'NEXSQ_PODCAST_RECORDING_SAVED',
+        sessionId,
+        mode: draft.mode || 'admin',
+        ownerId: draft.ownerId,
+        draftId: draft.draftId,
+        title: draft.title,
+        script: draft.script,
+        hostNames: draft.hostNames,
+        recording: blob,
+        fileName: `${draft.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'podcast'}-${Date.now()}.${extension}`,
+      }, window.location.origin);
+      if (draft.mode !== 'creator') {
+        localStorage.removeItem(handoffKey(sessionId));
+        window.close();
+      }
+    } catch (saveError) {
+      setHandoffSaving(false);
+      setError(saveError instanceof Error ? saveError.message : 'Could not save this recording.');
+    } finally {
+      setIsSavingRecording(false);
     }
   };
 
@@ -638,7 +748,13 @@ export default function PodcastTeleprompter() {
 
         <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto p-4 sm:p-5">
           <div className="relative aspect-video overflow-hidden rounded-lg bg-black ring-1 ring-white/10">
-            <video ref={previewRef} autoPlay playsInline className="h-full w-full object-cover" />
+            <video
+              ref={previewRef}
+              autoPlay
+              playsInline
+              className="h-full w-full object-cover"
+              style={recordingUrl && !effectsRendered ? { filter: getReelVideoFilter(videoPreset) } : undefined}
+            />
             {introMontageActive && (
               <div
                 className="absolute inset-0 z-10 flex flex-col justify-between p-4 text-white transition-colors duration-1000 sm:p-6"
@@ -710,9 +826,42 @@ export default function PodcastTeleprompter() {
             </div>
           )}
           {recordingState === 'recorded' && (
-            <Button className="w-full gap-2 bg-emerald-700 text-white hover:bg-emerald-800" onClick={saveAndLoadDraft} disabled={handoffSaving}>
+            <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3" aria-labelledby="podcast-effects-title">
+              <div>
+                <h2 id="podcast-effects-title" className="text-sm font-semibold text-white">Audio and video effects</h2>
+                <p className="mt-1 text-[11px] leading-relaxed text-white/50">Changes preview and render automatically when selected.</p>
+              </div>
+              <MediaEnhancementTabs
+                audioPreset={audioPreset}
+                videoPreset={videoPreset}
+                onAudioPresetChange={handleAudioPresetChange}
+                onVideoPresetChange={handleVideoPresetChange}
+                disabled={isRenderingEffects || isSavingRecording}
+                accent="emerald"
+              />
+              <details className="text-[11px] text-white/45">
+                <summary className="cursor-pointer text-white/60">Effect notes</summary>
+                <p className="mt-1.5">Voice clarity reduces low rumble, not full noise cancellation. Warm studio adds room ambience, not surround sound. Video presets adjust light, contrast, and color.</p>
+              </details>
+              <p className="text-[10px] text-emerald-200/70" aria-live="polite">
+                {isRenderingEffects
+                  ? `Rendering effects automatically: ${renderProgress}%`
+                  : effectsRendered
+                    ? 'Selected effects rendered and ready to save.'
+                    : 'Select a preset to render it automatically.'}
+              </p>
+            </section>
+          )}
+          {recordingState === 'recorded' && (
+            <Button className="w-full gap-2 bg-emerald-700 text-white hover:bg-emerald-800" onClick={() => void saveAndLoadDraft()} disabled={handoffSaving || isSavingRecording || isRenderingEffects}>
               {handoffSaving ? <RotateCcw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              {handoffSaving ? 'Saving private draft…' : draft.mode === 'creator' ? 'Save recording to private draft' : 'Save & load into show draft'}
+              {isRenderingEffects || isSavingRecording
+                ? isRenderingEffects ? `Rendering ${renderProgress}%` : 'Saving recording…'
+                : handoffSaving
+                  ? 'Saving private draft…'
+                  : draft.mode === 'creator'
+                    ? 'Save recording to private draft'
+                    : 'Save & load into show draft'}
             </Button>
           )}
           {error && <p role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">{error}</p>}

@@ -1,11 +1,13 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useReelAudioPreview } from '@/hooks/useReelAudioPreview';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { Skeleton } from '@/components/ui/skeleton';
+import { MediaEnhancementTabs } from '@/components/studio/MediaEnhancementTabs';
 import { 
   Camera, 
   Clock, 
@@ -42,12 +44,12 @@ import { ShowSlotApplication } from '@/components/studio/ShowSlotApplication';
 import {
   getAutoCameraTransform,
   getCaptionWordIndex,
-  connectReelAudioEffects,
   getReelVideoFilter,
   renderCaptionedReel,
   type ReelAudioPreset,
   type ReelCaptionSegment,
   type ReelCaptionStyle,
+  type ReelEnhancementOptions,
   type ReelVideoPreset,
 } from '@/utils/animatedReelCaptions';
 import {
@@ -76,13 +78,6 @@ type SpeechRecognitionLike = {
   start: () => void;
   stop: () => void;
   abort: () => void;
-};
-
-type ReelPreviewAudioGraph = {
-  video: HTMLVideoElement;
-  context: AudioContext;
-  source: MediaElementAudioSourceNode;
-  nodes: AudioNode[];
 };
 
 const RecordReel = () => {
@@ -120,7 +115,14 @@ const RecordReel = () => {
   const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recordingStartedAtRef = useRef<number | null>(null);
   const recordedPreviewVideoRef = useRef<HTMLVideoElement | null>(null);
-  const previewAudioGraphRef = useRef<ReelPreviewAudioGraph | null>(null);
+  const { applyPreset: applyPreviewAudioPreset, dispose: disposePreviewAudioGraph } = useReelAudioPreview(
+    recordedPreviewVideoRef,
+    (message) => toast({
+      title: 'Audio preview unavailable',
+      description: message,
+      variant: 'destructive',
+    }),
+  );
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoDeviceId, setVideoDeviceId] = useState<string | null>(null);
@@ -930,94 +932,21 @@ const RecordReel = () => {
     setCaptionRenderProgress(0);
   };
 
-  const disposePreviewAudioGraph = useCallback(() => {
-    const graph = previewAudioGraphRef.current;
-    if (!graph) return;
-
-    graph.source.disconnect();
-    graph.nodes.forEach((node) => node.disconnect());
-    previewAudioGraphRef.current = null;
-    if (graph.context.state !== 'closed') {
-      void graph.context.close().catch((error: unknown) => {
-        console.error('[RecordReel] Could not close audio preview:', error);
-      });
-    }
-  }, []);
-
-  const applyPreviewAudioPreset = useCallback((preset: ReelAudioPreset) => {
-    const video = recordedPreviewVideoRef.current;
-    if (!video) return false;
-
-    let graph = previewAudioGraphRef.current;
-    if (preset === 'original' && !graph) return true;
-
-    try {
-      if (graph && graph.video !== video) {
-        disposePreviewAudioGraph();
-        graph = null;
-      }
-
-      if (!graph) {
-        const browserWindow = window as Window & { webkitAudioContext?: typeof AudioContext };
-        const AudioContextConstructor = window.AudioContext || browserWindow.webkitAudioContext;
-        if (!AudioContextConstructor) {
-          toast({
-            title: 'Audio preview unavailable',
-            description: 'This browser cannot preview audio enhancements. You can still render the selected effects.',
-            variant: 'destructive',
-          });
-          return false;
-        }
-        const context = new AudioContextConstructor();
-        graph = {
-          video,
-          context,
-          source: context.createMediaElementSource(video),
-          nodes: [],
-        };
-        previewAudioGraphRef.current = graph;
-      }
-
-      graph.source.disconnect();
-      graph.nodes.forEach((node) => node.disconnect());
-      graph.nodes = connectReelAudioEffects(graph.context, graph.source, graph.context.destination, preset);
-      if (graph.context.state === 'suspended') {
-        void graph.context.resume().catch((error: unknown) => {
-          console.error('[RecordReel] Could not start audio preview:', error);
-          toast({
-            title: 'Audio preview could not start',
-            description: 'Tap the video or select an audio preset again to enable playback.',
-            variant: 'destructive',
-          });
-        });
-      }
-      return true;
-    } catch (error) {
-      console.error('[RecordReel] Could not apply audio preview:', error);
-      toast({
-        title: 'Audio preview unavailable',
-        description: 'This browser could not apply the selected audio effect. Try another preset or render the reel.',
-        variant: 'destructive',
-      });
-      return false;
-    }
-  }, [disposePreviewAudioGraph]);
-
   useEffect(() => {
     if (!videoUrl) disposePreviewAudioGraph();
   }, [videoUrl, disposePreviewAudioGraph]);
 
-  useEffect(() => () => disposePreviewAudioGraph(), [disposePreviewAudioGraph]);
-
   useEffect(() => {
-    if (previewAudioGraphRef.current) {
+    if (videoUrl) {
       applyPreviewAudioPreset(captionedVideoUrl ? 'original' : audioPreset);
     }
-  }, [audioPreset, captionedVideoUrl, applyPreviewAudioPreset]);
+  }, [audioPreset, captionedVideoUrl, videoUrl, applyPreviewAudioPreset]);
 
-  const renderCaptionedRecording = async () => {
+  const renderCaptionedRecording = async (
+    enhancements: ReelEnhancementOptions = { audioPreset, videoPreset },
+  ) => {
     const segmentsToRender = captionsEnabled ? captionSegments : [];
-    const hasEnhancements = audioPreset !== 'original' || videoPreset !== 'original';
+    const hasEnhancements = enhancements.audioPreset !== 'original' || enhancements.videoPreset !== 'original';
     if (!videoUrl || (!segmentsToRender.length && !videoAnimationEnabled && !hasEnhancements)) return null;
     setIsRenderingCaptions(true);
     setCaptionRenderProgress(0);
@@ -1028,7 +957,7 @@ const RecordReel = () => {
         captionStyle,
         videoAnimationEnabled,
         setCaptionRenderProgress,
-        { audioPreset, videoPreset },
+        enhancements,
       );
       if (captionedVideoUrl) URL.revokeObjectURL(captionedVideoUrl);
       setCaptionedVideoBlob(blob);
@@ -1039,18 +968,48 @@ const RecordReel = () => {
     }
   };
 
-  const handleRenderEffects = async () => {
+  const handleRenderEffects = async (
+    enhancements: ReelEnhancementOptions = { audioPreset, videoPreset },
+    announceSuccess = true,
+  ) => {
     try {
-      const blob = await renderCaptionedRecording();
-      if (blob) {
+      const blob = await renderCaptionedRecording(enhancements);
+      if (blob && announceSuccess) {
         toast({ title: 'Reel effects applied', description: 'Your reel is ready to preview with its selected effects.' });
       }
-    } catch (error: any) {
+    } catch (error) {
       toast({
         title: 'Could not process reel effects',
-        description: error.message || 'Try again or reset the audio and video presets.',
+        description: error instanceof Error ? error.message : 'Try again or reset the audio and video presets.',
         variant: 'destructive',
       });
+    }
+  };
+
+  const handleAudioPresetChange = (preset: ReelAudioPreset) => {
+    if (isRenderingCaptions || (preset === audioPreset && captionedVideoBlob)) return;
+    if (!applyPreviewAudioPreset(captionedVideoUrl ? 'original' : preset)) return;
+    clearCaptionRender();
+    setAudioPreset(preset);
+    const hasOtherEffects = preset !== 'original'
+      || videoPreset !== 'original'
+      || (captionsEnabled && captionSegments.length > 0)
+      || videoAnimationEnabled;
+    if (hasOtherEffects) {
+      void handleRenderEffects({ audioPreset: preset, videoPreset }, false);
+    }
+  };
+
+  const handleVideoPresetChange = (preset: ReelVideoPreset) => {
+    if (isRenderingCaptions || (preset === videoPreset && captionedVideoBlob)) return;
+    clearCaptionRender();
+    setVideoPreset(preset);
+    const hasOtherEffects = audioPreset !== 'original'
+      || preset !== 'original'
+      || (captionsEnabled && captionSegments.length > 0)
+      || videoAnimationEnabled;
+    if (hasOtherEffects) {
+      void handleRenderEffects({ audioPreset, videoPreset: preset }, false);
     }
   };
 
@@ -1167,7 +1126,7 @@ const RecordReel = () => {
   };
 
   const handleUpload = async () => {
-    if (!user || !caption || !recordedChunks.length || isUploading) {
+    if (!user || !caption || !recordedChunks.length || isUploading || isRenderingCaptions) {
       return;
     }
 
@@ -1372,10 +1331,8 @@ const RecordReel = () => {
       bright: 'Bright',
       vivid: 'Vivid',
     };
-    const hasEffectsToRender = (captionsEnabled && captionSegments.length > 0)
-      || videoAnimationEnabled
-      || audioPreset !== 'original'
-      || videoPreset !== 'original';
+    const hasCaptionEffects = (captionsEnabled && captionSegments.length > 0)
+      || videoAnimationEnabled;
 
     return (
       <div className="fixed inset-0 z-[9999] bg-black overflow-y-auto">
@@ -1450,81 +1407,35 @@ const RecordReel = () => {
           <section className="min-w-0 space-y-4 rounded-xl border border-gray-800 bg-gray-950/70 p-4 sm:p-5" aria-labelledby="reel-enhancements-title">
             <div>
               <h3 id="reel-enhancements-title" className="font-semibold text-white">Audio and video effects</h3>
-              <p className="mt-1 text-xs text-gray-400">Changes preview immediately. Render to include them in your reel.</p>
+              <p className="mt-1 text-xs text-gray-400">Changes preview and render automatically when selected.</p>
             </div>
+            <MediaEnhancementTabs
+              audioPreset={audioPreset}
+              videoPreset={videoPreset}
+              onAudioPresetChange={handleAudioPresetChange}
+              onVideoPresetChange={handleVideoPresetChange}
+              disabled={isRenderingCaptions}
+            />
+            {isRenderingCaptions && (
+              <p className="text-xs text-fuchsia-200" aria-live="polite">
+                Rendering selected effects automatically: {captionRenderProgress}%
+              </p>
+            )}
 
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium text-white">Audio</h4>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="group" aria-label="Audio enhancement preset">
-                {([
-                  ['original', 'Original'],
-                  ['voice-clarity', 'Voice clarity'],
-                  ['warm-studio', 'Warm studio'],
-                  ['bass-boost', 'Bass boost'],
-                  ['volume-boost', 'Volume boost'],
-                ] as const).map(([preset, label]) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    aria-pressed={audioPreset === preset}
-                    onClick={() => {
-                      if (!applyPreviewAudioPreset(captionedVideoUrl ? 'original' : preset)) return;
-                      clearCaptionRender();
-                      setAudioPreset(preset);
-                    }}
-                    className={`min-h-10 rounded-md border px-2 py-2 text-xs transition-colors sm:text-sm ${audioPreset === preset
-                      ? 'border-fuchsia-400 bg-fuchsia-500/15 text-white'
-                      : 'border-gray-700 text-gray-300 hover:border-gray-500'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium text-white">Video</h4>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="group" aria-label="Video enhancement preset">
-                {([
-                  ['original', 'Original'],
-                  ['balanced', 'Auto enhance'],
-                  ['bright', 'Bright'],
-                  ['vivid', 'Vivid'],
-                ] as const).map(([preset, label]) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    aria-pressed={videoPreset === preset}
-                    onClick={() => {
-                      clearCaptionRender();
-                      setVideoPreset(preset);
-                    }}
-                    className={`min-h-10 rounded-md border px-2 py-2 text-xs transition-colors sm:text-sm ${videoPreset === preset
-                      ? 'border-fuchsia-400 bg-fuchsia-500/15 text-white'
-                      : 'border-gray-700 text-gray-300 hover:border-gray-500'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {hasEffectsToRender && (
+            {hasCaptionEffects && (
               <Button
                 type="button"
                 variant="outline"
                 className="w-full"
-                onClick={handleRenderEffects}
+                onClick={() => void handleRenderEffects()}
                 disabled={isRenderingCaptions || Boolean(captionedVideoBlob)}
               >
                 <Video className="mr-2 h-4 w-4" />
                 {isRenderingCaptions
                   ? `Rendering ${captionRenderProgress}%`
                   : captionedVideoBlob
-                    ? 'Effects rendered'
-                    : 'Render effects for upload'}
+                    ? 'Captions and animation rendered'
+                    : 'Render captions and animation'}
               </Button>
             )}
 
@@ -1557,7 +1468,7 @@ const RecordReel = () => {
             <Button
               type="button"
               variant={captionsEnabled ? 'default' : 'outline'}
-              disabled={!captionSegments.length}
+              disabled={!captionSegments.length || isRenderingCaptions}
               aria-pressed={captionsEnabled}
               onClick={() => {
                 if (captionsEnabled) clearCaptionRender();
@@ -1580,6 +1491,7 @@ const RecordReel = () => {
               role="switch"
               aria-checked={videoAnimationEnabled}
               aria-label="Enable automatic video animation"
+              disabled={isRenderingCaptions}
               onClick={() => {
                 clearCaptionRender();
                 setVideoAnimationEnabled((enabled) => !enabled);
@@ -1603,9 +1515,11 @@ const RecordReel = () => {
                     type="button"
                     aria-pressed={captionStyle === style}
                     onClick={() => {
+                      if (isRenderingCaptions) return;
                       clearCaptionRender();
                       setCaptionStyle(style);
                     }}
+                    disabled={isRenderingCaptions}
                     className={`rounded-md border px-3 py-2 text-sm transition-colors ${captionStyle === style
                       ? 'border-fuchsia-400 bg-fuchsia-500/15 text-white'
                       : 'border-gray-700 text-gray-300 hover:border-gray-500'
@@ -1624,6 +1538,7 @@ const RecordReel = () => {
                       <textarea
                         value={segment.text}
                         onChange={(event) => updateCaptionSegment(segment.id, event.target.value)}
+                        disabled={isRenderingCaptions}
                         rows={2}
                         aria-label={`Edit caption line ${index + 1}`}
                         className="min-h-10 flex-1 resize-y rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white focus:border-fuchsia-500 focus:outline-none"
@@ -1756,7 +1671,7 @@ const RecordReel = () => {
                 </Button>
                 <Button
                   onClick={handleUpload}
-                  disabled={!caption || isUploading}
+                  disabled={!caption || isUploading || isRenderingCaptions}
                   className="rounded-full px-8 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg w-full sm:w-auto"
                   size="lg"
                 >

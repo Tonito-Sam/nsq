@@ -8,6 +8,7 @@ import { useToast } from '@/hooks/use-toast';
 import apiUrl from '@/lib/api';
 import { readJsonResponse } from '@/lib/readJsonResponse';
 import { supabase } from '@/integrations/supabase/client';
+import { getPodcastStudioEligibility } from '@/lib/podcastStudioEligibility';
 
 const PRIVATE_BUCKET = 'creator-podcast-drafts';
 const SIGNED_ASSET_TTL_SECONDS = 12 * 60 * 60;
@@ -118,8 +119,8 @@ export default function CreatorPodcastStudio() {
       setLoading(true);
       setError('');
       try {
-        const [eligibilityResult, pendingResult, approvedResult] = await Promise.all([
-          supabase.rpc('creator_can_use_podcast_studio'),
+        const [eligibility, pendingResult, approvedResult] = await Promise.all([
+          getPodcastStudioEligibility(user.id),
           supabase.from('studio_show_applications')
             .select('id')
             .eq('applicant_id', user.id)
@@ -131,14 +132,13 @@ export default function CreatorPodcastStudio() {
             .eq('status', 'approved')
             .limit(1),
         ]);
-        if (eligibilityResult.error) throw eligibilityResult.error;
+        if (!active) return;
+        setEligible(eligibility.eligible);
         if (pendingResult.error) throw pendingResult.error;
         if (approvedResult.error) throw approvedResult.error;
-        if (!active) return;
 
         const hasPendingApplication = Boolean(pendingResult.data?.length);
         const hasApprovedApplication = Boolean(approvedResult.data?.length);
-        setEligible(Boolean(eligibilityResult.data));
         setApplicationStatus(hasApprovedApplication ? 'approved' : hasPendingApplication ? 'pending' : 'none');
         await loadDrafts();
       } catch (loadError) {
@@ -609,7 +609,9 @@ export default function CreatorPodcastStudio() {
         <Button variant="ghost" onClick={() => navigate('/studio')}><ArrowLeft className="mr-2 h-4 w-4" />Back to Studio</Button>
         <section className="rounded-xl border p-6">
           <h1 className="text-xl font-semibold">Podcast Studio is locked</h1>
-          <p className="mt-2 text-sm text-muted-foreground">A Studio channel needs at least 10 reels and 1 subscriber to use Podcast Studio.</p>
+          {error
+            ? <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>
+            : <p className="mt-2 text-sm text-muted-foreground">A Studio channel needs at least 10 reels and 1 subscriber to use Podcast Studio.</p>}
         </section>
       </main>
     );

@@ -8,9 +8,11 @@ import { Input } from '@/components/ui/input';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-
-const MIN_PUBLISHED_VIDEOS = 10;
-const MIN_CHANNEL_SUBSCRIBERS = 1;
+import {
+  getPodcastStudioEligibility,
+  PODCAST_STUDIO_MIN_REELS,
+  PODCAST_STUDIO_MIN_SUBSCRIBERS,
+} from '@/lib/podcastStudioEligibility';
 
 const SHOW_CATEGORIES = [
   'Sports',
@@ -69,47 +71,23 @@ export const ShowSlotApplication = () => {
 
       setLoading(true);
       try {
-        const { data: channels, error: channelError } = await supabase
-          .from('studio_channels')
-          .select('id')
-          .eq('user_id', user.id)
-          .limit(1);
-
-        if (channelError) throw channelError;
-        const channel = channels?.[0];
-        if (!channel) {
-          if (current) setChannelId(null);
-          return;
-        }
-
-        const [{ count: videos, error: videosError }, { count: subscribers, error: subscribersError }, { data: applications, error: applicationsError }] = await Promise.all([
-          supabase
-            .from('studio_videos')
-            .select('id', { count: 'exact', head: true })
-            .eq('channel_id', channel.id)
-            .eq('user_id', user.id)
-            .eq('is_reel', true),
-          supabase
-            .from('studio_channel_subscribers')
-            .select('id', { count: 'exact', head: true })
-            .eq('channel_id', channel.id),
-          supabase
+        const eligibility = await getPodcastStudioEligibility(user.id);
+        const { data: applications, error: applicationsError } = eligibility.channelId
+          ? await supabase
             .from('studio_show_applications' as any)
             .select('id, show_title, category, status, reviewer_notes, approved_show_id')
-            .eq('channel_id', channel.id)
+            .eq('channel_id', eligibility.channelId)
             .in('status', ['pending', 'approved'])
             .order('created_at', { ascending: false })
-            .limit(1),
-        ]);
+            .limit(1)
+          : { data: [], error: null };
 
-        if (videosError) throw videosError;
-        if (subscribersError) throw subscribersError;
         if (applicationsError) throw applicationsError;
 
         if (current) {
-          setChannelId(channel.id);
-          setVideoCount(videos || 0);
-          setSubscriberCount(subscribers || 0);
+          setChannelId(eligibility.channelId);
+          setVideoCount(eligibility.reelCount);
+          setSubscriberCount(eligibility.subscriberCount);
           setApplication((applications?.[0] as ShowApplication | undefined) || null);
         }
       } catch (error) {
@@ -124,7 +102,8 @@ export const ShowSlotApplication = () => {
     return () => { current = false; };
   }, [user]);
 
-  const eligible = videoCount >= MIN_PUBLISHED_VIDEOS && subscriberCount >= MIN_CHANNEL_SUBSCRIBERS;
+  const eligible = videoCount >= PODCAST_STUDIO_MIN_REELS
+    && subscriberCount >= PODCAST_STUDIO_MIN_SUBSCRIBERS;
 
   const toggleDay = (day: string) => {
     setPreferredDays((selected) => selected.includes(day)
@@ -231,7 +210,7 @@ export const ShowSlotApplication = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-            Eligibility: {videoCount} / {MIN_PUBLISHED_VIDEOS} Studio videos and {subscriberCount} / {MIN_CHANNEL_SUBSCRIBERS} channel subscribers.
+            Eligibility: {videoCount} / {PODCAST_STUDIO_MIN_REELS} Studio reels and {subscriberCount} / {PODCAST_STUDIO_MIN_SUBSCRIBERS} channel subscribers.
           </div>
           <form id="show-slot-application" onSubmit={submitApplication} className="space-y-4">
             <div className="space-y-1.5">

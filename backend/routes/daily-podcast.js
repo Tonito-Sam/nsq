@@ -88,32 +88,36 @@ async function requirePodcastAccess(req, res, next) {
 
     const { data: channels } = await axios.get(`${SUPABASE_URL}/rest/v1/studio_channels`, {
       headers: serviceHeaders(),
-      params: { select: 'id', user_id: `eq.${user.id}`, limit: 1 },
+      params: { select: 'id', user_id: `eq.${user.id}`, order: 'created_at.asc', limit: 100 },
       timeout: 10000,
     });
-    const channelId = channels?.[0]?.id;
-    if (!channelId) return res.status(403).json({ error: 'A qualifying Studio channel is required to create podcast scripts' });
+    if (!channels?.length) {
+      return res.status(403).json({ error: 'A qualifying Studio channel is required to create podcast scripts' });
+    }
 
-    const [videosResult, subscribersResult] = await Promise.all([
-      axios.get(`${SUPABASE_URL}/rest/v1/studio_videos`, {
-        headers: serviceHeaders(),
-        params: {
-          select: 'id',
-          user_id: `eq.${user.id}`,
-          channel_id: `eq.${channelId}`,
-          is_reel: 'eq.true',
-          limit: 10,
-        },
-        timeout: 10000,
-      }),
-      axios.get(`${SUPABASE_URL}/rest/v1/studio_channel_subscribers`, {
-        headers: serviceHeaders(),
-        params: { select: 'id', channel_id: `eq.${channelId}`, limit: 1 },
-        timeout: 10000,
-      }),
-    ]);
+    const channelEligibility = await Promise.all(channels.map(async ({ id: channelId }) => {
+      const [videosResult, subscribersResult] = await Promise.all([
+        axios.get(`${SUPABASE_URL}/rest/v1/studio_videos`, {
+          headers: serviceHeaders(),
+          params: {
+            select: 'id',
+            user_id: `eq.${user.id}`,
+            channel_id: `eq.${channelId}`,
+            is_reel: 'eq.true',
+            limit: 10,
+          },
+          timeout: 10000,
+        }),
+        axios.get(`${SUPABASE_URL}/rest/v1/studio_channel_subscribers`, {
+          headers: serviceHeaders(),
+          params: { select: 'id', channel_id: `eq.${channelId}`, limit: 1 },
+          timeout: 10000,
+        }),
+      ]);
+      return (videosResult.data || []).length >= 10 && Boolean(subscribersResult.data?.length);
+    }));
 
-    if ((videosResult.data || []).length < 10 || !(subscribersResult.data || []).length) {
+    if (!channelEligibility.includes(true)) {
       return res.status(403).json({ error: 'Podcast script generation is available to creators with at least 10 Studio reels and 1 channel subscriber' });
     }
 

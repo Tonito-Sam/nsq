@@ -4,6 +4,7 @@ import { Search, ChevronDown, X, Video, Grid3x3, Flame, Upload, Tv, Mic2 } from 
 import { ProfileDropdown } from '@/components/header/ProfileDropdown';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { getPodcastStudioEligibility } from '@/lib/podcastStudioEligibility';
 
 interface StudioHeaderProps {
   categories: { name: string; icon: React.ElementType }[];
@@ -66,12 +67,12 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
     const fetchPodcastEligibility = async () => {
       setPodcastEligible(false);
       if (!user) return;
-      const { data, error } = await supabase.rpc('creator_can_use_podcast_studio');
-      if (error) {
+      try {
+        const eligibility = await getPodcastStudioEligibility(user.id);
+        if (!cancelled) setPodcastEligible(eligibility.eligible);
+      } catch (error) {
         console.error('Could not check Podcast Studio eligibility:', error);
-        return;
       }
-      if (!cancelled) setPodcastEligible(Boolean(data));
     };
     void fetchPodcastEligibility();
     return () => { cancelled = true; };
