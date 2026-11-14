@@ -1,6 +1,11 @@
 const express = require('express');
 const axios = require('axios');
 const RSSParser = require('rss-parser');
+const {
+  createDailyPodcastRundown,
+  getUsableSummary,
+  isLowQualityStreamHeadline,
+} = require('../utils/dailyPodcastRundown.cjs');
 
 const router = express.Router();
 const parser = new RSSParser({ timeout: 10000 });
@@ -52,6 +57,73 @@ async function requireAdmin(req, res, next) {
     const status = error.response?.status || 500;
     if (status >= 500) console.error('Daily newsroom authentication failed:', error.message);
     return res.status(status === 401 ? 401 : 503).json({ error: 'Could not verify your admin session' });
+  }
+}
+
+async function requirePodcastAccess(req, res, next) {
+  const accessToken = req.get('authorization')?.replace(/^Bearer\s+/i, '');
+  if (!accessToken) return res.status(401).json({ error: 'Sign in to create a podcast script' });
+  if (!SUPABASE_URL || !SERVICE_ROLE) {
+    return res.status(503).json({ error: 'Podcast authentication is not configured on the server' });
+  }
+
+  try {
+    const { data: user } = await axios.get(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: serviceHeaders({ Authorization: `Bearer ${accessToken}` }),
+      timeout: 10000,
+    });
+    if (!user?.id) return res.status(401).json({ error: 'Your session is invalid or expired' });
+
+    const { data: profiles } = await axios.get(`${SUPABASE_URL}/rest/v1/users`, {
+      headers: serviceHeaders(),
+      params: { select: 'privilege', id: `eq.${user.id}`, limit: 1 },
+      timeout: 10000,
+    });
+    const privilege = profiles?.[0]?.privilege;
+    if (privilege === 'admin' || privilege === 'superadmin') {
+      req.podcastUser = user;
+      req.isPodcastAdmin = true;
+      return next();
+    }
+
+    const { data: channels } = await axios.get(`${SUPABASE_URL}/rest/v1/studio_channels`, {
+      headers: serviceHeaders(),
+      params: { select: 'id', user_id: `eq.${user.id}`, limit: 1 },
+      timeout: 10000,
+    });
+    const channelId = channels?.[0]?.id;
+    if (!channelId) return res.status(403).json({ error: 'A qualifying Studio channel is required to create podcast scripts' });
+
+    const [videosResult, subscribersResult] = await Promise.all([
+      axios.get(`${SUPABASE_URL}/rest/v1/studio_videos`, {
+        headers: serviceHeaders(),
+        params: {
+          select: 'id',
+          user_id: `eq.${user.id}`,
+          channel_id: `eq.${channelId}`,
+          is_reel: 'eq.true',
+          limit: 10,
+        },
+        timeout: 10000,
+      }),
+      axios.get(`${SUPABASE_URL}/rest/v1/studio_channel_subscribers`, {
+        headers: serviceHeaders(),
+        params: { select: 'id', channel_id: `eq.${channelId}`, limit: 1 },
+        timeout: 10000,
+      }),
+    ]);
+
+    if ((videosResult.data || []).length < 10 || !(subscribersResult.data || []).length) {
+      return res.status(403).json({ error: 'Podcast script generation is available to creators with at least 10 Studio reels and 1 channel subscriber' });
+    }
+
+    req.podcastUser = user;
+    req.isPodcastAdmin = false;
+    return next();
+  } catch (error) {
+    const status = error.response?.status || 500;
+    if (status >= 500) console.error('Podcast access verification failed:', error.message);
+    return res.status(status === 401 ? 401 : 503).json({ error: 'Could not verify access to podcast script generation' });
   }
 }
 
@@ -208,16 +280,17 @@ router.post('/stories', requireAdmin, async (req, res) => {
         const title = cleanText(item.title, 300);
         const headline = title.replace(/\s+-\s+[^-]+$/, '').trim() || title;
         const source = getStorySource(title, item.source?.name);
+        const summary = cleanText(item.contentSnippet || item.content || item.summary, 700);
         return {
           id: `${category}-${Buffer.from(normalizeHeadline(headline)).toString('base64url').slice(0, 32)}`,
           category,
           headline,
-          summary: cleanText(item.contentSnippet || item.content || item.summary, 700),
+          summary: getUsableSummary({ headline, source, summary }),
           source,
           publishedAt: item.isoDate || item.pubDate || null,
           url: item.link || '',
         };
-      });
+      }).filter((story) => !isLowQualityStreamHeadline(story.headline));
     }));
 
     const storiesByHeadline = new Map();
@@ -250,8 +323,11 @@ router.post('/stories', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/script', requireAdmin, async (req, res) => {
+router.post('/script', requirePodcastAccess, async (req, res) => {
   const stories = Array.isArray(req.body?.stories) ? req.body.stories.slice(0, 12) : [];
+  if (!req.isPodcastAdmin && stories.length) {
+    return res.status(403).json({ error: 'Creator Podcast Studio supports creator topics, not the admin newsroom story feed' });
+  }
 
   const safeStories = stories.map((story) => ({
     category: cleanText(story.category, 80),
@@ -260,6 +336,9 @@ router.post('/script', requireAdmin, async (req, res) => {
     source: cleanText(story.source, 120),
     publishedAt: cleanText(story.publishedAt, 80),
     url: cleanText(story.url, 1000),
+    categories: Array.isArray(story.categories)
+      ? story.categories.map((category) => cleanText(category, 80)).filter(Boolean).slice(0, 5)
+      : [],
     coverageCount: Number(story.coverageCount) || 0,
   }));
   if (safeStories.some((story) => !story.headline || !story.url)) {
@@ -280,58 +359,19 @@ router.post('/script', requireAdmin, async (req, res) => {
   const selectedStories = safeStories
     .sort((a, b) => b.coverageCount - a.coverageCount || new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0))
     .slice(0, Math.min(safeStories.length, Math.max(3, Math.round(duration / 4))));
-  const lines = [
+  const customAngles = customTopic ? getConversationAngles(customCategory, customTopic) : [];
+  const script = createDailyPodcastRundown({
+    stories: selectedStories,
+    hostOne,
+    hostTwo,
     showTitle,
-    `Target runtime: ${duration} minutes`,
-    selectedStories.length
-      ? 'PRODUCTION NOTE: This rundown is assembled from publisher headlines and RSS summaries. Verify details at the linked sources before recording; do not treat discussion prompts as reported facts.'
-      : 'PRODUCTION NOTE: The custom-topic angles are discussion prompts, not reported facts. Add and verify reliable sources before making factual claims.',
-    '',
-    'OPENING',
-    `${hostOne}: Welcome to ${showTitle}. ${selectedStories.length ? 'Here is today’s source-led briefing, beginning with the story receiving the strongest coverage across our selected news feeds.' : 'Today we are opening a focused conversation around the topic you asked us to explore.'}`,
-    `${hostTwo}: We will move through the selected stories and discussion beats, separating reported facts from questions, perspectives, and personal reflection.`,
-    '',
-  ];
-
-  selectedStories.forEach((story, index) => {
-    const category = story.categories?.[0] || story.category || 'Top stories';
-    const summary = story.summary || story.headline;
-    const published = story.publishedAt && !Number.isNaN(Date.parse(story.publishedAt))
-      ? new Date(story.publishedAt).toLocaleDateString('en-GB', { timeZone: 'UTC' })
-      : 'Date not provided';
-    lines.push(
-      `SEGMENT ${index + 1}: ${category} | ${story.headline}`,
-      `${hostOne}: ${index === 0 ? 'Our lead story today' : 'Next in the rundown'}: ${story.headline}.`,
-      `${hostTwo}: The available report from ${story.source || 'the linked publisher'} says: ${summary}`,
-      `${hostOne}: Let’s separate what this report confirms from what still needs more reporting. What context would listeners need to understand the people and decisions involved?`,
-      `${hostTwo}: That is worth discussing, while keeping any conclusions tied to the reporting we have in front of us.`,
-      `SOURCE: ${story.source || 'Publisher'} | Published: ${published} | ${story.url}`,
-      '',
-    );
+    duration,
+    customTopic,
+    customCategory,
+    customAngles,
   });
 
-  if (customTopic) {
-    const angles = getConversationAngles(customCategory, customTopic);
-    angles.forEach((angle, index) => {
-      lines.push(
-        `SEGMENT ${selectedStories.length + index + 1}: ${customCategory} | ${customTopic} — ${angle.title}`,
-        `ANGLE: ${angle.title}`,
-        `${hostOne}: For this part of “${customTopic},” let’s look at it this way: ${angle.setup}`,
-        `${hostTwo}: ${angle.question}`,
-        `${hostOne}: ${angle.followUp}`,
-        `${hostTwo}: Let’s stay with that perspective for a moment, then bring in a different experience or counterpoint before we move on.`,
-        '',
-      );
-    });
-  }
-
-  lines.push(
-    'CLOSING',
-    `${hostOne}: ${selectedStories.length ? 'That is today’s rundown. We have linked the original reports so listeners can read the full coverage and follow developing details.' : 'That is today’s conversation. We have explored several angles, and the questions we could not settle are worth carrying forward.'}`,
-    `${hostTwo}: Thanks for listening to ${showTitle}.${selectedStories.length ? ' We will return with another update as the stories develop.' : ' We hope you will keep thinking about the perspectives we explored.'}`,
-  );
-
-  return res.json({ script: lines.join('\n'), generator: 'built-in-rundown', generatedAt: new Date().toISOString() });
+  return res.json({ script, generator: 'built-in-conversation-rundown', generatedAt: new Date().toISOString() });
 });
 
 module.exports = router;

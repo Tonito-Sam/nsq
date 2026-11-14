@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Search, ChevronDown, X, Video, Grid3x3, Flame, Upload, Tv } from 'lucide-react';
+import { Search, ChevronDown, X, Video, Grid3x3, Flame, Upload, Tv, Mic2 } from 'lucide-react';
 import { ProfileDropdown } from '@/components/header/ProfileDropdown';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -36,6 +36,7 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
   const [searchType, setSearchType] = useState<'all' | 'creators' | 'channels' | 'videos'>('all');
   const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
   const [approvedShowId, setApprovedShowId] = useState<string | null>(null);
+  const [podcastEligible, setPodcastEligible] = useState(false);
   const { user } = useAuth();
 
   useEffect(() => {
@@ -62,13 +63,29 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
 
   useEffect(() => {
     let cancelled = false;
+    const fetchPodcastEligibility = async () => {
+      setPodcastEligible(false);
+      if (!user) return;
+      const { data, error } = await supabase.rpc('creator_can_use_podcast_studio');
+      if (error) {
+        console.error('Could not check Podcast Studio eligibility:', error);
+        return;
+      }
+      if (!cancelled) setPodcastEligible(Boolean(data));
+    };
+    void fetchPodcastEligibility();
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
 
     const fetchApprovedShow = async () => {
       setApprovedShowId(null);
       if (!user) return;
 
       const { data, error } = await supabase
-        .from('studio_show_applications' as any)
+        .from('studio_show_applications')
         .select('approved_show_id')
         .eq('applicant_id', user.id)
         .eq('status', 'approved')
@@ -283,6 +300,17 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
                   title="Open your approved TV show"
                 >
                   <Tv className="w-4 h-4" />
+                </button>
+              )}
+              {podcastEligible && (
+                <button
+                  type="button"
+                  onClick={() => navigate('/studio/podcast')}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-white/10 transition-colors"
+                  aria-label="Open Creator Podcast Studio"
+                  title="Open Creator Podcast Studio"
+                >
+                  <Mic2 className="w-4 h-4" />
                 </button>
               )}
               <button

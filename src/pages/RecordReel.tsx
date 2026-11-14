@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 import { Skeleton } from '@/components/ui/skeleton';
 import { 
-  Lock, 
   Camera, 
   Clock, 
   ChevronLeft, 
@@ -28,8 +27,6 @@ import {
   RotateCw,
   AlertCircle,
   Tag, // ADDED
-  Users, // ADDED
-  Globe, // ADDED
   Share2
 } from 'lucide-react';
 import { 
@@ -45,9 +42,13 @@ import { ShowSlotApplication } from '@/components/studio/ShowSlotApplication';
 import {
   getAutoCameraTransform,
   getCaptionWordIndex,
+  connectReelAudioEffects,
+  getReelVideoFilter,
   renderCaptionedReel,
+  type ReelAudioPreset,
   type ReelCaptionSegment,
   type ReelCaptionStyle,
+  type ReelVideoPreset,
 } from '@/utils/animatedReelCaptions';
 import {
   createReelBackgroundProcessor,
@@ -75,6 +76,13 @@ type SpeechRecognitionLike = {
   start: () => void;
   stop: () => void;
   abort: () => void;
+};
+
+type ReelPreviewAudioGraph = {
+  video: HTMLVideoElement;
+  context: AudioContext;
+  source: MediaElementAudioSourceNode;
+  nodes: AudioNode[];
 };
 
 const RecordReel = () => {
@@ -106,10 +114,13 @@ const RecordReel = () => {
   const [captionedVideoUrl, setCaptionedVideoUrl] = useState<string | null>(null);
   const [isRenderingCaptions, setIsRenderingCaptions] = useState(false);
   const [captionRenderProgress, setCaptionRenderProgress] = useState(0);
+  const [audioPreset, setAudioPreset] = useState<ReelAudioPreset>('original');
+  const [videoPreset, setVideoPreset] = useState<ReelVideoPreset>('original');
   const captionSegmentsRef = useRef<ReelCaptionSegment[]>([]);
   const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recordingStartedAtRef = useRef<number | null>(null);
   const recordedPreviewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const previewAudioGraphRef = useRef<ReelPreviewAudioGraph | null>(null);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoDeviceId, setVideoDeviceId] = useState<string | null>(null);
@@ -129,11 +140,6 @@ const RecordReel = () => {
   // ADDED: Share to feed states
   const [shareToFeed, setShareToFeed] = useState(false);
   const [shareToMoment, setShareToMoment] = useState(false);
-  const [feedCaption, setFeedCaption] = useState('');
-  const feedCaptionRef = useRef<HTMLTextAreaElement | null>(null);
-  const [feedCategories, setFeedCategories] = useState<string[]>([]);
-  const [feedAudience, setFeedAudience] = useState<'public' | 'followers' | 'private'>('public');
-  const [showShareSettings, setShowShareSettings] = useState(false);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -151,13 +157,6 @@ const RecordReel = () => {
     'All', 'Tech', 'Comedy', 'Sports', 'Education', 'Inspiration',
     'Music', 'Gaming', 'Food', 'Fitness', 'Lifestyle', 'Art',
     'Kickstart',
-  ];
-
-  // ADDED: Audience options
-  const AUDIENCE_OPTIONS = [
-    { id: 'public', label: 'Public', icon: Globe, description: 'Visible to everyone' },
-    { id: 'followers', label: 'Followers', icon: Users, description: 'Only your followers' },
-    { id: 'private', label: 'Private', icon: Lock, description: 'Only you' }
   ];
 
   const startBackgroundProcessor = useCallback(async () => {
@@ -924,21 +923,6 @@ const RecordReel = () => {
     });
   };
 
-  const handleFeedCaptionChange = (e: any) => {
-    const val = e.target.value;
-    const start = e.target.selectionStart ?? val.length;
-    const end = e.target.selectionEnd ?? start;
-    setFeedCaption(val);
-    requestAnimationFrame(() => {
-      try {
-        if (feedCaptionRef.current) {
-          feedCaptionRef.current.setSelectionRange(start, end);
-          feedCaptionRef.current.focus();
-        }
-      } catch (e) {}
-    });
-  };
-
   const clearCaptionRender = () => {
     if (captionedVideoUrl) URL.revokeObjectURL(captionedVideoUrl);
     setCaptionedVideoUrl(null);
@@ -946,9 +930,95 @@ const RecordReel = () => {
     setCaptionRenderProgress(0);
   };
 
+  const disposePreviewAudioGraph = useCallback(() => {
+    const graph = previewAudioGraphRef.current;
+    if (!graph) return;
+
+    graph.source.disconnect();
+    graph.nodes.forEach((node) => node.disconnect());
+    previewAudioGraphRef.current = null;
+    if (graph.context.state !== 'closed') {
+      void graph.context.close().catch((error: unknown) => {
+        console.error('[RecordReel] Could not close audio preview:', error);
+      });
+    }
+  }, []);
+
+  const applyPreviewAudioPreset = useCallback((preset: ReelAudioPreset) => {
+    const video = recordedPreviewVideoRef.current;
+    if (!video) return false;
+
+    let graph = previewAudioGraphRef.current;
+    if (preset === 'original' && !graph) return true;
+
+    try {
+      if (graph && graph.video !== video) {
+        disposePreviewAudioGraph();
+        graph = null;
+      }
+
+      if (!graph) {
+        const browserWindow = window as Window & { webkitAudioContext?: typeof AudioContext };
+        const AudioContextConstructor = window.AudioContext || browserWindow.webkitAudioContext;
+        if (!AudioContextConstructor) {
+          toast({
+            title: 'Audio preview unavailable',
+            description: 'This browser cannot preview audio enhancements. You can still render the selected effects.',
+            variant: 'destructive',
+          });
+          return false;
+        }
+        const context = new AudioContextConstructor();
+        graph = {
+          video,
+          context,
+          source: context.createMediaElementSource(video),
+          nodes: [],
+        };
+        previewAudioGraphRef.current = graph;
+      }
+
+      graph.source.disconnect();
+      graph.nodes.forEach((node) => node.disconnect());
+      graph.nodes = connectReelAudioEffects(graph.context, graph.source, graph.context.destination, preset);
+      if (graph.context.state === 'suspended') {
+        void graph.context.resume().catch((error: unknown) => {
+          console.error('[RecordReel] Could not start audio preview:', error);
+          toast({
+            title: 'Audio preview could not start',
+            description: 'Tap the video or select an audio preset again to enable playback.',
+            variant: 'destructive',
+          });
+        });
+      }
+      return true;
+    } catch (error) {
+      console.error('[RecordReel] Could not apply audio preview:', error);
+      toast({
+        title: 'Audio preview unavailable',
+        description: 'This browser could not apply the selected audio effect. Try another preset or render the reel.',
+        variant: 'destructive',
+      });
+      return false;
+    }
+  }, [disposePreviewAudioGraph]);
+
+  useEffect(() => {
+    if (!videoUrl) disposePreviewAudioGraph();
+  }, [videoUrl, disposePreviewAudioGraph]);
+
+  useEffect(() => () => disposePreviewAudioGraph(), [disposePreviewAudioGraph]);
+
+  useEffect(() => {
+    if (previewAudioGraphRef.current) {
+      applyPreviewAudioPreset(captionedVideoUrl ? 'original' : audioPreset);
+    }
+  }, [audioPreset, captionedVideoUrl, applyPreviewAudioPreset]);
+
   const renderCaptionedRecording = async () => {
     const segmentsToRender = captionsEnabled ? captionSegments : [];
-    if (!videoUrl || (!segmentsToRender.length && !videoAnimationEnabled)) return null;
+    const hasEnhancements = audioPreset !== 'original' || videoPreset !== 'original';
+    if (!videoUrl || (!segmentsToRender.length && !videoAnimationEnabled && !hasEnhancements)) return null;
     setIsRenderingCaptions(true);
     setCaptionRenderProgress(0);
     try {
@@ -958,6 +1028,7 @@ const RecordReel = () => {
         captionStyle,
         videoAnimationEnabled,
         setCaptionRenderProgress,
+        { audioPreset, videoPreset },
       );
       if (captionedVideoUrl) URL.revokeObjectURL(captionedVideoUrl);
       setCaptionedVideoBlob(blob);
@@ -968,16 +1039,16 @@ const RecordReel = () => {
     }
   };
 
-  const handleRenderCaptions = async () => {
+  const handleRenderEffects = async () => {
     try {
       const blob = await renderCaptionedRecording();
       if (blob) {
-        toast({ title: 'Captioned reel ready', description: 'The animated captions are now part of your video.' });
+        toast({ title: 'Reel effects applied', description: 'Your reel is ready to preview with its selected effects.' });
       }
     } catch (error: any) {
       toast({
-        title: 'Could not render captions',
-        description: error.message || 'Try again or upload the original recording.',
+        title: 'Could not process reel effects',
+        description: error.message || 'Try again or reset the audio and video presets.',
         variant: 'destructive',
       });
     }
@@ -1105,10 +1176,15 @@ const RecordReel = () => {
     try {
       let mimeType = currentMimeType || getSafariCompatibleMimeType();
       let blob = createSafariCompatibleVideoBlob(recordedChunks, mimeType);
-      if ((captionsEnabled && captionSegments.length > 0) || videoAnimationEnabled) {
-        errorStep = 'caption rendering';
+      if (
+        (captionsEnabled && captionSegments.length > 0)
+        || videoAnimationEnabled
+        || audioPreset !== 'original'
+        || videoPreset !== 'original'
+      ) {
+        errorStep = 'reel processing';
         const renderedBlob = captionedVideoBlob || await renderCaptionedRecording();
-        if (!renderedBlob) throw new Error('Could not render the animated captions.');
+        if (!renderedBlob) throw new Error('Could not process the selected reel effects.');
         blob = renderedBlob;
         mimeType = blob.type || mimeType;
       }
@@ -1233,8 +1309,6 @@ const RecordReel = () => {
       setIsUploading(false);
       setCaption('');
       setSelectedCategories([]);
-      setFeedCaption('');
-      setFeedCategories([]);
       setShareToFeed(false);
       setShareToMoment(false);
       clearCaptionRender();
@@ -1254,217 +1328,15 @@ const RecordReel = () => {
       }
     } catch (err: any) {
       console.error('Upload error at step:', errorStep, err);
-      if (errorStep === 'caption rendering') {
+      if (errorStep === 'reel processing') {
         toast({
-          title: 'Caption rendering failed',
-          description: err.message || 'Try rendering again or turn captions off to upload the original video.',
+          title: 'Reel processing failed',
+          description: err.message || 'Try again or reset the audio and video presets.',
           variant: 'destructive',
         });
       }
       setIsUploading(false);
     }
-  };
-
-  // ADDED: Share to Feed Settings Modal
-  const ShareToFeedModal = () => {
-    if (!videoUrl || !showShareSettings) return null;
-
-    return (
-      <div className="fixed inset-0 z-[10000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-        <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-2xl border border-gray-800 w-full max-w-md max-h-[80vh] overflow-y-auto">
-          {/* Header */}
-          <div className="p-6 border-b border-gray-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 flex items-center justify-center">
-                  <Upload className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-white">Share to Feed</h3>
-                  <p className="text-sm text-gray-400">Customize how your reel appears in the feed</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowShareSettings(false)}
-                className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center hover:bg-gray-700 transition-colors"
-              >
-                <X className="w-4 h-4 text-gray-400" />
-              </button>
-            </div>
-          </div>
-
-          {/* Content */}
-          <div className="p-6 space-y-6">
-            {/* Caption */}
-            <div>
-              <label className="text-sm font-medium text-white mb-2 flex items-center gap-2">
-                <Hash className="h-4 w-4 text-gray-400" />
-                Feed Caption
-              </label>
-              <textarea
-                placeholder="Add a caption for your feed post..."
-                value={feedCaption}
-                onChange={handleFeedCaptionChange}
-                ref={feedCaptionRef}
-                className="w-full min-h-[80px] rounded-lg border border-gray-700 bg-gray-900/50 px-3 py-2 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-600 focus:border-transparent"
-              />
-              <div className="text-xs text-gray-500 mt-1">
-                {feedCaption.length}/280 characters
-              </div>
-            </div>
-
-            {/* Categories */}
-            <div>
-              <label className="text-sm font-medium text-white mb-3 flex items-center gap-2">
-                <Tag className="h-4 w-4 text-gray-400" />
-                Feed Categories
-                <span className="text-xs text-gray-500">(Optional)</span>
-              </label>
-              <div className="flex flex-wrap gap-2 mb-3">
-                {CATEGORY_OPTIONS.map(cat => {
-                  const selected = feedCategories.includes(cat);
-                  const disabled = !selected && feedCategories.length >= 3;
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => {
-                        if (selected) {
-                          setFeedCategories(feedCategories.filter(c => c !== cat));
-                        } else if (feedCategories.length < 3) {
-                          setFeedCategories([...feedCategories, cat]);
-                        }
-                      }}
-                      disabled={disabled}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
-                        selected
-                          ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white'
-                          : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                      } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      {cat}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="text-xs text-gray-500">
-                {feedCategories.length === 0 ? (
-                  "No categories selected"
-                ) : feedCategories.length === 3 ? (
-                  <span className="text-green-400">✓ Maximum categories selected</span>
-                ) : (
-                  `${3 - feedCategories.length} more can be selected`
-                )}
-              </div>
-            </div>
-
-            {/* Audience */}
-            <div>
-              <label className="text-sm font-medium text-white mb-3 flex items-center gap-2">
-                <Globe className="h-4 w-4 text-gray-400" />
-                Audience
-              </label>
-              <div className="grid grid-cols-1 gap-2">
-                {AUDIENCE_OPTIONS.map((option) => {
-                  const Icon = option.icon;
-                  const selected = feedAudience === option.id;
-                  return (
-                    <button
-                      key={option.id}
-                      onClick={() => setFeedAudience(option.id as any)}
-                      className={`p-4 rounded-xl border transition-all text-left ${
-                        selected
-                          ? 'border-purple-500 bg-gradient-to-r from-purple-600/10 to-pink-600/10'
-                          : 'border-gray-700 bg-gray-900/30 hover:border-gray-600'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                          selected 
-                            ? 'bg-gradient-to-r from-purple-600 to-pink-600' 
-                            : 'bg-gray-800'
-                        }`}>
-                          <Icon className="w-5 h-5 text-white" />
-                        </div>
-                        <div>
-                          <div className="font-medium text-white">{option.label}</div>
-                          <div className="text-xs text-gray-400">{option.description}</div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Preview */}
-            <div className="pt-4 border-t border-gray-800">
-              <div className="text-sm font-medium text-white mb-3">Preview</div>
-              <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 flex items-center justify-center">
-                    <span className="text-white font-bold">Y</span>
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-white">You</div>
-                    <div className="text-xs text-gray-400">Just now</div>
-                  </div>
-                </div>
-                <div className="text-sm text-white mb-3">
-                  {feedCaption || caption || "Check out my new reel!"}
-                </div>
-                <div className="aspect-video bg-gray-800 rounded-lg flex items-center justify-center">
-                  <Video className="w-12 h-12 text-gray-600" />
-                </div>
-                <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-800">
-                  <div className="flex items-center gap-1 text-xs text-gray-400">
-                    <span>❤️</span>
-                    <span>0 likes</span>
-                  </div>
-                  <div className="flex items-center gap-1 text-xs text-gray-400">
-                    <span>💬</span>
-                    <span>0 comments</span>
-                  </div>
-                  <div className="flex items-center gap-1 text-xs text-gray-400 ml-auto">
-                    <span>👁️</span>
-                    <span>{feedAudience === 'public' ? 'Public' : feedAudience === 'followers' ? 'Followers only' : 'Private'}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Footer */}
-          <div className="p-6 border-t border-gray-800">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => {
-                  setShowShareSettings(false);
-                  setShareToFeed(false);
-                }}
-                className="flex-1 py-3 px-4 rounded-xl bg-gray-800 text-white font-medium hover:bg-gray-700 transition-colors"
-              >
-                Skip Feed
-              </button>
-                <button
-                onClick={() => {
-                  setShowShareSettings(false);
-                  handleUpload();
-                }}
-                disabled={isUploading}
-                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 text-white font-medium hover:from-purple-700 hover:to-pink-700 transition-all disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {isUploading ? (
-                  <span className="inline-flex items-center gap-2"><div className="animate-spin h-4 w-4 rounded-full border-b-2 border-white" /> <span className="text-sm">Uploading</span></span>
-                ) : 'Share to Feed'}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      // (fixed action was moved into RecordedPreview to avoid duplicate controls)
-    );
   };
 
   // Recorded Video Preview Section
@@ -1487,6 +1359,23 @@ const RecordReel = () => {
       previewVideo?.videoWidth || 0,
       previewVideo?.videoHeight || 0,
     );
+    const audioPresetLabels: Record<ReelAudioPreset, string> = {
+      original: 'Original',
+      'voice-clarity': 'Voice clarity',
+      'warm-studio': 'Warm studio',
+      'bass-boost': 'Bass boost',
+      'volume-boost': 'Volume boost',
+    };
+    const videoPresetLabels: Record<ReelVideoPreset, string> = {
+      original: 'Original',
+      balanced: 'Auto enhance',
+      bright: 'Bright',
+      vivid: 'Vivid',
+    };
+    const hasEffectsToRender = (captionsEnabled && captionSegments.length > 0)
+      || videoAnimationEnabled
+      || audioPreset !== 'original'
+      || videoPreset !== 'original';
 
     return (
       <div className="fixed inset-0 z-[9999] bg-black overflow-y-auto">
@@ -1509,53 +1398,145 @@ const RecordReel = () => {
           </div>
         </div>
 
-        {/* Video Preview */}
-        <div className="flex items-center justify-center bg-black w-full py-6">
-          <div className="relative w-full overflow-hidden">
-            <video
-              ref={recordedPreviewVideoRef}
-              src={captionedVideoUrl || videoUrl}
-              controls
-              autoPlay
-              playsInline
-              onTimeUpdate={(event) => setPreviewTime(event.currentTarget.currentTime)}
-              className="w-full"
-              style={{
-                maxHeight: '60vh',
-                width: '100%',
-                objectFit: 'cover',
-                transform: `translate3d(${previewVideo?.videoWidth ? (previewTransform.offsetX / previewVideo.videoWidth) * 100 : 0}%, ${previewVideo?.videoHeight ? (previewTransform.offsetY / previewVideo.videoHeight) * 100 : 0}%, 0) scale(${previewTransform.zoom})`,
-              }}
-            />
-            {activeSegment && segmentWords.length > 0 && (
-              <div className="pointer-events-none absolute inset-x-4 bottom-[18%] flex justify-center">
-                <div
-                  className={`max-w-[88%] rounded-xl px-4 py-2 text-center text-lg font-extrabold leading-snug text-white shadow-xl sm:text-2xl ${
-                    captionStyle === 'kinetic'
-                      ? 'bg-fuchsia-600'
-                      : captionStyle === 'karaoke'
-                        ? 'bg-black/75'
-                        : 'bg-black/65'
-                  }`}
-                  style={captionStyle === 'kinetic' ? {
-                    transform: `scale(${0.94 + Math.sin(segmentProgress * Math.PI) * 0.08})`,
-                  } : undefined}
-                >
-                  {captionStyle === 'karaoke' ? segmentWords.map((word, index) => (
-                    <span key={`${activeSegment.id}-${index}`} className={index === activeWordIndex ? 'mx-1 text-yellow-300' : 'mx-1'}>
-                      {word}
-                    </span>
-                  )) : captionStyle === 'kinetic'
-                    ? segmentWords[activeWordIndex]
-                    : activeSegment.text}
-                </div>
+        <div className="mx-auto grid w-full max-w-7xl grid-cols-1 items-start gap-4 px-3 py-4 sm:px-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(20rem,0.8fr)] lg:gap-6">
+          <section className="min-w-0 lg:sticky lg:top-4" aria-label="Reel preview">
+            <div className="flex items-center justify-center bg-black">
+              <div className="relative w-full overflow-hidden rounded-xl border border-gray-800 bg-gray-950">
+                <video
+                  ref={recordedPreviewVideoRef}
+                  src={captionedVideoUrl || videoUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  onTimeUpdate={(event) => setPreviewTime(event.currentTarget.currentTime)}
+                  className="mx-auto max-h-[45dvh] w-full object-contain sm:max-h-[55vh] lg:max-h-[72vh]"
+                  style={{
+                    filter: captionedVideoUrl ? undefined : getReelVideoFilter(videoPreset),
+                    transform: `translate3d(${previewVideo?.videoWidth ? (previewTransform.offsetX / previewVideo.videoWidth) * 100 : 0}%, ${previewVideo?.videoHeight ? (previewTransform.offsetY / previewVideo.videoHeight) * 100 : 0}%, 0) scale(${previewTransform.zoom})`,
+                  }}
+                />
+                {activeSegment && segmentWords.length > 0 && (
+                  <div className="pointer-events-none absolute inset-x-4 bottom-[18%] flex justify-center">
+                    <div
+                      className={`max-w-[88%] rounded-xl px-4 py-2 text-center text-lg font-extrabold leading-snug text-white shadow-xl sm:text-2xl ${
+                        captionStyle === 'kinetic'
+                          ? 'bg-fuchsia-600'
+                          : captionStyle === 'karaoke'
+                            ? 'bg-black/75'
+                            : 'bg-black/65'
+                      }`}
+                      style={captionStyle === 'kinetic' ? {
+                        transform: `scale(${0.94 + Math.sin(segmentProgress * Math.PI) * 0.08})`,
+                      } : undefined}
+                    >
+                      {captionStyle === 'karaoke' ? segmentWords.map((word, index) => (
+                        <span key={`${activeSegment.id}-${index}`} className={index === activeWordIndex ? 'mx-1 text-yellow-300' : 'mx-1'}>
+                          {word}
+                        </span>
+                      )) : captionStyle === 'kinetic'
+                        ? segmentWords[activeWordIndex]
+                        : activeSegment.text}
+                    </div>
+                  </div>
+                )}
               </div>
+            </div>
+            <p className="mt-2 text-center text-xs text-gray-400" aria-live="polite">
+              Live preview · Audio: {audioPresetLabels[audioPreset]} · Video: {videoPresetLabels[videoPreset]}
+              {captionedVideoUrl ? ' · Rendered' : ''}
+            </p>
+          </section>
+
+          <section className="min-w-0 space-y-4 rounded-xl border border-gray-800 bg-gray-950/70 p-4 sm:p-5" aria-labelledby="reel-enhancements-title">
+            <div>
+              <h3 id="reel-enhancements-title" className="font-semibold text-white">Audio and video effects</h3>
+              <p className="mt-1 text-xs text-gray-400">Changes preview immediately. Render to include them in your reel.</p>
+            </div>
+
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium text-white">Audio</h4>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="group" aria-label="Audio enhancement preset">
+                {([
+                  ['original', 'Original'],
+                  ['voice-clarity', 'Voice clarity'],
+                  ['warm-studio', 'Warm studio'],
+                  ['bass-boost', 'Bass boost'],
+                  ['volume-boost', 'Volume boost'],
+                ] as const).map(([preset, label]) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    aria-pressed={audioPreset === preset}
+                    onClick={() => {
+                      if (!applyPreviewAudioPreset(captionedVideoUrl ? 'original' : preset)) return;
+                      clearCaptionRender();
+                      setAudioPreset(preset);
+                    }}
+                    className={`min-h-10 rounded-md border px-2 py-2 text-xs transition-colors sm:text-sm ${audioPreset === preset
+                      ? 'border-fuchsia-400 bg-fuchsia-500/15 text-white'
+                      : 'border-gray-700 text-gray-300 hover:border-gray-500'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium text-white">Video</h4>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="group" aria-label="Video enhancement preset">
+                {([
+                  ['original', 'Original'],
+                  ['balanced', 'Auto enhance'],
+                  ['bright', 'Bright'],
+                  ['vivid', 'Vivid'],
+                ] as const).map(([preset, label]) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    aria-pressed={videoPreset === preset}
+                    onClick={() => {
+                      clearCaptionRender();
+                      setVideoPreset(preset);
+                    }}
+                    className={`min-h-10 rounded-md border px-2 py-2 text-xs transition-colors sm:text-sm ${videoPreset === preset
+                      ? 'border-fuchsia-400 bg-fuchsia-500/15 text-white'
+                      : 'border-gray-700 text-gray-300 hover:border-gray-500'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {hasEffectsToRender && (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={handleRenderEffects}
+                disabled={isRenderingCaptions || Boolean(captionedVideoBlob)}
+              >
+                <Video className="mr-2 h-4 w-4" />
+                {isRenderingCaptions
+                  ? `Rendering ${captionRenderProgress}%`
+                  : captionedVideoBlob
+                    ? 'Effects rendered'
+                    : 'Render effects for upload'}
+              </Button>
             )}
-          </div>
+
+            <details className="text-xs text-gray-500">
+              <summary className="cursor-pointer text-gray-400">About these effects</summary>
+              <p className="mt-2">Voice clarity reduces low rumble, not full noise cancellation. Warm studio adds a light room ambience, not surround sound. Auto enhance balances light, contrast, and color; stabilization and sharpening are not included.</p>
+            </details>
+          </section>
         </div>
 
         {/* Animated captions */}
-        <section className="mx-auto w-full max-w-3xl space-y-4 border-b border-gray-800 px-6 py-6" aria-labelledby="animated-captions-title">
+        <section className="mx-auto w-full max-w-5xl space-y-4 border-b border-gray-800 px-4 py-4 sm:px-6" aria-labelledby="animated-captions-title">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 id="animated-captions-title" className="flex items-center gap-2 font-semibold text-white">
@@ -1587,23 +1568,7 @@ const RecordReel = () => {
               <Sparkles className="mr-2 h-4 w-4" />
               {captionsEnabled ? 'Captions on' : 'Animate voice text'}
             </Button>
-            {((captionsEnabled && captionSegments.length > 0) || videoAnimationEnabled) && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleRenderCaptions}
-                disabled={isRenderingCaptions || Boolean(captionedVideoBlob)}
-              >
-                <Video className="mr-2 h-4 w-4" />
-                {isRenderingCaptions
-                  ? `Rendering ${captionRenderProgress}%`
-                  : captionedVideoBlob
-                    ? 'Effects rendered'
-                    : 'Render video effects'}
-              </Button>
-            )}
           </div>
-          <p className="text-xs text-gray-500">Speech recognition is provided by your browser; review the transcript before rendering.</p>
 
           <div className="flex items-center justify-between gap-4 rounded-md border border-gray-800 px-4 py-3">
             <div>
@@ -1650,20 +1615,23 @@ const RecordReel = () => {
                   </button>
                 ))}
               </div>
-              <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
-                {captionSegments.map((segment, index) => (
-                  <label key={segment.id} className="flex items-start gap-3 text-xs text-gray-400">
-                    <span className="w-10 shrink-0 pt-3 tabular-nums">{index + 1}</span>
-                    <textarea
-                      value={segment.text}
-                      onChange={(event) => updateCaptionSegment(segment.id, event.target.value)}
-                      rows={2}
-                      aria-label={`Edit caption line ${index + 1}`}
-                      className="min-h-10 flex-1 resize-y rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white focus:border-fuchsia-500 focus:outline-none"
-                    />
-                  </label>
-                ))}
-              </div>
+              <details className="rounded-md border border-gray-800 px-3 py-2">
+                <summary className="cursor-pointer text-sm text-gray-300">Edit transcript ({captionSegments.length} lines)</summary>
+                <div className="mt-3 max-h-48 space-y-2 overflow-y-auto pr-1">
+                  {captionSegments.map((segment, index) => (
+                    <label key={segment.id} className="flex items-start gap-3 text-xs text-gray-400">
+                      <span className="w-10 shrink-0 pt-3 tabular-nums">{index + 1}</span>
+                      <textarea
+                        value={segment.text}
+                        onChange={(event) => updateCaptionSegment(segment.id, event.target.value)}
+                        rows={2}
+                        aria-label={`Edit caption line ${index + 1}`}
+                        className="min-h-10 flex-1 resize-y rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white focus:border-fuchsia-500 focus:outline-none"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </details>
             </>
           )}
         </section>
@@ -1787,13 +1755,7 @@ const RecordReel = () => {
                   Discard
                 </Button>
                 <Button
-                  onClick={() => {
-                    if (shareToFeed) {
-                      setShowShareSettings(true);
-                    } else {
-                      handleUpload();
-                    }
-                  }}
+                  onClick={handleUpload}
                   disabled={!caption || isUploading}
                   className="rounded-full px-8 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 shadow-lg w-full sm:w-auto"
                   size="lg"
@@ -2196,7 +2158,6 @@ const RecordReel = () => {
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-black to-purple-950">
       {renderPreviewUI()}
       {renderRecordedPreview()}
-      <ShareToFeedModal />
 
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-30">
         <MobileBottomNav />

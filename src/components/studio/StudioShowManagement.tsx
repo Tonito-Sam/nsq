@@ -51,6 +51,21 @@ interface ShowEpisode {
 type Section = 'overview' | 'episodes' | 'branding' | 'managers';
 type ArtworkField = 'thumbnail_url' | 'logo_url' | 'banner_url';
 
+const readVideoDimensions = (file: File) => new Promise<{ width: number; height: number }>((resolve, reject) => {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.preload = 'metadata';
+  video.onloadedmetadata = () => {
+    URL.revokeObjectURL(url);
+    resolve({ width: video.videoWidth, height: video.videoHeight });
+  };
+  video.onerror = () => {
+    URL.revokeObjectURL(url);
+    reject(new Error(`Could not read the video dimensions for ${file.name}.`));
+  };
+  video.src = url;
+});
+
 const ARTWORK_FIELDS: { field: ArtworkField; label: string; hint: string; aspect: string; contain?: boolean }[] = [
   { field: 'thumbnail_url', label: 'Show artwork', hint: 'Portrait or square artwork', aspect: 'aspect-[4/3]' },
   { field: 'logo_url', label: 'Show logo', hint: 'Square PNG works best', aspect: 'aspect-square', contain: true },
@@ -424,6 +439,10 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
     if (!episodeVideo || uploading) return;
     setUploading(true);
     try {
+      const dimensions = await readVideoDimensions(episodeVideo);
+      if (dimensions.width <= dimensions.height) {
+        throw new Error('TV episode videos must be landscape. Choose a video recorded or exported in landscape orientation.');
+      }
       const videoUrl = await uploadAsset(episodeVideo, 'episodes');
       const thumbnailUrl = episodeThumbnail ? await uploadAsset(episodeThumbnail, 'episode-artwork') : null;
       const { error } = await supabase.rpc('create_studio_show_episode' as any, {
@@ -492,6 +511,19 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
       return;
     }
     setArtwork((value) => ({ ...value, [field]: file }));
+  };
+
+  const validateEpisodeVideo = async (file: File) => {
+    try {
+      const dimensions = await readVideoDimensions(file);
+      if (dimensions.width <= dimensions.height) {
+        toast({ title: 'Landscape video required', description: 'TV episodes must be landscape. Choose a video recorded or exported in landscape orientation.', variant: 'destructive' });
+        return;
+      }
+      setEpisodeVideo(file);
+    } catch (error) {
+      toast({ title: 'Could not validate video', description: error instanceof Error ? error.message : 'Please choose another video file.', variant: 'destructive' });
+    }
   };
 
   if (loading) return <p className="py-12 text-center text-sm text-muted-foreground">Loading show management…</p>;
@@ -596,13 +628,13 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
           <Card className="overflow-hidden rounded-3xl border-border/60 bg-card shadow-sm">
             <CardHeader className="border-b border-border/50 bg-gradient-to-r from-blue-500/[0.07] to-cyan-500/[0.03]">
               <CardTitle className="flex items-center gap-2 text-sm font-bold"><Upload className="h-4 w-4 text-blue-500" />Publish a new episode</CardTitle>
-              <p className="text-xs text-muted-foreground">Add a video to your show library with its own title and artwork.</p>
+              <p className="text-xs text-muted-foreground">Add a landscape (16:9) video to your show library with its own title and artwork.</p>
             </CardHeader>
             <CardContent className="p-5 sm:p-6">
               <form onSubmit={uploadEpisode} className="grid gap-4 md:grid-cols-2">
                 <label className="block space-y-1.5 text-xs font-semibold md:col-span-2"><span className="text-muted-foreground">Episode title</span><Input className="h-11 rounded-xl text-sm" value={episodeTitle} onChange={(event) => setEpisodeTitle(event.target.value)} maxLength={120} placeholder="Give this episode a title" required /></label>
                 <label className="block space-y-1.5 text-xs font-semibold md:col-span-2"><span className="text-muted-foreground">Description <span className="font-normal">(optional)</span></span><textarea value={episodeDescription} onChange={(event) => setEpisodeDescription(event.target.value)} rows={3} placeholder="What should viewers know about this episode?" className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-blue-500/40" /></label>
-                <EpisodeFileDropzone label="Episode video" hint="Video file · MP4, MOV, or WebM" accept="video/*" file={episodeVideo} icon={Video} onFileSelect={setEpisodeVideo} onInvalidFile={(file) => toast({ title: 'Choose a video file', description: `${file.name} is not a supported video.`, variant: 'destructive' })} />
+                <EpisodeFileDropzone label="Episode video" hint="Landscape video · MP4, MOV, or WebM" accept="video/*" file={episodeVideo} icon={Video} onFileSelect={(file) => void validateEpisodeVideo(file)} onInvalidFile={(file) => toast({ title: 'Choose a video file', description: `${file.name} is not a supported video.`, variant: 'destructive' })} />
                 <EpisodeFileDropzone label="Episode artwork" hint="Optional image · JPG, PNG, or WebP" accept="image/*" file={episodeThumbnail} icon={ImagePlus} onFileSelect={setEpisodeThumbnail} onInvalidFile={(file) => toast({ title: 'Choose an image file', description: `${file.name} is not a supported image.`, variant: 'destructive' })} />
                 <div className="flex items-center justify-between gap-3 border-t border-border/50 pt-4 md:col-span-2">
                   <span className="min-w-0 truncate text-xs text-muted-foreground">{episodeVideo ? 'Video ready to upload' : 'Choose or drop a video to continue'}</span>

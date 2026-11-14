@@ -39,7 +39,7 @@ const COVERAGE_OPTIONS: { value: CoverageCategory; label: string }[] = [
 export default function DailyPodcastNewsroom({
   onStartRecording,
 }: {
-  onStartRecording: (title: string, script: string) => void;
+  onStartRecording: (title: string, script: string, hostNames: string) => void;
 }) {
   const [categories, setCategories] = useState<CoverageCategory[]>(['politics', 'sports']);
   const [country, setCountry] = useState('');
@@ -187,7 +187,7 @@ export default function DailyPodcastNewsroom({
                   <Input id="newsroom-title" value={showTitle} onChange={(event) => setShowTitle(event.target.value)} />
                 </div>
                 <div>
-                  <label htmlFor="newsroom-hosts" className="mb-1.5 block text-xs font-semibold uppercase text-muted-foreground">Presenter name(s)</label>
+                  <label htmlFor="newsroom-hosts" className="mb-1.5 block text-xs font-semibold uppercase text-muted-foreground">Presenter name(s) (shown in intro)</label>
                   <Input id="newsroom-hosts" value={hostNames} onChange={(event) => setHostNames(event.target.value)} placeholder="One or two names" />
                 </div>
               </div>
@@ -268,7 +268,7 @@ export default function DailyPodcastNewsroom({
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs leading-relaxed text-muted-foreground">
-              The built-in generator assembles host dialogue, transitions, discussion prompts, and source references from the headlines and publisher summaries. It does not invent reporting; verify details at the linked sources before recording.
+              The built-in generator creates one continuous two-host conversation, carries forward shared details where the sources support them, and makes unrelated topic shifts clear. It keeps reported facts separate from discussion questions; verify details at the linked sources before recording.
             </p>
             <Button onClick={() => void generateScript()} disabled={generatingScript || loadingStories || (!stories.length && !customTopic.trim())} className="gap-2 bg-emerald-700 text-white hover:bg-emerald-800">
               {generatingScript ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
@@ -279,10 +279,10 @@ export default function DailyPodcastNewsroom({
               aria-label="Generated podcast script"
               value={script}
               onChange={(event) => setScript(event.target.value)}
-              placeholder="Your sourced host script will appear here after today’s stories load."
+              placeholder="Your connected, source-grounded host conversation will appear here after today’s stories load."
               className="min-h-[34rem] w-full resize-y rounded-md border border-input bg-background p-3 font-mono text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-600/30"
             />
-            <Button onClick={() => onStartRecording(showTitle, script)} disabled={!script.trim()} className="w-full gap-2 bg-red-700 text-white hover:bg-red-800">
+            <Button onClick={() => onStartRecording(showTitle, script, hostNames)} disabled={!script.trim()} className="w-full gap-2 bg-red-700 text-white hover:bg-red-800">
               <Video className="h-4 w-4" />Start recording in teleprompter
             </Button>
           </CardContent>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, Clock3, Tv } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -40,6 +41,7 @@ interface ShowApplication {
 
 export const ShowSlotApplication = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const { toast } = useToast();
   const [channelId, setChannelId] = useState<string | null>(null);
   const [videoCount, setVideoCount] = useState(0);
@@ -205,11 +207,18 @@ export const ShowSlotApplication = () => {
               {application?.reviewer_notes && <p className="mt-1 text-xs text-muted-foreground">Review note: {application.reviewer_notes}</p>}
             </div>
           </div>
-          {!application && (
-            <Button type="button" onClick={() => setDialogOpen(true)}>
-              Apply for a slot
-            </Button>
-          )}
+          <div className="flex flex-wrap gap-2">
+            {eligible && (
+              <Button type="button" variant="outline" onClick={() => navigate('/studio/podcast')}>
+                Open Podcast Studio
+              </Button>
+            )}
+            {!application && (
+              <Button type="button" onClick={() => setDialogOpen(true)}>
+                Apply for a slot
+              </Button>
+            )}
+          </div>
         </CardContent>
       </Card>
 

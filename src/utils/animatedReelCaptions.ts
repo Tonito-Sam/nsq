@@ -6,10 +6,29 @@ export type ReelCaptionSegment = {
 };
 
 export type ReelCaptionStyle = 'kinetic' | 'karaoke' | 'classic';
+export type ReelAudioPreset = 'original' | 'voice-clarity' | 'warm-studio' | 'bass-boost' | 'volume-boost';
+export type ReelVideoPreset = 'original' | 'balanced' | 'bright' | 'vivid';
+export type ReelEnhancementOptions = {
+  audioPreset: ReelAudioPreset;
+  videoPreset: ReelVideoPreset;
+};
 export type ReelCameraMove = 'none' | 'push-in' | 'pan-left' | 'pan-right' | 'float';
 export type ReelCameraTransform = { zoom: number; offsetX: number; offsetY: number };
 
 const AUTO_CAMERA_MOVES: ReelCameraMove[] = ['push-in', 'pan-left', 'float', 'pan-right'];
+
+export function getReelVideoFilter(preset: ReelVideoPreset): string {
+  switch (preset) {
+    case 'balanced':
+      return 'brightness(1.06) contrast(1.12) saturate(1.14)';
+    case 'bright':
+      return 'brightness(1.18) contrast(1.08) saturate(1.1)';
+    case 'vivid':
+      return 'contrast(1.16) saturate(1.38)';
+    default:
+      return 'none';
+  }
+}
 
 export function getCaptionWordIndex(wordCount: number, progress: number): number {
   if (wordCount <= 0) return -1;
@@ -193,9 +212,11 @@ export async function renderCaptionedReel(
   style: ReelCaptionStyle,
   cameraAnimationEnabled = false,
   onProgress: (progress: number) => void = () => {},
+  enhancements: ReelEnhancementOptions = { audioPreset: 'original', videoPreset: 'original' },
 ): Promise<Blob> {
-  if (!segments.length && !cameraAnimationEnabled) throw new Error('There are no effects to render.');
-  if (typeof MediaRecorder === 'undefined') throw new Error('This browser cannot render captioned videos.');
+  const hasEnhancements = enhancements.audioPreset !== 'original' || enhancements.videoPreset !== 'original';
+  if (!segments.length && !cameraAnimationEnabled && !hasEnhancements) throw new Error('There are no effects to render.');
+  if (typeof MediaRecorder === 'undefined') throw new Error('This browser cannot process reel effects.');
 
   const video = document.createElement('video');
   video.preload = 'auto';
@@ -205,7 +226,7 @@ export async function renderCaptionedReel(
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
   if (!context || typeof canvas.captureStream !== 'function') {
-    throw new Error('This browser cannot render captioned videos.');
+    throw new Error('This browser cannot process reel effects.');
   }
 
   let audioContext: AudioContext | null = null;
@@ -234,14 +255,14 @@ export async function renderCaptionedReel(
     const browserWindow = window as Window & { webkitAudioContext?: typeof AudioContext };
     const AudioContextConstructor = window.AudioContext || browserWindow.webkitAudioContext;
     if (!AudioContextConstructor) {
-      throw new Error('This browser cannot preserve audio while rendering captions.');
+      throw new Error('This browser cannot preserve audio while rendering reel effects.');
     }
     const tracks = [...canvasStream.getVideoTracks()];
 
     audioContext = new AudioContextConstructor();
     const source = audioContext.createMediaElementSource(video);
     const destination = audioContext.createMediaStreamDestination();
-    source.connect(destination);
+    connectReelAudioEffects(audioContext, source, destination, enhancements.audioPreset);
     tracks.push(...destination.stream.getAudioTracks());
 
     outputStream = new MediaStream(tracks);
@@ -259,7 +280,7 @@ export async function renderCaptionedReel(
       recorder!.ondataavailable = (event) => {
         if (event.data.size > 0) chunks.push(event.data);
       };
-      recorder!.onerror = () => reject(new Error('Captioned video rendering failed.'));
+      recorder!.onerror = () => reject(new Error('Reel effect rendering failed.'));
       recorder!.onstop = () => {
         if (!chunks.length) {
           reject(new Error('No video was produced. Please try again.'));
@@ -271,7 +292,7 @@ export async function renderCaptionedReel(
 
     const playbackFinished = new Promise<void>((resolve, reject) => {
       video.addEventListener('ended', () => resolve(), { once: true });
-      video.addEventListener('error', () => reject(new Error('Video playback failed during caption rendering.')), { once: true });
+      video.addEventListener('error', () => reject(new Error('Video playback failed during reel effect rendering.')), { once: true });
     });
     const drawFrame = () => {
       if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -284,7 +305,10 @@ export async function renderCaptionedReel(
           canvas.width,
           canvas.height,
         );
+        context.save();
+        context.filter = getReelVideoFilter(enhancements.videoPreset);
         drawCameraFrame(context, video, canvas.width, canvas.height, cameraTransform);
+        context.restore();
         const activeSegment = segments.find((segment) => currentTime >= segment.start && currentTime <= segment.end);
         const captionProgress = activeSegment
           ? Math.max(0, Math.min(1, (currentTime - activeSegment.start) / Math.max(0.2, activeSegment.end - activeSegment.start)))
@@ -320,4 +344,109 @@ export async function renderCaptionedReel(
     outputStream?.getTracks().forEach((track) => track.stop());
     if (audioContext && audioContext.state !== 'closed') await audioContext.close();
   }
+}
+
+export function connectReelAudioEffects(
+  context: AudioContext,
+  source: MediaElementAudioSourceNode,
+  destination: AudioNode,
+  preset: ReelAudioPreset,
+): AudioNode[] {
+  const connectedNodes: AudioNode[] = [];
+  if (preset === 'original') {
+    source.connect(destination);
+    return connectedNodes;
+  }
+
+  let lastNode: AudioNode = source;
+  const connectFilter = (filter: BiquadFilterNode) => {
+    lastNode.connect(filter);
+    lastNode = filter;
+    connectedNodes.push(filter);
+    return filter;
+  };
+  const connectCompressor = (threshold: number, ratio: number) => {
+    const compressor = context.createDynamicsCompressor();
+    compressor.threshold.value = threshold;
+    compressor.knee.value = 18;
+    compressor.ratio.value = ratio;
+    compressor.attack.value = 0.005;
+    compressor.release.value = 0.2;
+    lastNode.connect(compressor);
+    lastNode = compressor;
+    connectedNodes.push(compressor);
+  };
+  const addGain = (value: number) => {
+    const gain = context.createGain();
+    gain.gain.value = value;
+    lastNode.connect(gain);
+    lastNode = gain;
+    connectedNodes.push(gain);
+  };
+
+  if (preset === 'voice-clarity' || preset === 'warm-studio') {
+    const highPass = connectFilter(context.createBiquadFilter());
+    highPass.type = 'highpass';
+    highPass.frequency.value = preset === 'voice-clarity' ? 100 : 55;
+    highPass.Q.value = 0.7;
+  }
+
+  if (preset === 'warm-studio' || preset === 'bass-boost') {
+    const bass = connectFilter(context.createBiquadFilter());
+    bass.type = 'lowshelf';
+    bass.frequency.value = preset === 'warm-studio' ? 150 : 120;
+    bass.gain.value = preset === 'warm-studio' ? 3 : 8;
+  }
+
+  if (preset === 'voice-clarity' || preset === 'warm-studio') {
+    const presence = connectFilter(context.createBiquadFilter());
+    presence.type = 'peaking';
+    presence.frequency.value = preset === 'voice-clarity' ? 2800 : 3200;
+    presence.Q.value = 0.9;
+    presence.gain.value = preset === 'voice-clarity' ? 4.5 : 2;
+  }
+
+  if (preset === 'voice-clarity') connectCompressor(-28, 3);
+  if (preset === 'warm-studio' || preset === 'bass-boost') connectCompressor(-25, 2.5);
+  if (preset === 'volume-boost') connectCompressor(-28, 4);
+  if (preset === 'voice-clarity') addGain(1.08);
+  if (preset === 'bass-boost') addGain(1.03);
+  if (preset === 'volume-boost') {
+    addGain(1.5);
+    connectCompressor(-4, 12);
+  }
+
+  if (preset === 'warm-studio') {
+    const dryGain = context.createGain();
+    dryGain.gain.value = 0.92;
+    lastNode.connect(dryGain);
+    dryGain.connect(destination);
+    connectedNodes.push(dryGain);
+
+    const reverb = context.createConvolver();
+    reverb.buffer = createRoomImpulse(context);
+    const wetGain = context.createGain();
+    wetGain.gain.value = 0.14;
+    lastNode.connect(reverb);
+    reverb.connect(wetGain);
+    wetGain.connect(destination);
+    connectedNodes.push(reverb, wetGain);
+    return connectedNodes;
+  }
+
+  lastNode.connect(destination);
+  return connectedNodes;
+}
+
+function createRoomImpulse(context: AudioContext): AudioBuffer {
+  const length = Math.max(1, Math.floor(context.sampleRate * 0.24));
+  const impulse = context.createBuffer(2, length, context.sampleRate);
+  for (let channel = 0; channel < impulse.numberOfChannels; channel += 1) {
+    const data = impulse.getChannelData(channel);
+    for (let index = 0; index < length; index += 1) {
+      const decay = Math.pow(1 - index / length, 3);
+      data[index] = (Math.random() * 2 - 1) * decay * 0.18;
+    }
+  }
+  return impulse;
 }

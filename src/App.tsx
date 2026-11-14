@@ -60,6 +60,7 @@ import UploadReels from "./pages/UploadReels";
 import RecordReel from "./pages/RecordReel";
 import RecordVideo from "./pages/RecordVideo";
 import PodcastTeleprompter from "./pages/PodcastTeleprompter";
+import CreatorPodcastStudio from "./pages/CreatorPodcastStudio";
 import ShareTarget from "./pages/ShareTarget";
 import LiveStream from "./pages/LiveStream2";
 import StudioSettings from "./pages/StudioSettings";
@@ -269,6 +270,7 @@ const App = () => {
                     <Route path="/reels/record" element={<RecordReel />} />
                     <Route path="/video/record" element={<RecordVideo />} />
                     <Route path="/podcast-teleprompter/:sessionId" element={<PodcastTeleprompter />} />
+                    <Route path="/studio/podcast" element={<CreatorPodcastStudio />} />
                     <Route path="/live" element={<LiveStream />} />
                     <Route path="/stream-end/:streamId" element={<StreamEndPreviewWrapper />} />
                     <Route path="/reel/:reelId" element={<ReelViewPage />} />
