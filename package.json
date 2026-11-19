@@ -12,12 +12,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ffmpeg/core": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@fullcalendar/daygrid": "^6.1.17",
     "@fullcalendar/interaction": "^6.1.17",
     "@fullcalendar/react": "^6.1.17",
     "@fullcalendar/timegrid": "^6.1.17",
     "@hookform/resolvers": "^3.9.0",
+    "@huggingface/transformers": "^4.3.2",
     "@livekit/components-react": "^2.9.12",
     "@livekit/components-styles": "^1.1.6",
     "@livepeer/react": "^4.3.6",

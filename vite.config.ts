@@ -37,10 +37,13 @@ export default defineConfig({
     port: 8080,
     strictPort: true,
     watch: {
-      ignored: ["**/*.zip"],
+      ignored: ["**/*.zip", "**/podcast intro soundtracks/**"],
     },
     proxy: {
-      "/api": "http://localhost:3001",
+      "/api": {
+        target: "http://localhost:3001",
+        ws: true,
+      },
     },
   },
 });

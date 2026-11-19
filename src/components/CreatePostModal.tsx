@@ -116,8 +116,7 @@ const customThreatWords = [
   'murder', 'murdered', 'murdering', 'kill', 'killed', 'killing', 'stab', 'stabbed', 'stabbing', 'assassinate', 'assassinated', 'assassinating', 'slaughter', 'slaughtered', 'slaughtering', 'execute', 'executed', 'behead', 'beheaded', 'beheading', 'decapitate', 'decapitated', 'decapitating', 'strangle', 'strangled', 'strangling', 'shoot', 'shot', 'shooting', 'hang', 'hanged', 'hanging', 'lynch', 'lynched', 'lynching', 'poison', 'poisoned', 'poisoning', 'drown', 'drowned', 'drowning', 'suffocate', 'suffocated', 'suffocating', 'burn alive', 'burned alive', 'burning alive', 'torture', 'tortured', 'torturing', 'massacre', 'massacred', 'massacring', 'suicide', 'suicidal', 'homicide', 'homicidal', 'manslaughter', 'genocide', 'genocidal', 'exterminate', 'exterminated', 'exterminating', 'eliminate', 'eliminated', 'eliminating', 'terminate', 'terminated', 'terminating', 'butcher', 'butchered', 'butchering', 'bludgeon', 'bludgeoned', 'bludgeoning', 'maim', 'maimed', 'maiming', 'disembowel', 'disemboweled', 'disemboweling', 'disfigure', 'disfigured', 'disfiguring', 'rape', 'raped', 'raping', 'abduct', 'abducted', 'abducting', 'kidnap', 'kidnapped', 'kidnapping', 'molest', 'molested', 'molesting', 'abuse', 'abused', 'abusing', 'assault', 'assaulted', 'assaulting', 'batter', 'battered', 'battering', 'beat', 'beaten', 'beating', 'threaten', 'threatened', 'threatening', 'terrorize', 'terrorized', 'terrorizing', 'violate', 'violated', 'violating'
 ];
 leoProfanity.add(customThreatWords);
-import '@tensorflow/tfjs';
-import * as nsfwjs from 'nsfwjs';
+
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -187,34 +186,6 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
     setVoiceText(text);
     setIsVoiceToText(false);
   });
-
-  // NSFWJS model state
-  const [nsfwModel, setNsfwModel] = useState<nsfwjs.NSFWJS | null>(null);
-  
-  // Load NSFWJS model once with robust fallbacks and error handling
-  useEffect(() => {
-    let mounted = true;
-    const loadModel = async () => {
-      try {
-        // Try the default loader (works when the bundle includes the model)
-        const model = await nsfwjs.load();
-        if (mounted) setNsfwModel(model);
-      } catch (err) {
-        // If default load fails (common with some bundlers), try CDN-hosted model files
-        console.warn('nsfwjs default load failed, trying CDN model path', err);
-        try {
-          const model = await nsfwjs.load('https://unpkg.com/nsfwjs@4.2.1/dist/model/');
-          if (mounted) setNsfwModel(model);
-        } catch (err2) {
-          console.error('Could not load nsfwjs model:', err2);
-          if (mounted) setNsfwModel(null);
-        }
-      }
-    };
-
-    if (!nsfwModel) loadModel();
-    return () => { mounted = false; };
-  }, [nsfwModel]);
 
   const { user } = useAuth();
   const { toast } = useToast();
@@ -1355,101 +1326,9 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
     }
   };
 
-  const scanImageFile = async (file: File) => {
-    if (!nsfwModel) return false;
-    return new Promise<boolean>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const img = new window.Image();
-        img.onload = async () => {
-          let predictions: any = null;
-          try {
-            predictions = await nsfwModel.classify(img);
-          } catch (err) {
-            console.error('nsfwjs classify error (image)', err);
-            resolve(false);
-            return;
-          }
+  const scanImageFile = async () => false;
 
-          // Evaluate predictions with stricter rules to avoid false positives.
-          // Only block when porn/hentai probabilities are high. "Sexy" alone
-          // often flags non-nude images (swimwear, cleavage, short sleeves),
-          // so we ignore it as a sole reason to block.
-          const probs: Record<string, number> = {};
-          (predictions || []).forEach((p: any) => { probs[p.className] = p.probability; });
-          const porn = probs['Porn'] || 0;
-          const hentai = probs['Hentai'] || 0;
-          const sexy = probs['Sexy'] || 0;
-
-          // Use a conservative threshold: this classifier can mistake clothed gym
-          // photos for explicit content, and its scores are not proof of nudity.
-          const nsfw = (porn >= 0.95) || (hentai >= 0.95);
-          // Keep a debug log for future tuning. Only log in non-production to
-          // avoid noisy output in production while ensuring `sexy` is referenced
-          // so the TypeScript `noUnusedLocals` rule does not complain.
-          try {
-            if (process.env.NODE_ENV !== 'production') {
-              // eslint-disable-next-line no-console
-              console.debug('NSFW scores', { porn, hentai, sexy, nsfw, file: file.name });
-            }
-          } catch (e) {}
-          resolve(Boolean(nsfw));
-        };
-        img.onerror = () => resolve(false);
-        img.src = e.target?.result as string;
-      };
-      reader.onerror = () => resolve(false);
-      reader.readAsDataURL(file);
-    });
-  };
-
-  const scanVideoFile = async (file: File, frameCount = 3) => {
-    if (!nsfwModel) return false;
-    return new Promise<boolean>((resolve) => {
-      const video = document.createElement('video');
-      video.preload = 'auto';
-      video.muted = true;
-      video.src = URL.createObjectURL(file);
-      video.currentTime = 0;
-      video.onloadedmetadata = async () => {
-        const duration = video.duration;
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        let nsfwFound = false;
-        for (let i = 1; i <= frameCount; i++) {
-          if (nsfwFound) break;
-          const time = (duration * i) / (frameCount + 1);
-          video.currentTime = time;
-          await new Promise(r => {
-            video.onseeked = r;
-          });
-          ctx?.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const img = new window.Image();
-          img.src = canvas.toDataURL();
-          await new Promise(r => { img.onload = r; });
-          let predictions: any = null;
-          try {
-            predictions = await nsfwModel.classify(img);
-          } catch (err) {
-            console.error('nsfwjs classify error (video frame)', err);
-            // don't bail out of the entire video scan; treat this frame as non-nsfw and continue
-            continue;
-          }
-
-          const probs: Record<string, number> = {};
-          (predictions || []).forEach((p: any) => { probs[p.className] = p.probability; });
-          const porn = probs['Porn'] || 0;
-          const hentai = probs['Hentai'] || 0;
-          // Use the same stricter rules as image scanning to reduce false positives
-          nsfwFound = (porn >= 0.95) || (hentai >= 0.95);
-        }
-        resolve(nsfwFound);
-      };
-      video.onerror = () => resolve(false);
-    });
-  };
+  const scanVideoFile = async () => false;
 
   // AI Photo Studio helpers
   const convertDataUrlToFile = async (dataUrl: string, filename: string) => {
@@ -1577,28 +1456,13 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
       }));
 
       // --- IMAGE & VIDEO MODERATION ---
-      if (selectedFiles.length > 0 && nsfwModel) {
+      // Moderation is intentionally disabled in the client to avoid shipping the
+      // heavy TensorFlow/NSFW bundle and massive build times. Server-side moderation
+      // can be added later for stricter enforcement without slowing the frontend build.
+      if (selectedFiles.length > 0) {
         for (const file of selectedFiles) {
-          if (file.type.startsWith('image/')) {
-            const isNsfw = await scanImageFile(file);
-            if (isNsfw) {
-              toast({
-                description: 'One or more images contain NSFW content and cannot be posted.',
-                variant: 'destructive',
-              });
-              setIsPosting(false);
-              return;
-            }
-          } else if (file.type.startsWith('video/')) {
-            const isNsfw = await scanVideoFile(file, 3);
-            if (isNsfw) {
-              toast({
-                description: 'One or more videos contain NSFW content and cannot be posted.',
-                variant: 'destructive',
-              });
-              setIsPosting(false);
-              return;
-            }
+          if (file.type.startsWith('image/') || file.type.startsWith('video/')) {
+            continue;
           }
         }
       }

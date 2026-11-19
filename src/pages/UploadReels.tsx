@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import leoProfanity from 'leo-profanity';
-import * as nsfwjs from 'nsfwjs';
-import * as tf from '@tensorflow/tfjs';
 import { Header } from '@/components/Header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -59,14 +57,7 @@ const customThreatWords = [
 leoProfanity.add(customThreatWords);
 
 const UploadReels = () => {
-  const [nsfwModel, setNsfwModel] = useState<nsfwjs.NSFWJS | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
-  useEffect(() => {
-    if (!nsfwModel) {
-      nsfwjs.load().then(setNsfwModel).catch(() => setNsfwModel(null));
-    }
-  }, [nsfwModel]);
 
   const { user } = useAuth();
   const { toast } = useToast();
@@ -252,82 +243,7 @@ const UploadReels = () => {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  const scanVideoFile = async (file: File): Promise<boolean> => {
-    if (!nsfwModel) return false;
-    return new Promise((resolve) => {
-      const url = URL.createObjectURL(file);
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.src = url;
-      video.muted = true;
-      video.playsInline = true;
-      video.currentTime = 0;
-      let nsfwFound = false;
-      let checkedFrames = 0;
-      let settled = false;
-      const settle = (val: boolean) => {
-        if (settled) return;
-        settled = true;
-        try { URL.revokeObjectURL(url); } catch {}
-        resolve(val);
-      };
-      const safetyTimeout = window.setTimeout(() => {
-        settle(false);
-      }, 8000);
-      const checkFrame = async () => {
-        if (nsfwFound || checkedFrames > 10) {
-          window.clearTimeout(safetyTimeout);
-          settle(nsfwFound);
-          return;
-        }
-        if (video.videoWidth === 0 || video.videoHeight === 0) {
-          checkedFrames++;
-          if (video.currentTime + 2 < (video.duration || 60)) {
-            video.currentTime += 2;
-          } else {
-            window.clearTimeout(safetyTimeout);
-            settle(nsfwFound);
-          }
-          return;
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        if (ctx && canvas.width > 0 && canvas.height > 0) {
-          try {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const img = tf.browser.fromPixels(canvas);
-            const predictions = await nsfwModel.classify(img);
-            img.dispose();
-            const probabilities: Record<string, number> = {};
-            predictions.forEach((prediction) => {
-              probabilities[prediction.className] = prediction.probability;
-            });
-            const porn = probabilities.Porn || 0;
-            const hentai = probabilities.Hentai || 0;
-            nsfwFound = porn >= 0.95 || hentai >= 0.95;
-          } catch (error) {}
-        }
-        checkedFrames++;
-        if (!nsfwFound && video.currentTime + 2 < (video.duration || 60)) {
-          video.currentTime += 2;
-        } else {
-          window.clearTimeout(safetyTimeout);
-          settle(nsfwFound);
-        }
-      };
-      video.onloadedmetadata = () => {
-        setTimeout(checkFrame, 120);
-      };
-      video.onseeked = checkFrame;
-      video.onerror = () => {
-        window.clearTimeout(safetyTimeout);
-        settle(false);
-      };
-      try { video.load(); } catch {}
-    });
-  };
+  const scanVideoFile = async (): Promise<boolean> => false;
 
   const handleUploadVideo = async () => {
     if (!videoFiles.length) {
@@ -342,12 +258,8 @@ const UploadReels = () => {
       return;
     }
 
-    if (!nsfwModel) {
-      toast({ description: 'Moderation model is still loading. Try again in a few seconds.', variant: 'destructive' });
-      return;
-    }
-
-    // Landscape warnings removed: proceed with upload normally
+    // Client-side moderation is intentionally disabled to avoid shipping the heavy
+    // TensorFlow/NSFW bundle. Server-side moderation can be layered in later.
 
     setUploadStatus('scanning');
     for (const file of videoFiles) {

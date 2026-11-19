@@ -213,6 +213,7 @@ export async function renderCaptionedReel(
   cameraAnimationEnabled = false,
   onProgress: (progress: number) => void = () => {},
   enhancements: ReelEnhancementOptions = { audioPreset: 'original', videoPreset: 'original' },
+  durationHintSeconds = 0,
 ): Promise<Blob> {
   const hasEnhancements = enhancements.audioPreset !== 'original' || enhancements.videoPreset !== 'original';
   if (!segments.length && !cameraAnimationEnabled && !hasEnhancements) throw new Error('There are no effects to render.');
@@ -248,6 +249,11 @@ export async function renderCaptionedReel(
     if (!video.videoWidth || !video.videoHeight) {
       throw new Error('The recorded video has no readable frames.');
     }
+    const getPlaybackDuration = () => Number.isFinite(video.duration) && video.duration > 0
+      ? video.duration
+      : Number.isFinite(durationHintSeconds) && durationHintSeconds > 0
+        ? durationHintSeconds
+        : 0;
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -291,13 +297,31 @@ export async function renderCaptionedReel(
     });
 
     const playbackFinished = new Promise<void>((resolve, reject) => {
-      video.addEventListener('ended', () => resolve(), { once: true });
-      video.addEventListener('error', () => reject(new Error('Video playback failed during reel effect rendering.')), { once: true });
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      video.addEventListener('ended', finish, { once: true });
+      video.addEventListener('error', () => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('Video playback failed during reel effect rendering.'));
+      }, { once: true });
+      video.addEventListener('timeupdate', () => {
+        const duration = getPlaybackDuration();
+        if (duration <= 0) return;
+        onProgress(Math.min(99, Math.round((video.currentTime / duration) * 100)));
+        if (!Number.isFinite(video.duration) && durationHintSeconds > 0 && video.currentTime >= durationHintSeconds) {
+          finish();
+        }
+      });
     });
     const drawFrame = () => {
       if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
         const currentTime = video.currentTime;
-        const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 1;
+        const duration = getPlaybackDuration() || 1;
         const cameraTransform = getAutoCameraTransform(
           cameraAnimationEnabled,
           currentTime,
@@ -317,11 +341,6 @@ export async function renderCaptionedReel(
       }
     };
 
-    video.addEventListener('timeupdate', () => {
-      if (Number.isFinite(video.duration) && video.duration > 0) {
-        onProgress(Math.min(100, Math.round((video.currentTime / video.duration) * 100)));
-      }
-    });
     video.currentTime = 0;
     recorder.start(250);
     drawFrame();
@@ -348,7 +367,7 @@ export async function renderCaptionedReel(
 
 export function connectReelAudioEffects(
   context: AudioContext,
-  source: MediaElementAudioSourceNode,
+  source: AudioNode,
   destination: AudioNode,
   preset: ReelAudioPreset,
 ): AudioNode[] {

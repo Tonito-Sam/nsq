@@ -17,6 +17,7 @@ export type MobileReelScrollerProps = {
   setActiveIndex?: (index: number) => void;
   onUserInteraction?: () => void;
   hideLive?: boolean;
+  approvedShowId?: string | null;
   userData?: any;
   hasUserInteracted?: boolean;
   watchLimitReached?: boolean;
@@ -38,6 +39,7 @@ export function MobileReelScroller({
   setActiveIndex,
   onUserInteraction,
   hideLive,
+  approvedShowId,
   userData,
   hasUserInteracted = false,
   watchLimitReached = false,
@@ -129,6 +131,7 @@ export function MobileReelScroller({
             isFollowing={userSubscriptions.has(video.channel_id)}
             isActive={idx === currentActiveIdx}
             hideLive={!!hideLive}
+            approvedShowId={approvedShowId}
             userData={userData}
             mobileLayout
             hasUserInteracted={hasUserInteracted}

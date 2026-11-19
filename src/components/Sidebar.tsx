@@ -18,6 +18,7 @@ import { useNavigate } from 'react-router-dom';
 import CreateGroupModalFull from './CreateGroupModalFull';
 import { cn } from '@/lib/utils';
 import { QUICK_LINKS } from '@/lib/quickLinks';
+import { PodcastSubscriptionsCard } from './PodcastSubscriptionsCard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -403,6 +404,8 @@ export const Sidebar = () => {
           })}
         </div>
       </SideCard>
+
+      <PodcastSubscriptionsCard />
 
       {/* ═══════════════════════════════════════════════════════════════
           MY GROUPS

@@ -76,6 +76,10 @@ const Studio = () => {
 
   const { user } = useAuth();
   const [fullUser, setFullUser] = useState<any>(null);
+  const [approvedShowId, setApprovedShowId] = useState<string | null>(null);
+  const handleApprovedShowIdChange = useCallback((showId: string | null) => {
+    setApprovedShowId(showId);
+  }, []);
   const [showChannelPrompt, setShowChannelPrompt] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -1516,6 +1520,7 @@ const Studio = () => {
           setActiveTab={setActiveTab}
           navigate={navigate}
           onSearch={handleStudioSearch}
+          onApprovedShowIdChange={handleApprovedShowIdChange}
           showCreateChannel={!channel && !channelLoading}
           onCreateChannel={() => setShowChannelPrompt(true)}
         />
@@ -1629,6 +1634,7 @@ const Studio = () => {
                 hasNextPage={hasNextPage}
                 fetchNextPage={fetchNextPage}
                 hideLive={true}
+                approvedShowId={approvedShowId}
                 userData={fullUser}
                 hasUserInteracted={hasUserInteracted}
                 activeIndex={activeIndex}

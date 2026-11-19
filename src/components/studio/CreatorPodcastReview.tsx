@@ -7,7 +7,6 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 
 const PRIVATE_BUCKET = 'creator-podcast-drafts';
-const PUBLIC_BUCKET = 'studio-videos';
 
 type ReviewDraft = {
   id: string;
@@ -119,26 +118,11 @@ export default function CreatorPodcastReview({ isAdmin, onReviewComplete }: Crea
       return;
     }
     setReviewingId(draft.id);
-    let publicObjectPath: string | null = null;
     let reviewed = false;
     try {
       let videoUrl: string | null = null;
       if (decision === 'publish') {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) throw new Error('Sign in with an administrator account to publish podcast episodes.');
-        const { data: recording, error: downloadError } = await supabase.storage
-          .from(PRIVATE_BUCKET)
-          .download(draft.recording_path);
-        if (downloadError) throw downloadError;
-        const extension = recording.type.includes('mp4') ? 'mp4' : 'webm';
-        publicObjectPath = `${user.id}/tv-shows/${draft.show_id}/episodes/podcast-${draft.id}-${Date.now()}.${extension}`;
-        const videoFile = new Blob([recording], { type: extension === 'mp4' ? 'video/mp4' : 'video/webm' });
-        const { error: uploadError } = await supabase.storage.from(PUBLIC_BUCKET).upload(publicObjectPath, videoFile, {
-          cacheControl: '3600',
-          upsert: false,
-        });
-        if (uploadError) throw uploadError;
-        videoUrl = supabase.storage.from(PUBLIC_BUCKET).getPublicUrl(publicObjectPath).data.publicUrl;
+        videoUrl = `podcast-private://${draft.recording_path}`;
       }
 
       const { error } = await supabase.rpc('review_creator_podcast_draft', {
@@ -159,10 +143,6 @@ export default function CreatorPodcastReview({ isAdmin, onReviewComplete }: Crea
       await loadQueue();
       onReviewComplete?.();
     } catch (reviewError) {
-      if (publicObjectPath && !reviewed) {
-        const { error: cleanupError } = await supabase.storage.from(PUBLIC_BUCKET).remove([publicObjectPath]);
-        if (cleanupError) console.error('Could not clean up an unpublished podcast video:', cleanupError);
-      }
       toast({
         title: reviewed ? 'Podcast review completed' : 'Podcast review failed',
         description: reviewed

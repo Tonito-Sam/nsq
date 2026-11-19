@@ -4,6 +4,7 @@ import { TrendingCard } from './TrendingCard';
 import { SuggestedFriends } from './SuggestedFriends';
 import { EventsSidebar } from './EventsSidebar';
 import { LiveChat } from './LiveChat';
+import { SuggestedPodcastChannels } from './SuggestedPodcastChannels';
 
 export const RightSidebar = () => {
   const [isMobile, setIsMobile] = useState(false);
@@ -29,6 +30,7 @@ export const RightSidebar = () => {
     <div className="w-80 p-4 space-y-6">
       {showLiveChat && <LiveChat />}
       <TrendingCard />
+      <SuggestedPodcastChannels />
       <EventsSidebar />
       <SuggestedFriends />
     </div>

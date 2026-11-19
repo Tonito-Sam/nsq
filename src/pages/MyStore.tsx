@@ -65,6 +65,10 @@ interface Product {
   sale_starts?: string | null;
   sale_ends?: string | null;
   is_deals_of_day?: boolean;
+  shipping_weight_kg?: number | null;
+  shipping_length_cm?: number | null;
+  shipping_width_cm?: number | null;
+  shipping_height_cm?: number | null;
 }
 
 interface Store {
@@ -365,6 +369,10 @@ const MyStore = () => {
         is_active: updatedProduct.is_active ?? true,
         updated_at: new Date().toISOString(),
       };
+      payload.shipping_weight_kg = updatedProduct.shipping_weight_kg ?? null;
+      payload.shipping_length_cm = updatedProduct.shipping_length_cm ?? null;
+      payload.shipping_width_cm = updatedProduct.shipping_width_cm ?? null;
+      payload.shipping_height_cm = updatedProduct.shipping_height_cm ?? null;
       if (typeof (updatedProduct as any).is_on_sale !== 'undefined')
         payload.is_on_sale = !!(updatedProduct as any).is_on_sale;
       if ('sale_price' in updatedProduct)

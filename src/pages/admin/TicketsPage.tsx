@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../../integrations/supabase/client';
+import apiUrl from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -74,6 +75,20 @@ type TicketReply = {
 
 type BadgeVariant = "destructive" | "secondary" | "default" | "outline";
 
+async function adminTicketRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error('Sign in again to manage support tickets.');
+
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', `Bearer ${session.access_token}`);
+  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+
+  const response = await fetch(apiUrl(path), { ...init, headers });
+  const result = await response.json().catch(() => ({})) as T & { error?: string };
+  if (!response.ok) throw new Error(result.error || 'Support ticket request failed');
+  return result;
+}
+
 const TicketsPage = () => {
   // State
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -91,111 +106,24 @@ const TicketsPage = () => {
   const fetchTickets = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: ticketsData, error } = await supabase
-        .from('support_tickets')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(200);
-
-      if (error) throw error;
-
-      // Fetch user details and replies
-      const enrichedTickets = await enrichTicketsWithData(ticketsData || []);
-      setTickets(enrichedTickets);
-      
+      const result = await adminTicketRequest<{ tickets: Ticket[] }>('/api/admin/support-tickets');
+      setTickets(result.tickets || []);
       toast.success('Tickets loaded successfully');
     } catch (error) {
       console.error('Failed to load tickets', error);
-      toast.error('Failed to load tickets');
+      toast.error(`Failed to load tickets: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Enrich tickets with user data and replies
-  const enrichTicketsWithData = async (tickets: any[]): Promise<Ticket[]> => {
-    const userIds = [...new Set(tickets.map(t => t.user_id).filter(Boolean))];
-    const enrichedTickets = [...tickets];
-
-    // Fetch user details
-    if (userIds.length > 0) {
-      const { data: users, error } = await supabase
-        .from('users')
-        .select('id, email, first_name, last_name, avatar_url')
-        .in('id', userIds);
-
-      if (!error && users) {
-        const usersMap: Record<string, any> = {};
-        (users || []).forEach((user: any) => { usersMap[user.id] = user; });
-
-        enrichedTickets.forEach(ticket => {
-          ticket.user = usersMap[String(ticket.user_id)] || null;
-        });
-      }
-    }
-
-    // Fetch replies for each ticket
-    const ticketIds = tickets.map(t => t.id);
-    if (ticketIds.length > 0) {
-      const { data: replies, error } = await supabase
-        .from('ticket_replies')
-        .select('*')
-        .in('ticket_id', ticketIds)
-        .order('created_at', { ascending: true });
-
-      if (!error && replies) {
-        // Fetch user details for replies
-        const replyUserIds = [...new Set(replies.map(r => r.user_id).filter(Boolean))];
-        let replyUsersMap: Record<string, any> = {};
-
-        if (replyUserIds.length > 0) {
-          const { data: replyUsers } = await supabase
-            .from('users')
-            .select('id, email, first_name, last_name')
-            .in('id', replyUserIds);
-
-          if (replyUsers) {
-            replyUsersMap = replyUsers.reduce(
-              (acc: Record<string, any>, user) => ({ ...acc, [user.id]: user }),
-              {} as Record<string, any>
-            );
-          }
-        }
-
-        // Group replies by ticket
-        const repliesByTicket = replies.reduce((acc: Record<string, TicketReply[]>, reply) => {
-          if (!acc[reply.ticket_id]) {
-            acc[reply.ticket_id] = [];
-          }
-          acc[reply.ticket_id].push({
-            ...reply,
-            user: replyUsersMap[String(reply.user_id)] || null
-          });
-          return acc;
-        }, {} as Record<string, TicketReply[]>);
-
-        // Add replies to tickets
-        enrichedTickets.forEach(ticket => {
-          ticket.replies = repliesByTicket[ticket.id] || [];
-        });
-      }
-    }
-
-    return enrichedTickets;
-  };
-
   // Update ticket status
   const updateTicketStatus = async (ticketId: string, status: TicketStatus) => {
     try {
-      const { error } = await supabase
-        .from('support_tickets')
-        .update({ 
-          status, 
-          updated_at: new Date().toISOString() 
-        })
-        .eq('id', ticketId);
-
-      if (error) throw error;
+      await adminTicketRequest<{ ticket: Ticket }>(`/api/admin/support-tickets/${encodeURIComponent(ticketId)}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
 
       setTickets(prev => prev.map(ticket => 
         ticket.id === ticketId ? { ...ticket, status } : ticket
@@ -208,7 +136,7 @@ const TicketsPage = () => {
       toast.success(`Ticket marked as ${status}`);
     } catch (error) {
       console.error('Failed to update ticket status', error);
-      toast.error('Failed to update ticket status');
+      toast.error(`Failed to update ticket status: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -221,61 +149,25 @@ const TicketsPage = () => {
 
     setSendingReply(true);
     try {
-      // Create reply record
-      const replyData = {
-        ticket_id: selectedTicket.id,
-        user_id: 'admin', // Use actual admin user ID or 'admin' identifier
-        message: replyMessage,
-        is_admin: true,
-        created_at: new Date().toISOString()
-      };
-
-      const { error: replyError } = await supabase
-        .from('ticket_replies')
-        .insert([replyData]);
-
-      if (replyError) throw replyError;
-
-      // Update ticket status and last reply info
-      const { error: ticketError } = await supabase
-        .from('support_tickets')
-        .update({
-          status: 'responded',
-          admin_reply: replyMessage,
-          admin_replied_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', selectedTicket.id);
-
-      if (ticketError) throw ticketError;
-
-      // Update local state
-      const newReply: TicketReply = {
-        ...replyData,
-        id: `temp_${Date.now()}`,
-        user: {
-          email: 'Admin',
-          first_name: 'Admin'
-        }
-      };
+      const result = await adminTicketRequest<{ reply: TicketReply; ticket: Partial<Ticket> }>(
+        `/api/admin/support-tickets/${encodeURIComponent(selectedTicket.id)}/replies`,
+        { method: 'POST', body: JSON.stringify({ message: replyMessage }) }
+      );
+      const newReply = result.reply;
 
       setTickets(prev => prev.map(ticket => 
         ticket.id === selectedTicket.id 
-          ? { 
-              ...ticket, 
-              status: 'responded',
-              admin_reply: replyMessage,
-              admin_replied_at: new Date().toISOString(),
-              replies: [...(ticket.replies || []), newReply]
-            } 
+          ? {
+              ...ticket,
+              ...result.ticket,
+              replies: [...(ticket.replies || []), newReply],
+            }
           : ticket
       ));
 
       setSelectedTicket(prev => prev ? {
         ...prev,
-        status: 'responded',
-        admin_reply: replyMessage,
-        admin_replied_at: new Date().toISOString(),
+        ...result.ticket,
         replies: [...(prev.replies || []), newReply]
       } : null);
 
@@ -283,7 +175,7 @@ const TicketsPage = () => {
       toast.success('Reply sent successfully');
     } catch (error) {
       console.error('Failed to send reply', error);
-      toast.error('Failed to send reply');
+      toast.error(`Failed to send reply: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setSendingReply(false);
     }

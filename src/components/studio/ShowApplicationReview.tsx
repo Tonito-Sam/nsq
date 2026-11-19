@@ -209,6 +209,7 @@ interface CreatorShowSubmission {
   submitted_for_review_at: string | null;
   time_slot_start: string | null;
   time_slot_end: string | null;
+  creator_name?: string;
   creator_username?: string;
   channel_name?: string;
   preferred_days: string[];
@@ -225,6 +226,7 @@ interface PublishedCreatorShow {
   banner_url: string | null;
   approved_days: string[];
   published_at: string | null;
+  creator_name?: string;
   creator_username?: string;
   channel_name?: string;
 }
@@ -282,13 +284,13 @@ export const CreatorShowPublicationReview = ({
     const showIds = rows.map((show) => show.id);
     const [usersResult, channelsResult, episodesResult, applicationsResult] = await Promise.all([
       creatorIds.length
-        ? supabase.from('users').select('id, username').in('id', creatorIds)
+        ? supabase.from('users').select('id, first_name, last_name, username').in('id', creatorIds)
         : Promise.resolve({ data: [], error: null }),
       creatorIds.length
         ? supabase.from('studio_channels').select('user_id, name').in('user_id', creatorIds)
         : Promise.resolve({ data: [], error: null }),
       showIds.length
-        ? (supabase.from('studio_episodes') as any).select('id, show_id, title, video_url, thumbnail_url').in('show_id', showIds).order('created_at', { ascending: true })
+        ? (supabase.from('studio_episodes') as any).select('id, show_id, title, video_url, thumbnail_url').in('show_id', showIds).not('video_url', 'like', 'podcast-private://%').order('created_at', { ascending: true })
         : Promise.resolve({ data: [], error: null }),
       showIds.length
         ? (supabase.from('studio_show_applications' as any).select('approved_show_id, preferred_days').in('approved_show_id', showIds).eq('status', 'approved') as any)
@@ -300,7 +302,13 @@ export const CreatorShowPublicationReview = ({
       toast({ title: 'Could not load creator show details', description: relatedError?.message, variant: 'destructive' });
     }
 
-    const usernames = new Map((usersResult.data || []).map((user) => [user.id, user.username]));
+    const creators = new Map((usersResult.data || []).map((user) => [
+      user.id,
+      {
+        name: [user.first_name, user.last_name].filter(Boolean).join(' '),
+        username: user.username,
+      },
+    ]));
     const channelNames = new Map((channelsResult.data || []).map((channel) => [channel.user_id, channel.name]));
     const preferredDaysByShow = new Map<string, string[]>(
       (applicationsResult.data || []).map((application: { approved_show_id: string; preferred_days: string[] | null }) => [
@@ -317,14 +325,16 @@ export const CreatorShowPublicationReview = ({
 
     setShows(rows.map((show) => ({
       ...show,
-      creator_username: usernames.get(show.created_by) || undefined,
+      creator_name: creators.get(show.created_by)?.name || undefined,
+      creator_username: creators.get(show.created_by)?.username || undefined,
       channel_name: channelNames.get(show.created_by) || undefined,
       preferred_days: preferredDaysByShow.get(show.id) || [],
       episodes: episodesByShow.get(show.id) || [],
     })));
     setPublishedShows(publishedRows.map((show) => ({
       ...show,
-      creator_username: usernames.get(show.created_by) || undefined,
+      creator_name: creators.get(show.created_by)?.name || undefined,
+      creator_username: creators.get(show.created_by)?.username || undefined,
       channel_name: channelNames.get(show.created_by) || undefined,
       approved_days: show.approved_days || [],
     })));
@@ -420,7 +430,8 @@ export const CreatorShowPublicationReview = ({
                 <div className="min-w-0">
                   <h3 className="text-base font-bold">{show.title}</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {show.creator_username ? `@${show.creator_username}` : 'Creator'}
+                     Creator: {show.creator_name || (show.creator_username ? `@${show.creator_username}` : 'Creator')}
+                     {show.creator_name && show.creator_username ? ` · @${show.creator_username}` : ''}
                     {show.channel_name ? ` · ${show.channel_name}` : ''}
                     {show.category ? ` · ${show.category}` : ''}
                   </p>
@@ -549,7 +560,8 @@ export const CreatorShowPublicationReview = ({
             <div className="min-w-0 flex-1">
               <h3 className="truncate text-sm font-semibold">{show.title}</h3>
               <p className="truncate text-xs text-muted-foreground">
-                {show.creator_username ? `@${show.creator_username}` : 'Creator'}
+                Creator: {show.creator_name || (show.creator_username ? `@${show.creator_username}` : 'Creator')}
+                {show.creator_name && show.creator_username ? ` · @${show.creator_username}` : ''}
                 {show.channel_name ? ` · ${show.channel_name}` : ''}
                 {show.category ? ` · ${show.category}` : ''}
               </p>

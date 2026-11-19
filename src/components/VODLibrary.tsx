@@ -78,6 +78,7 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
   const initialEpisodeNotifiedRef = useRef(false);
   const lastLoadAtRef = useRef<number>(0);
   const consecutiveErrorRef = useRef<number>(0);
+  const trackingViewsRef = useRef(new Set<string>());
 
   // Load user's viewed episodes from localStorage
   useEffect(() => {
@@ -96,69 +97,29 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
 
   // Track when an episode is viewed
   const trackEpisodeView = useCallback(async (episodeId: string, episodeTitle: string, showId?: string) => {
+    if (userViews[episodeId] || trackingViewsRef.current.has(episodeId)) return;
+    trackingViewsRef.current.add(episodeId);
+
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id;
-      
-      // Check if user has already viewed this episode in this session
-      if (userViews[episodeId]) {
-        return; // Already tracked in this session
-      }
+      const { data: updatedViews, error: updateError } = await supabase.rpc(
+        'increment_studio_episode_views',
+        { p_episode_id: episodeId },
+      );
+      if (updateError) throw updateError;
 
-      // Update local state
-      setUserViews(prev => ({
-        ...prev,
-        [episodeId]: true
-      }));
-
-      // Save to localStorage
+      setUserViews(prev => ({ ...prev, [episodeId]: true }));
       try {
         const viewedEpisodes = JSON.parse(localStorage.getItem('viewed_episodes') || '{}');
         viewedEpisodes[episodeId] = true;
         localStorage.setItem('viewed_episodes', JSON.stringify(viewedEpisodes));
-      } catch (e) {
-        console.error('Error saving to localStorage:', e);
+      } catch (error) {
+        console.error('Error saving to localStorage:', error);
       }
 
-      // Update episode view count in state
-      setEpisodes(prev => prev.map(ep => {
-        if (ep.id === episodeId) {
-          return {
-            ...ep,
-            views: (ep.views || 0) + 1,
-            last_viewed_at: new Date().toISOString()
-          };
-        }
-        return ep;
-      }));
-
-      // Update Supabase database
-      const { data: existingEpisode, error: fetchError } = await supabase
-        .from('studio_episodes')
-        .select('views')
-        .eq('id', episodeId)
-        .single();
-
-      if (fetchError && fetchError.code !== 'PGRST116') {
-        console.error('Error fetching episode:', fetchError);
-        return;
-      }
-
-      const currentViews = existingEpisode?.views || 0;
-      const newViews = currentViews + 1;
-
-      // Update episode views
-      const { error: updateError } = await supabase
-        .from('studio_episodes')
-        .update({ 
-          views: newViews,
-          last_viewed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', episodeId);
-
-      if (updateError) {
-        console.error('Error updating episode views:', updateError);
-      }
+      setEpisodes(prev => prev.map(ep => ep.id === episodeId
+        ? { ...ep, views: Number(updatedViews ?? (ep.views || 0) + 1), last_viewed_at: new Date().toISOString() }
+        : ep));
 
       // Also track unique user views if user is logged in
       if (userId) {
@@ -223,6 +184,8 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
       console.log(`Tracked view for episode: ${episodeTitle} (${episodeId})`);
     } catch (error) {
       console.error('Error tracking episode view:', error);
+    } finally {
+      trackingViewsRef.current.delete(episodeId);
     }
   }, [userViews]);
 

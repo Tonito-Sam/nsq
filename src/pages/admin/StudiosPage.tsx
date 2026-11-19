@@ -14,6 +14,8 @@ import generateEpisodesForShow from '../../lib/scheduleGenerator';
 import { getCategoryColor } from '../../lib/scheduleUtils';
 import DailyPodcastNewsroom from '@/components/DailyPodcastNewsroom';
 import { CreatorShowPublicationReview, ShowApplicationReview } from '@/components/studio/ShowApplicationReview';
+import CreatorPodcastReview from '@/components/studio/CreatorPodcastReview';
+import AdminPodcastChannels from '@/components/studio/AdminPodcastChannels';
 import {
   Tv,
   Calendar,
@@ -32,8 +34,18 @@ import {
   Play,
   ArrowRight,
   CircleDot,
+  Sparkles,
+  Eye,
+  Mic2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 // ─── Extended ProgramSchedule (adds thumbnail + episode info) ────────────────
 
@@ -89,9 +101,11 @@ const defaultEpisode = {
   show_id: null,
 };
 
+const BROADCAST_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
 // ─── Tab config ───────────────────────────────────────────────────────────────
 
-type TabKey = 'studio' | 'creator-shows' | 'schedule' | 'ai-presenter' | 'insights' | 'applications';
+type TabKey = 'studio' | 'creator-shows' | 'podcast-channels' | 'schedule' | 'ai-presenter' | 'insights' | 'applications';
 
 const TABS: {
   key: TabKey;
@@ -113,6 +127,13 @@ const TABS: {
     icon: Tv,
     gradient: 'from-emerald-600 to-teal-500',
     description: 'Browse creator-owned shows already published on NexSq TV',
+  },
+  {
+    key: 'podcast-channels',
+    label: 'Podcast Channels',
+    icon: Mic2,
+    gradient: 'from-violet-600 to-purple-500',
+    description: 'Manage approved creator Podcast channels',
   },
   {
     key: 'schedule',
@@ -183,6 +204,43 @@ const getNowPosition = (startMin = 0, endMin = 24 * 60): number => {
   if (now < startMin) return 0;
   if (now > endMin) return 1;
   return (now - startMin) / (endMin - startMin);
+};
+
+const toDateTimeLocalValue = (value?: string | null) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+};
+
+const toTimestampOrNull = (value?: string | null) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error('Enter a valid scheduled date and time.');
+  return date.toISOString();
+};
+
+const getEmbeddedVideoUrl = (value: string) => {
+  let url: URL;
+  try {
+    url = new URL(value, window.location.origin);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase().replace(/^www\./, '');
+  if (host === 'youtu.be') {
+    const videoId = url.pathname.split('/').filter(Boolean)[0];
+    return videoId ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}` : null;
+  }
+  if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+    const videoId = url.searchParams.get('v') || url.pathname.match(/^\/(?:embed|shorts|live)\/([^/?]+)/)?.[1];
+    return videoId ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}` : null;
+  }
+  if (host === 'vimeo.com' || host.endsWith('.vimeo.com')) {
+    const videoId = url.pathname.match(/\/(?:video\/)?(\d+)/)?.[1];
+    return videoId ? `https://player.vimeo.com/video/${videoId}` : null;
+  }
+  return null;
 };
 
 // ─── Header stat ──────────────────────────────────────────────────────────────
@@ -1065,6 +1123,7 @@ const TVCalendarGuide = ({
 
 const StudiosPage = () => {
   const [shows, setShows] = useState<any[]>([]);
+  const [episodeCounts, setEpisodeCounts] = useState<Record<string, number | null>>({});
   const [showModal, setShowModal] = useState(false);
   const [editingShow, setEditingShow] = useState<any | null>(null);
   const [form, setForm] = useState<any>(defaultShow);
@@ -1081,6 +1140,11 @@ const StudiosPage = () => {
   const [currentEpisodeShowId, setCurrentEpisodeShowId] = useState<string | number | null>(null);
   const [currentEpisodeShowTitle, setCurrentEpisodeShowTitle] = useState('');
   const [currentEpisodeShowSchedule, setCurrentEpisodeShowSchedule] = useState('');
+  const [episodeBroadcastSlot, setEpisodeBroadcastSlot] = useState({ days: [] as string[], start: '', end: '' });
+  const [editingBroadcastSlot, setEditingBroadcastSlot] = useState(false);
+  const [savingBroadcastSlot, setSavingBroadcastSlot] = useState(false);
+  const [currentEpisodeShowVideo, setCurrentEpisodeShowVideo] = useState<any | null>(null);
+  const [previewVideo, setPreviewVideo] = useState<{ title: string; url: string } | null>(null);
   const [newEpisodeForm, setNewEpisodeForm] = useState<any>(defaultEpisode);
   const [showEpisodePage, setShowEpisodePage] = useState(false);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
@@ -1097,6 +1161,11 @@ const StudiosPage = () => {
   const [nowPlaying, setNowPlaying] = useState<ExtendedProgramSchedule | null>(null);
   const [podcastSessionId, setPodcastSessionId] = useState<string | null>(null);
   const podcastWindowRef = useRef<Window | null>(null);
+  const hasStandaloneShowEpisode = Boolean(
+    currentEpisodeShowVideo?.video_url &&
+    !episodes.some((episode: any) => episode.video_url === currentEpisodeShowVideo.video_url),
+  );
+  const embeddedPreviewUrl = previewVideo ? getEmbeddedVideoUrl(previewVideo.url) : null;
 
   const activeTab: TabKey =
     showStep === 12
@@ -1109,7 +1178,9 @@ const StudiosPage = () => {
             ? 'applications'
             : showStep === 17
               ? 'creator-shows'
-              : 'ai-presenter';
+              : showStep === 18
+                ? 'podcast-channels'
+                : 'ai-presenter';
 
   const handleTabChange = (key: TabKey) => {
     const map: Record<TabKey, number> = {
@@ -1119,6 +1190,7 @@ const StudiosPage = () => {
       applications: 15,
       'ai-presenter': 16,
       'creator-shows': 17,
+      'podcast-channels': 18,
     };
     setShowStep(map[key]);
   };
@@ -1179,7 +1251,40 @@ const StudiosPage = () => {
       toast({ title: 'Error', description: 'Failed to fetch shows', variant: 'destructive' });
       return;
     }
-    setShows((data || []).filter((show: any) => show.show_source !== 'creator'));
+    const platformShows = (data || []).filter((show: any) => show.show_source !== 'creator');
+    setShows(platformShows);
+
+    if (!platformShows.length) {
+      setEpisodeCounts({});
+      return;
+    }
+
+    const { data: linkedEpisodes, error: episodesError } = await supabase
+      .from('studio_episodes')
+      .select('show_id, video_url')
+      .in('show_id', platformShows.map((show: any) => show.id));
+    if (episodesError) {
+      console.error('Failed to count show episodes:', episodesError);
+      setEpisodeCounts(Object.fromEntries(platformShows.map((show: any) => [String(show.id), null])));
+      toast({
+        title: 'Could not load episode counts',
+        description: episodesError.message,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const nextCounts: Record<string, number> = {};
+    for (const show of platformShows) {
+      const showEpisodes = (linkedEpisodes || []).filter(
+        (episode: any) => String(episode.show_id) === String(show.id),
+      );
+      const hasSeparateShowVideo = Boolean(
+        show.video_url && !showEpisodes.some((episode: any) => episode.video_url === show.video_url),
+      );
+      nextCounts[String(show.id)] = showEpisodes.length + (hasSeparateShowVideo ? 1 : 0);
+    }
+    setEpisodeCounts(nextCounts);
   };
 
   const fetchEpisodes = async (showId: string | number) => {
@@ -1205,19 +1310,29 @@ const StudiosPage = () => {
   const fetchEpisodeShowTitle = async (showId: string | number) => {
     setCurrentEpisodeShowTitle('');
     setCurrentEpisodeShowSchedule('');
+    setEpisodeBroadcastSlot({ days: [], start: '', end: '' });
+    setEditingBroadcastSlot(false);
     const { data, error } = await supabase
       .from('studio_shows')
-      .select('title, approved_days, time_slot_start, time_slot_end')
+      .select('title, approved_days, days_of_week, time_slot_start, time_slot_end, video_url, thumbnail_url, description, duration')
       .eq('id', showId)
       .maybeSingle();
     if (error) {
       console.error('Could not load episode show name:', error);
+      setCurrentEpisodeShowVideo(null);
       return;
     }
     setCurrentEpisodeShowTitle(data?.title || '');
-    if (data?.time_slot_start && data?.time_slot_end) {
-      const days = Array.isArray(data.approved_days) ? data.approved_days : [];
-      const slot = `${String(data.time_slot_start).slice(0, 5)}–${String(data.time_slot_end).slice(0, 5)}`;
+    setCurrentEpisodeShowVideo(data?.video_url ? { ...data, id: showId } : null);
+    const approvedDays = parseDays(data?.approved_days);
+    const savedDays = approvedDays?.length ? approvedDays : parseDays(data?.days_of_week);
+    const daySet = new Set(savedDays || []);
+    const days = BROADCAST_DAYS.filter(day => daySet.has(day.toLowerCase()));
+    const start = String(data?.time_slot_start || '').slice(0, 5);
+    const end = String(data?.time_slot_end || '').slice(0, 5);
+    setEpisodeBroadcastSlot({ days, start, end });
+    if (start && end) {
+      const slot = `${start}–${end}`;
       setCurrentEpisodeShowSchedule(days.length ? `${days.join(', ')} · ${slot}` : slot);
     }
   };
@@ -1370,9 +1485,9 @@ const StudiosPage = () => {
     toast({ title: 'Recording ready', description: 'The Supabase video URL is filled into the show draft.' });
   };
 
-  const handleStartPodcastRecording = (title: string, script: string) => {
+  const handleStartPodcastRecording = (title: string, script: string, hostNames: string) => {
     const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    localStorage.setItem(`podcast-recording:${sessionId}`, JSON.stringify({ title, script }));
+    localStorage.setItem(`podcast-recording:${sessionId}`, JSON.stringify({ title, script, hostNames, createdAt: Date.now() }));
     const width = window.screen.availWidth || 1440;
     const height = window.screen.availHeight || 900;
     const recordingWindow = window.open(
@@ -1445,7 +1560,13 @@ const StudiosPage = () => {
   const handleOpenModal = (show?: any) => {
     if (show) {
       setEditingShow(show);
-      setForm(show);
+      setForm({
+        ...defaultShow,
+        ...show,
+        duration: show.duration ?? '',
+        scheduled_time: toDateTimeLocalValue(show.scheduled_time),
+        end_time: toDateTimeLocalValue(show.end_time),
+      });
       supabase
         .from('studio_episodes')
         .select('*')
@@ -1522,6 +1643,12 @@ const StudiosPage = () => {
 
     setUploading(true);
     try {
+      const durationValue = String(form.duration ?? '').trim();
+      const duration = durationValue ? Number(durationValue) : null;
+      if (duration !== null && (!Number.isInteger(duration) || duration < 0)) {
+        throw new Error('Duration must be a non-negative whole number.');
+      }
+
       let video_url = form.video_url;
       let thumbnail_url = form.thumbnail_url;
       if (form.video_type === 'upload' && form.video_file)
@@ -1534,9 +1661,9 @@ const StudiosPage = () => {
         description: form.description,
         video_url,
         thumbnail_url,
-        duration: form.duration,
-        scheduled_time: form.scheduled_time || null,
-        end_time: form.end_time || null,
+        duration,
+        scheduled_time: toTimestampOrNull(form.scheduled_time),
+        end_time: toTimestampOrNull(form.end_time),
         schedule_pattern: form.schedule_pattern || null,
         time_slot_start: form.time_slot_start || null,
         time_slot_end: form.time_slot_end || null,
@@ -1599,6 +1726,7 @@ const StudiosPage = () => {
         }
       }
 
+      let episodeGenerationError: unknown = null;
       try {
         const daysToGen = Number(form.auto_generate_days || 7);
         if (
@@ -1621,9 +1749,26 @@ const StudiosPage = () => {
         }
       } catch (err) {
         console.error('Auto-generate episodes error:', err);
+        episodeGenerationError = err;
       }
 
-      toast({ title: 'Success', description: 'Show and episodes saved successfully.' });
+      if (episodeGenerationError) {
+        const message = episodeGenerationError instanceof Error
+          ? episodeGenerationError.message
+          : typeof episodeGenerationError === 'object' &&
+              episodeGenerationError !== null &&
+              'message' in episodeGenerationError &&
+              typeof episodeGenerationError.message === 'string'
+            ? episodeGenerationError.message
+            : 'Could not create scheduled episodes.';
+        toast({
+          title: 'Show saved, but schedule generation failed',
+          description: message,
+          variant: 'destructive',
+        });
+      } else {
+        toast({ title: 'Success', description: 'Show and episodes saved successfully.' });
+      }
       setShowModal(false);
       setForm(defaultShow);
       setStagedEpisodes([]);
@@ -1692,6 +1837,9 @@ const StudiosPage = () => {
 
   const handleOpenEpisodeModal = (showId: string | number) => {
     setCurrentEpisodeShowId(showId);
+    setEpisodes([]);
+    setCurrentEpisodeShowVideo(null);
+    setEpisodeBroadcastSlot({ days: [], start: '', end: '' });
     void fetchEpisodeShowTitle(showId);
     setShowEpisodePage(true);
     fetchEpisodes(showId);
@@ -1714,6 +1862,9 @@ const StudiosPage = () => {
     setCurrentEpisodeShowId(null);
     setCurrentEpisodeShowTitle('');
     setCurrentEpisodeShowSchedule('');
+    setEpisodeBroadcastSlot({ days: [], start: '', end: '' });
+    setEditingBroadcastSlot(false);
+    setCurrentEpisodeShowVideo(null);
     setNewEpisodeForm(defaultEpisode);
   };
 
@@ -1808,6 +1959,67 @@ const StudiosPage = () => {
         ...(name === 'thumbnail_file' && { thumbnail_url: '' }),
       }));
     else setNewEpisodeForm((f: any) => ({ ...f, [name]: value }));
+  };
+
+  const toggleEpisodeBroadcastDay = (day: string) => {
+    setEpisodeBroadcastSlot(slot => ({
+      ...slot,
+      days: slot.days.includes(day)
+        ? slot.days.filter(selectedDay => selectedDay !== day)
+        : [...slot.days, day],
+    }));
+  };
+
+  const saveEpisodeBroadcastSlot = async () => {
+    if (!currentEpisodeShowId) return;
+    if (!['admin', 'superadmin'].includes(userPrivilege || '')) {
+      toast({ title: 'Administrator access required', description: 'Only administrators can change a broadcast slot.', variant: 'destructive' });
+      return;
+    }
+
+    const days = BROADCAST_DAYS.filter(day => episodeBroadcastSlot.days.includes(day));
+    const { start, end } = episodeBroadcastSlot;
+    if (!days.length || !start || !end || start === end) {
+      toast({
+        title: 'Complete the broadcast slot',
+        description: 'Select at least one day and choose different start and end times.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setSavingBroadcastSlot(true);
+    try {
+      const { data, error } = await supabase
+        .from('studio_shows')
+        .update({
+          approved_days: days,
+          days_of_week: days.join(','),
+          time_slot_start: start,
+          time_slot_end: end,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', currentEpisodeShowId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('The show was not updated. Check that you have administrator access.');
+
+      setEpisodeBroadcastSlot({ days, start, end });
+      setCurrentEpisodeShowSchedule(`${days.join(', ')} · ${start}–${end}`);
+      setEditingBroadcastSlot(false);
+      toast({ title: 'Broadcast slot saved', description: 'The show’s broadcast days and time have been updated.' });
+      void fetchShows();
+      void generateSchedule(selectedDate);
+    } catch (error) {
+      toast({
+        title: 'Could not save broadcast slot',
+        description: error instanceof Error ? error.message : 'Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingBroadcastSlot(false);
+    }
   };
 
   const validateEpisodeForm = (): boolean => {
@@ -1960,7 +2172,7 @@ const StudiosPage = () => {
           {/* Tab navigation — pill style */}
           <div className="-mx-4 sm:mx-0 px-4 sm:px-0 overflow-x-auto">
             <div className="flex gap-1.5 min-w-max pb-1">
-              {TABS.map(({ key, label, icon: Icon, gradient }) => {
+              {TABS.filter(({ key }) => key !== 'podcast-channels' || isAdmin).map(({ key, label, icon: Icon, gradient }) => {
                 const isActive = activeTab === key;
                 return (
                   <button
@@ -2194,9 +2406,18 @@ const StudiosPage = () => {
                     </div>
 
                     <CardContent className="p-4">
-                      <h3 className="text-sm font-bold tracking-tight line-clamp-1">
-                        {show.title}
-                      </h3>
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="min-w-0 text-sm font-bold tracking-tight line-clamp-1">
+                          {show.title}
+                        </h3>
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {episodeCounts[String(show.id)] === null
+                            ? 'Episode count unavailable'
+                            : episodeCounts[String(show.id)] === undefined
+                              ? 'Loading episodes…'
+                              : `${episodeCounts[String(show.id)]} episode${episodeCounts[String(show.id)] === 1 ? '' : 's'}`}
+                        </span>
+                      </div>
                       <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-1 tabular-nums">
                         <Clock className="h-3 w-3 shrink-0" />
                         <span className="truncate">
@@ -2237,6 +2458,19 @@ const StudiosPage = () => {
                           className="h-8 flex-1 rounded-lg text-[11px] font-semibold"
                         >
                           Episodes
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setPreviewVideo({
+                            title: `${show.title}${show.video_url ? ' - Episode 1' : ''}`,
+                            url: show.video_url,
+                          })}
+                          disabled={!show.video_url}
+                          className="h-8 flex-1 gap-1 rounded-lg text-[11px] font-semibold"
+                        >
+                          <Eye className="h-3 w-3" />
+                          Preview
                         </Button>
                         <Button
                           size="sm"
@@ -2431,8 +2665,15 @@ const StudiosPage = () => {
                 void fetchShows();
               }}
             />
+            <CreatorPodcastReview
+              isAdmin={isAdmin}
+              onReviewComplete={() => {
+                void fetchShows();
+              }}
+            />
           </div>
         )}
+        {activeTab === 'podcast-channels' && isAdmin && <AdminPodcastChannels />}
         {activeTab === 'creator-shows' && (
           <CreatorShowPublicationReview isAdmin={isAdmin} view="published" />
         )}
@@ -2518,7 +2759,7 @@ const StudiosPage = () => {
                         Delete ({selectedEpisodeIds.length})
                       </Button>
                       <span className="text-xs text-muted-foreground ml-auto tabular-nums">
-                        {episodes.length} total episodes
+                        {episodes.length + (hasStandaloneShowEpisode ? 1 : 0)} total episodes
                       </span>
                     </div>
 
@@ -2530,7 +2771,30 @@ const StudiosPage = () => {
                       onEdit={handleEditEpisode}
                       onDelete={handleDeleteEpisode}
                       onSelect={handleSelectEpisode}
+                      onPreview={(episode) => {
+                        if (episode.video_url) setPreviewVideo({ title: episode.title, url: episode.video_url });
+                      }}
                     />
+                    {hasStandaloneShowEpisode && (
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/30 p-3">
+                        <div>
+                          <p className="text-sm font-semibold">Episode 1</p>
+                          <p className="text-xs text-muted-foreground">{currentEpisodeShowVideo.title}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5"
+                          onClick={() => setPreviewVideo({
+                            title: `${currentEpisodeShowVideo.title} - Episode 1`,
+                            url: currentEpisodeShowVideo.video_url,
+                          })}
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          Preview
+                        </Button>
+                      </div>
+                    )}
 
                     <div className="mt-8 rounded-2xl border border-border/60 bg-muted/30 p-5">
                       <h3 className="text-sm font-bold tracking-tight mb-4 flex items-center gap-2">
@@ -2554,15 +2818,105 @@ const StudiosPage = () => {
                           />
                         </div>
                         <div className="col-span-full">
-                          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                            Approved Broadcast Slot
-                          </label>
-                          <Input
-                            value={currentEpisodeShowSchedule || 'No broadcast slot assigned'}
-                            readOnly
-                            aria-label="Approved show broadcast slot"
-                            className="h-11 rounded-xl bg-muted/40"
-                          />
+                          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                            <label className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                              Approved Broadcast Slot
+                            </label>
+                            {isAdmin && !editingBroadcastSlot && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-8 rounded-lg"
+                                onClick={() => setEditingBroadcastSlot(true)}
+                              >
+                                {currentEpisodeShowSchedule ? 'Change slot' : 'Assign slot'}
+                              </Button>
+                            )}
+                          </div>
+                          {editingBroadcastSlot ? (
+                            <div className="space-y-3 rounded-xl border border-border/60 bg-background/50 p-3">
+                              <div>
+                                <span className="mb-2 block text-xs font-medium text-muted-foreground">Broadcast days</span>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {BROADCAST_DAYS.map(day => {
+                                    const selected = episodeBroadcastSlot.days.includes(day);
+                                    return (
+                                      <button
+                                        key={day}
+                                        type="button"
+                                        aria-pressed={selected}
+                                        onClick={() => toggleEpisodeBroadcastDay(day)}
+                                        className={cn(
+                                          'rounded-full px-3 py-1 text-[11px] font-semibold transition-all ring-1',
+                                          selected
+                                            ? 'bg-gradient-to-br from-purple-600 to-fuchsia-500 text-white ring-transparent'
+                                            : 'bg-background text-muted-foreground ring-border/60 hover:ring-purple-500/30',
+                                        )}
+                                      >
+                                        {day.slice(0, 3)}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="episode-broadcast-start">
+                                    Start time
+                                  </label>
+                                  <Input
+                                    id="episode-broadcast-start"
+                                    type="time"
+                                    value={episodeBroadcastSlot.start}
+                                    onChange={event => setEpisodeBroadcastSlot(slot => ({ ...slot, start: event.target.value }))}
+                                    className="h-10 rounded-lg"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-muted-foreground" htmlFor="episode-broadcast-end">
+                                    End time
+                                  </label>
+                                  <Input
+                                    id="episode-broadcast-end"
+                                    type="time"
+                                    value={episodeBroadcastSlot.end}
+                                    onChange={event => setEpisodeBroadcastSlot(slot => ({ ...slot, end: event.target.value }))}
+                                    className="h-10 rounded-lg"
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap justify-end gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  disabled={savingBroadcastSlot}
+                                  onClick={() => {
+                                    setEditingBroadcastSlot(false);
+                                    if (currentEpisodeShowId) void fetchEpisodeShowTitle(currentEpisodeShowId);
+                                  }}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  disabled={savingBroadcastSlot}
+                                  onClick={saveEpisodeBroadcastSlot}
+                                >
+                                  {savingBroadcastSlot ? 'Saving…' : 'Save slot'}
+                                </Button>
+                              </div>
+                              <p className="text-[11px] text-muted-foreground">
+                                This updates the show’s recurring broadcast slot.
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="flex min-h-11 items-center rounded-xl border border-input bg-muted/40 px-3 text-sm">
+                              {currentEpisodeShowSchedule || 'No broadcast slot assigned'}
+                            </div>
+                          )}
                         </div>
                         <div>
                           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -2770,6 +3124,42 @@ const StudiosPage = () => {
         )}
       </div>
 
+      <Dialog
+        open={Boolean(previewVideo)}
+        onOpenChange={(open) => {
+          if (!open) setPreviewVideo(null);
+        }}
+      >
+        <DialogContent className="max-w-4xl overflow-hidden p-0">
+          <DialogHeader className="px-5 pt-5">
+            <DialogTitle>{previewVideo?.title || 'Video preview'}</DialogTitle>
+            <DialogDescription>Preview this show or episode video.</DialogDescription>
+          </DialogHeader>
+          <div className="aspect-video w-full bg-black">
+            {previewVideo && (embeddedPreviewUrl ? (
+              <iframe
+                src={embeddedPreviewUrl}
+                title={previewVideo.title}
+                className="h-full w-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            ) : (
+              <video
+                key={previewVideo.url}
+                src={previewVideo.url}
+                controls
+                autoPlay
+                muted
+                playsInline
+                preload="metadata"
+                className="h-full w-full"
+              />
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* ═══════════════════════════════════════════════════════════════
           SHOW MODAL
          ═══════════════════════════════════════════════════════════════ */}
@@ -2976,7 +3366,7 @@ const StudiosPage = () => {
                     </label>
                     <Input
                       name="duration"
-                      value={form.duration}
+                      value={form.duration ?? ''}
                       onChange={handleFormChange}
                       type="number"
                       min="0"
@@ -3082,7 +3472,7 @@ const StudiosPage = () => {
                     </label>
                     <Input
                       name="scheduled_time"
-                      value={form.scheduled_time}
+                      value={form.scheduled_time || ''}
                       onChange={handleFormChange}
                       type="datetime-local"
                       className="h-11 rounded-xl"
@@ -3094,7 +3484,7 @@ const StudiosPage = () => {
                     </label>
                     <Input
                       name="end_time"
-                      value={form.end_time}
+                      value={form.end_time || ''}
                       onChange={handleFormChange}
                       type="datetime-local"
                       className="h-11 rounded-xl"

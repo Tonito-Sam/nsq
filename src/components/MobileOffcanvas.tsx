@@ -6,6 +6,8 @@ import { Card } from '@/components/ui/card';
 import { SearchDropdown } from './SearchDropdown';
 import { ModeToggle } from './ModeToggle';
 import { SuggestedFriends } from './SuggestedFriends';
+import { SuggestedPodcastChannels } from './SuggestedPodcastChannels';
+import { PodcastSubscriptionsCard } from './PodcastSubscriptionsCard';
 import { TrendingCard } from './TrendingCard';
 import { useAuth } from '@/hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
@@ -740,6 +742,12 @@ export const MobileOffcanvas: React.FC<MobileOffcanvasProps> = ({ open, onOpenCh
                 ))}
               </div>
             </Card>
+
+            {/* ═══════════════════════════════════════════════════════════
+                PODCAST CHANNELS
+               ═══════════════════════════════════════════════════════════ */}
+            <PodcastSubscriptionsCard onNavigate={handleNavigation} />
+            <SuggestedPodcastChannels onNavigate={handleNavigation} />
 
             {/* ═══════════════════════════════════════════════════════════
                 TRENDING

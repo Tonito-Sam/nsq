@@ -40,6 +40,11 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
     description: string;
     base_currency: string;
     shipping_partner: string;
+    shipping_pickup_address: string;
+    shipping_pickup_suburb: string;
+    shipping_pickup_city: string;
+    shipping_pickup_province: string;
+    shipping_pickup_postal_code: string;
     business_whatsapp_number: string;
     notify_whatsapp: boolean;
     business_country: string;
@@ -58,6 +63,11 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
     description: store?.description || '',
     base_currency: store?.base_currency || getCurrencyByCountry(store?.country),
     shipping_partner: store?.shipping_partner || '',
+    shipping_pickup_address: (store as any)?.shipping_pickup_address || '',
+    shipping_pickup_suburb: (store as any)?.shipping_pickup_suburb || '',
+    shipping_pickup_city: (store as any)?.shipping_pickup_city || '',
+    shipping_pickup_province: (store as any)?.shipping_pickup_province || '',
+    shipping_pickup_postal_code: (store as any)?.shipping_pickup_postal_code || '',
     business_whatsapp_number: (store as any)?.business_whatsapp_number || '',
     notify_whatsapp: Boolean(
       (store as any)?.notify_whatsapp &&
@@ -124,6 +134,11 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
           business_bank_branch: formData.business_branch_name || null,
           base_currency: formData.base_currency,
           shipping_partner: formData.shipping_partner,
+          shipping_pickup_address: formData.shipping_pickup_address.trim() || null,
+          shipping_pickup_suburb: formData.shipping_pickup_suburb.trim() || null,
+          shipping_pickup_city: formData.shipping_pickup_city.trim() || null,
+          shipping_pickup_province: formData.shipping_pickup_province.trim() || null,
+          shipping_pickup_postal_code: formData.shipping_pickup_postal_code.trim() || null,
           updated_at: new Date().toISOString()
         })
         .eq('id', store.id)
@@ -296,7 +311,39 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
               onChange={(e) => handleInputChange('shipping_partner', e.target.value)}
               placeholder="e.g., CourierGuy, PostNet"
             />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">South African checkout currently uses live Courier Guy rates through ShipLogic.</p>
           </div>
+
+          {formData.business_country === 'ZA' && (
+            <div className="md:col-span-2 space-y-4 rounded-lg border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
+              <div>
+                <h4 className="font-semibold text-gray-900 dark:text-gray-100">Courier pickup address</h4>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">This is where the courier collects paid orders. It is not shown to buyers.</p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <Label htmlFor="shipping_pickup_address">Street address</Label>
+                  <Input id="shipping_pickup_address" value={formData.shipping_pickup_address} onChange={event => handleInputChange('shipping_pickup_address', event.target.value)} placeholder="Street number and name" />
+                </div>
+                <div>
+                  <Label htmlFor="shipping_pickup_suburb">Suburb</Label>
+                  <Input id="shipping_pickup_suburb" value={formData.shipping_pickup_suburb} onChange={event => handleInputChange('shipping_pickup_suburb', event.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="shipping_pickup_city">City</Label>
+                  <Input id="shipping_pickup_city" value={formData.shipping_pickup_city} onChange={event => handleInputChange('shipping_pickup_city', event.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="shipping_pickup_province">Province</Label>
+                  <Input id="shipping_pickup_province" value={formData.shipping_pickup_province} onChange={event => handleInputChange('shipping_pickup_province', event.target.value)} placeholder="e.g., Gauteng" />
+                </div>
+                <div>
+                  <Label htmlFor="shipping_pickup_postal_code">Postal code</Label>
+                  <Input id="shipping_pickup_postal_code" value={formData.shipping_pickup_postal_code} onChange={event => handleInputChange('shipping_pickup_postal_code', event.target.value)} inputMode="numeric" />
+                </div>
+              </div>
+            </div>
+          )}
 
           <div>
             <Label htmlFor="business_whatsapp_number">Business WhatsApp Number</Label>

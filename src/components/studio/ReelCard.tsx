@@ -58,7 +58,8 @@ import {
   X,
   MoreVertical,
   Volume2,
-  VolumeX
+  VolumeX,
+  Tv,
 } from "lucide-react";
 
 import { ENABLE_LIVE } from '@/config/featureFlags';
@@ -102,6 +103,7 @@ interface ReelCardProps {
   userData?: any; // Pass userData as prop
   // When true, hide studio-level controls like the Go Live button regardless of feature flag
   hideLive?: boolean;
+  approvedShowId?: string | null;
   onPlaybackError?: (videoId: string) => void;
   mobileLayout?: boolean;
   hasUserInteracted?: boolean;
@@ -419,6 +421,7 @@ export function ReelCard({
   isActive,
   userData = null,
   hideLive = false,
+  approvedShowId,
   onPlaybackError,
   mobileLayout = false,
   hasUserInteracted = false,
@@ -1228,6 +1231,20 @@ export function ReelCard({
             onClick={() => navigate('/studio/live')}
           >
             <Radio className="h-5 w-5" />
+          </button>
+        )}
+        {approvedShowId && (
+          <button
+            type="button"
+            className="bg-gray-900 bg-opacity-70 p-2 rounded-full hover:bg-purple-600 transition text-white shadow-lg backdrop-blur-md"
+            onClick={(event) => {
+              event.stopPropagation();
+              navigate(`/tv/${approvedShowId}`);
+            }}
+            aria-label="Open your approved TV show"
+            title="Open your approved TV show"
+          >
+            <Tv className="h-5 w-5" />
           </button>
         )}
         <button

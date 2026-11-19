@@ -49,6 +49,7 @@ import CreateStore from "./pages/CreateStore";
 import ShippingPartnerPage from "./pages/ShippingPartnerPage";
 import ChannelPage from "./pages/ChannelPage";
 import StudioChannelPage from "./components/studio/ChannelPage";
+import PodcastChannelPage from "./pages/PodcastChannelPage";
 import Cart from "./pages/Cart";
 import Checkout from "./pages/Checkout";
 import OrderSummary from "./pages/OrderSummary";
@@ -60,6 +61,7 @@ import UploadReels from "./pages/UploadReels";
 import RecordReel from "./pages/RecordReel";
 import RecordVideo from "./pages/RecordVideo";
 import PodcastTeleprompter from "./pages/PodcastTeleprompter";
+import PodcastConferenceGuest from "./pages/PodcastConferenceGuest";
 import CreatorPodcastStudio from "./pages/CreatorPodcastStudio";
 import ShareTarget from "./pages/ShareTarget";
 import LiveStream from "./pages/LiveStream2";
@@ -257,6 +259,7 @@ const App = () => {
                     <Route path="/studio/record-preview" element={<RecordVideo />} />
                     <Route path="/studio/settings" element={<StudioSettings />} />
                     <Route path="/tv/:showId" element={<StudioShowPage />} />
+                    <Route path="/podcast/:showId" element={<PodcastChannelPage />} />
                     <Route path="/share" element={<ShareTarget />} />
                     <Route path="/wallet" element={<Wallet />} />
                     <Route path="/wallet/topup-result" element={<WalletTopupResult />} />
@@ -270,6 +273,7 @@ const App = () => {
                     <Route path="/reels/record" element={<RecordReel />} />
                     <Route path="/video/record" element={<RecordVideo />} />
                     <Route path="/podcast-teleprompter/:sessionId" element={<PodcastTeleprompter />} />
+                    <Route path="/podcast-guest/:roomToken" element={<PodcastConferenceGuest />} />
                     <Route path="/studio/podcast" element={<CreatorPodcastStudio />} />
                     <Route path="/live" element={<LiveStream />} />
                     <Route path="/stream-end/:streamId" element={<StreamEndPreviewWrapper />} />

@@ -13,6 +13,18 @@ describe('computeEpisodeSlots', () => {
     });
   });
 
+  it('accepts database time values that include seconds', () => {
+    const show = {
+      title: 'Existing Show',
+      schedule_pattern: 'daily',
+      time_slot_start: '19:00:00',
+      time_slot_end: '19:30:00',
+    };
+    const [slot] = computeEpisodeSlots(show, 1);
+    expect(slot.scheduled_time).toMatch(/T19:00:00$/);
+    expect(slot.end_time).toMatch(/T19:30:00$/);
+  });
+
   it('honors weekdays pattern', () => {
     const show = { title: 'Weekday Show', schedule_pattern: 'weekdays', time_slot_start: '10:00' };
     const slots = computeEpisodeSlots(show, 7);

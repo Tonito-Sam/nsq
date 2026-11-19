@@ -14,6 +14,7 @@ interface StudioHeaderProps {
   setActiveTab: (tab: 'all' | 'trending') => void;
   navigate: (path: string) => void;
   onSearch: (query: string, type: 'all' | 'creators' | 'channels' | 'videos') => void;
+  onApprovedShowIdChange?: (showId: string | null) => void;
   showCreateChannel?: boolean;
   onCreateChannel?: () => void;
   className?: string;
@@ -27,6 +28,7 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
   setActiveTab,
   navigate,
   onSearch,
+  onApprovedShowIdChange,
   showCreateChannel = false,
   onCreateChannel,
   className,
@@ -83,6 +85,7 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
 
     const fetchApprovedShow = async () => {
       setApprovedShowId(null);
+      onApprovedShowIdChange?.(null);
       if (!user) return;
 
       const { data, error } = await supabase
@@ -95,14 +98,21 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
         .limit(1)
         .maybeSingle();
 
-      if (!cancelled && !error) setApprovedShowId(data?.approved_show_id || null);
+      if (cancelled) return;
+      if (error) {
+        console.error('Could not load approved TV show for Studio navigation:', error);
+        return;
+      }
+      const showId = data?.approved_show_id || null;
+      setApprovedShowId(showId);
+      onApprovedShowIdChange?.(showId);
     };
 
     void fetchApprovedShow();
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, [onApprovedShowIdChange, user?.id]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();

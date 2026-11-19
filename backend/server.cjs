@@ -3,6 +3,7 @@ const dotenv = require('dotenv');
 const path = require('path');
 const { startWhatsAppOrderNotificationWorker } = require('./utils/whatsappOrderNotifications');
 const { startPlatformSpecialDayWorker } = require('./utils/platformSpecialDays');
+const { attachPodcastConferenceSignaling } = require('./utils/podcastConferenceSignaling.cjs');
 
 // Load env variables from backend/.env
 dotenv.config({ path: path.resolve(__dirname, '.env') });
@@ -62,6 +63,14 @@ try {
   console.log('✅ Mounted /api/admin (sync-sounds) route');
 } catch (e) {
   console.warn('⚠️ sync-sounds route not available:', e?.message || e);
+}
+
+try {
+  const adminSupportTickets = require('./routes/admin-support-tickets');
+  app.use('/api/admin/support-tickets', adminSupportTickets);
+  console.log('✅ Mounted /api/admin/support-tickets');
+} catch (e) {
+  console.warn('⚠️ admin support tickets route not available:', e?.message || e);
 }
 
 // Notifications
@@ -281,6 +290,8 @@ const server = app.listen(PORT, () => {
   }
   console.log('ℹ️ PID:', process.pid);
 });
+
+attachPodcastConferenceSignaling(server);
 
 startWhatsAppOrderNotificationWorker();
 startPlatformSpecialDayWorker();

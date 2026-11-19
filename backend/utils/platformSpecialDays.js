@@ -3,6 +3,7 @@ const axios = require('axios');
 const NAGER_API = 'https://date.nager.at/api/v3';
 const POLL_INTERVAL_MS = 10 * 60 * 1000;
 const CALENDAR_REFRESH_MS = 24 * 60 * 60 * 1000;
+const CALENDAR_RETRY_MS = 30 * 60 * 1000;
 const BACKGROUNDS = [
   'linear-gradient(135deg, #075985 0%, #312e81 55%, #701a75 100%)',
   'linear-gradient(135deg, #166534 0%, #0f766e 55%, #1d4ed8 100%)',
@@ -18,6 +19,7 @@ const PERSONAL_BACKGROUNDS = [
 let workerStarted = false;
 let lastCalendarSyncAt = 0;
 let calendarSyncYear = 0;
+let calendarSyncIncomplete = false;
 let running = false;
 
 function serviceConfig() {
@@ -51,31 +53,47 @@ function eventKey(countryCode, eventDate, name) {
   return `${countryCode}:${eventDate}:${slug}`;
 }
 
+async function getWithRetry(url, options = {}, attempts = 3) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await axios.get(url, options);
+    } catch (error) {
+      const status = error.response?.status;
+      const retryable = !status || status === 408 || status === 429 || status >= 500;
+      if (!retryable || attempt >= attempts - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 750 * (2 ** attempt)));
+    }
+  }
+}
+
 async function mapWithConcurrency(items, concurrency, callback) {
   let cursor = 0;
+  let failures = 0;
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (cursor < items.length) {
       const index = cursor++;
       try {
         await callback(items[index]);
       } catch (error) {
+        failures += 1;
         console.warn('Special-day calendar country sync failed:', items[index]?.countryCode, error.response?.status || error.message);
       }
     }
   });
   await Promise.all(workers);
+  return failures;
 }
 
 async function syncCalendar(config, year) {
-  const countriesResponse = await axios.get(`${NAGER_API}/AvailableCountries`, { timeout: 15000 });
+  const countriesResponse = await getWithRetry(`${NAGER_API}/AvailableCountries`, { timeout: 15000 });
   const countries = Array.isArray(countriesResponse.data) ? countriesResponse.data : [];
   let imported = 0;
 
-  await mapWithConcurrency(countries, 5, async country => {
+  const failures = await mapWithConcurrency(countries, 5, async country => {
     const code = String(country.countryCode || '').toUpperCase();
     if (!/^[A-Z]{2}$/.test(code)) return;
 
-    const response = await axios.get(`${NAGER_API}/PublicHolidays/${year}/${code}`, { timeout: 15000 });
+    const response = await getWithRetry(`${NAGER_API}/PublicHolidays/${year}/${code}`, { timeout: 20000 });
     const holidays = Array.isArray(response.data) ? response.data : [];
     const rows = holidays
       .filter(holiday => Array.isArray(holiday.types) && holiday.types.some(type => ['Public', 'Observance'].includes(type)))
@@ -112,7 +130,8 @@ async function syncCalendar(config, year) {
     }
   });
 
-  console.log(`Special-day calendar synced for ${year}: ${imported} country holiday records`);
+  console.log(`Special-day calendar synced for ${year}: ${imported} country holiday records; ${failures} countries failed`);
+  return failures === 0;
 }
 
 async function resolveAuthorId(config) {
@@ -356,8 +375,9 @@ async function runPlatformSpecialDayWorker() {
     const config = serviceConfig();
     if (!config) return;
     const year = new Date().getUTCFullYear();
-    if (calendarSyncYear !== year || Date.now() - lastCalendarSyncAt >= CALENDAR_REFRESH_MS) {
-      await syncCalendar(config, year);
+    const refreshInterval = calendarSyncIncomplete ? CALENDAR_RETRY_MS : CALENDAR_REFRESH_MS;
+    if (calendarSyncYear !== year || Date.now() - lastCalendarSyncAt >= refreshInterval) {
+      calendarSyncIncomplete = !(await syncCalendar(config, year));
       calendarSyncYear = year;
       lastCalendarSyncAt = Date.now();
     }

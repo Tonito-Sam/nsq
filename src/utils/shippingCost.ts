@@ -16,6 +16,22 @@ export interface Parcel {
   length: number;
   width: number;
   height: number;
+  description?: string;
+  items?: Array<{
+    name: string;
+    description: string;
+    type: 'document' | 'parcel';
+    currency: string;
+    value: number;
+    quantity: number;
+    weight: number;
+  }>;
+  parcels?: Array<{
+    weight: number;
+    length: number;
+    width: number;
+    height: number;
+  }>;
 }
 
 export interface ShippingSettings {
@@ -52,7 +68,7 @@ export const calculateShippingCost = async (
   }
 
   // If API rate but no API key, return error
-  const backendManagedPartner = ['courierguy', 'shiplogic'].includes(settings.partner_code);
+  const backendManagedPartner = ['courierguy', 'shiplogic', 'terminalafrica'].includes(settings.partner_code);
   if (settings.cost_type === 'api' && !settings.api_key && !backendManagedPartner) {
     return { cost: null, error: 'API key required for live rates', partner };
   }
@@ -87,7 +103,7 @@ const fetchLiveShippingRate = async (
         body: JSON.stringify({
           collection,
           delivery,
-          parcel,
+          parcels: parcel.parcels?.length ? parcel.parcels : [parcel],
         }),
       });
 
@@ -99,6 +115,28 @@ const fetchLiveShippingRate = async (
       const data = await response.json();
       const quote = data.quotes?.[0];
       if (!quote || !Number.isFinite(Number(quote.amount))) return { cost: null, error: 'No CourierGuy rates found', partner };
+      return { cost: Number(quote.amount), partner: { ...partner, name: quote.service || partner.name } };
+    } else if (partner.code === 'terminalafrica') {
+      if (!parcel.items?.length) return { cost: null, error: 'Add product weights and values to calculate a Terminal Africa quote', partner };
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Sign in to calculate shipping');
+      const response = await fetch(apiUrl('/api/shipping/terminal-africa/rates'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ collection, delivery, parcel, currency: 'ZAR' }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || `Terminal Africa rate error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const quote = data.quotes?.[0];
+      if (!quote || !Number.isFinite(Number(quote.amount))) return { cost: null, error: 'No Terminal Africa rates found for this route', partner };
       return { cost: Number(quote.amount), partner: { ...partner, name: quote.service || partner.name } };
     } else if (partner.code === 'fedex') {
       // FedEx sandbox API integration

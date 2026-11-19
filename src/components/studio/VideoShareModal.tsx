@@ -17,6 +17,8 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
+import ffmpegCoreURL from '@ffmpeg/core?url';
+import ffmpegWasmURL from '@ffmpeg/core/wasm?url';
 
 interface VideoShareModalProps {
   show: boolean;
@@ -278,7 +280,7 @@ export default function VideoShareModal({
     }
   };
 
-  // ── Download handler (unchanged logic, preserved verbatim) ────────────────
+  // ── Download handler ─────────────────────────────────────────────────────
 
   const handleDownload = async () => {
     setProcessing(true);
@@ -547,6 +549,8 @@ export default function VideoShareModal({
       ]);
 
       const mimeCandidates = [
+        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+        'video/mp4',
         'video/webm;codecs=vp9,opus',
         'video/webm;codecs=vp8,opus',
         'video/webm',
@@ -642,13 +646,70 @@ export default function VideoShareModal({
       const outputType = recorder.mimeType || mime || 'video/webm';
       const blob = new Blob(recordedChunks, { type: outputType });
       if (!blob.size) throw new Error('The video export was empty.');
-      downloadUrl = URL.createObjectURL(blob);
+      const sourceHeader = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+      const isMp4File = sourceHeader.length >= 8
+        && String.fromCharCode(...sourceHeader.slice(4, 8)) === 'ftyp';
+      const isWebmFile = sourceHeader.length >= 4
+        && sourceHeader[0] === 0x1a
+        && sourceHeader[1] === 0x45
+        && sourceHeader[2] === 0xdf
+        && sourceHeader[3] === 0xa3;
+      let downloadBlob = blob;
+      if (!isMp4File) {
+        if (!isWebmFile) throw new Error('The recorded video format could not be recognized for MP4 conversion.');
+        setDownloadStage('Converting to MP4');
+        const { FFmpeg } = await import('@ffmpeg/ffmpeg');
+        const ffmpeg = new FFmpeg();
+        try {
+          await ffmpeg.load({ coreURL: ffmpegCoreURL, wasmURL: ffmpegWasmURL });
+          const inputData = new Uint8Array(await blob.arrayBuffer());
+          await ffmpeg.writeFile('input.webm', inputData);
+          const exitCode = await ffmpeg.exec([
+            '-i',
+            'input.webm',
+            '-c:v',
+            'libx264',
+            '-preset',
+            'ultrafast',
+            '-crf',
+            '23',
+            '-pix_fmt',
+            'yuv420p',
+            '-c:a',
+            'aac',
+            '-b:a',
+            '128k',
+            '-movflags',
+            '+faststart',
+            'output.mp4',
+          ]);
+          if (exitCode !== 0) throw new Error('The video could not be converted to MP4.');
+          const outputData = await ffmpeg.readFile('output.mp4');
+          if (typeof outputData === 'string' || !outputData.byteLength) {
+            throw new Error('The MP4 conversion returned an empty file.');
+          }
+          const mp4Bytes = new Uint8Array(outputData.byteLength);
+          mp4Bytes.set(outputData);
+          downloadBlob = new Blob([mp4Bytes], { type: 'video/mp4' });
+        } finally {
+          ffmpeg.terminate();
+        }
+      }
+      const mp4Header = new Uint8Array(await downloadBlob.slice(0, 8).arrayBuffer());
+      if (
+        downloadBlob.type !== 'video/mp4'
+        || mp4Header.length < 8
+        || String.fromCharCode(...mp4Header.slice(4, 8)) !== 'ftyp'
+      ) {
+        throw new Error('The exported video is not a valid MP4 file.');
+      }
+
+      downloadUrl = URL.createObjectURL(downloadBlob);
       const a = document.createElement('a');
       a.href = downloadUrl;
-      const extension = outputType.includes('mp4') ? 'mp4' : 'webm';
       a.download = `${
         title ? title.replace(/[^a-z0-9]/gi, '_').toLowerCase() : 'video'
-      }_${Date.now()}.${extension}`;
+      }_${Date.now()}.mp4`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -668,7 +729,7 @@ export default function VideoShareModal({
       setDownloadProgress(100);
       setDownloadStage('Download started');
       window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 60000);
-      toast({ description: 'Download started with creator details and NexSq branding.' });
+      toast({ description: 'MP4 download started with creator details and NexSq branding.' });
     } catch (e) {
       console.error('Video download failed:', e);
       toast({

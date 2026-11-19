@@ -22,6 +22,13 @@ export const shippingPartners: ShippingPartner[] = [
     description: 'Multi-carrier shipping platform'
   },
   {
+    code: 'terminalafrica',
+    name: 'Terminal Africa',
+    supportsApi: true,
+    docs: 'https://docs.terminal.africa/tship/master.md',
+    description: 'International shipping quotes for routes to and from Nigeria'
+  },
+  {
     code: 'fedex',
     name: 'FedEx',
     supportsApi: true,
@@ -59,6 +66,9 @@ export const shippingPartners: ShippingPartner[] = [
 
 // Utility function to select default shipping partner based on vendor and buyer country
 export function getDefaultShippingPartner(vendorCountry: string, buyerCountry: string, storeDefaultPartner?: string): string {
+  if (vendorCountry.toUpperCase() === 'NG' || buyerCountry.toUpperCase() === 'NG') {
+    return 'terminalafrica';
+  }
   // If vendor is in South Africa and buyer is outside, use Aramex by default
   if (vendorCountry === 'ZA' && buyerCountry !== 'ZA') {
     return 'aramex';

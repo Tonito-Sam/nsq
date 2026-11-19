@@ -16,6 +16,17 @@ const normalizeDays = (val?: string[] | string) => {
   return val.split(',').map(s => s.trim().toLowerCase());
 };
 
+const normalizeTime = (value: string | undefined, fallback: string) => {
+  const match = /^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec((value || fallback).trim());
+  if (!match) throw new Error('Enter broadcast times in HH:MM or HH:MM:SS format.');
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) throw new Error('Enter a valid broadcast time.');
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+};
+
 export const computeEpisodeSlots = (show: ShowInput, daysAhead = 7) => {
   const out: { broadcast_date: string; scheduled_time: string; end_time: string; title: string }[] = [];
   const pattern = (show.schedule_pattern || '').toLowerCase();
@@ -34,8 +45,10 @@ export const computeEpisodeSlots = (show: ShowInput, daysAhead = 7) => {
 
     if (airs) {
       const dateIso = d.toISOString().split('T')[0];
-      const scheduled_time = `${dateIso}T${(show.time_slot_start || '00:00')}:00`;
-      const end_time = `${dateIso}T${(show.time_slot_end || show.time_slot_start || '00:30')}:00`;
+      const start = normalizeTime(show.time_slot_start, '00:00');
+      const end = normalizeTime(show.time_slot_end || show.time_slot_start, '00:30');
+      const scheduled_time = `${dateIso}T${start}`;
+      const end_time = `${dateIso}T${end}`;
       out.push({ broadcast_date: dateIso, scheduled_time, end_time, title: `${show.title} - ${d.toLocaleDateString()}` });
     }
   }
@@ -57,9 +70,9 @@ export const generateEpisodesForShow = async (showId: number, showData: ShowInpu
     updated_at: new Date().toISOString(),
   }));
 
-  const { data, error } = await supabase.from('studio_episodes').insert(episodes);
+  const { error } = await supabase.from('studio_episodes').insert(episodes);
   if (error) throw error;
-  return { inserted: data?.length || 0 };
+  return { inserted: episodes.length };
 };
 
 export default generateEpisodesForShow;

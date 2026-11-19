@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   BadgeCheck,
+  Mic2,
   Tv,
   Sparkles,
   Calendar,
@@ -33,6 +34,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import StudioShowManagementWorkspace from '@/components/studio/StudioShowManagement';
 import { cn } from '@/lib/utils';
+import CreatorPodcastStudio from '@/pages/CreatorPodcastStudio';
+import { getPodcastStudioEligibility } from '@/lib/podcastStudioEligibility';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,6 +47,7 @@ interface ApprovedShowApplication {
   format: 'recorded' | 'live' | 'mixed';
   preferred_days: string[];
   preferred_time: string | null;
+  timezone: string;
   approved_show_id: string;
 }
 
@@ -56,6 +60,19 @@ interface StudioShowRecord {
   banner_url: string | null;
   brand_color: string | null;
   approved_days?: string[] | null;
+  time_slot_start?: string | null;
+  time_slot_end?: string | null;
+}
+
+interface PodcastBrandRecord {
+  cover_url: string | null;
+  logo_url: string | null;
+  intro_url: string | null;
+  outro_url: string | null;
+  podcast_name: string;
+  podcast_description: string;
+  subscription_mode: 'free' | 'paid';
+  subscription_price: number;
 }
 
 interface CreatorIdentity {
@@ -612,8 +629,13 @@ const StudioShowPage = () => {
   const navigate = useNavigate();
   const [application, setApplication] = useState<ApprovedShowApplication | null>(null);
   const [showDetails, setShowDetails] = useState<StudioShowRecord | null>(null);
+  const [podcastBrand, setPodcastBrand] = useState<PodcastBrandRecord | null>(null);
+  const [podcastBrandLoadFailed, setPodcastBrandLoadFailed] = useState(false);
   const [creatorIdentity, setCreatorIdentity] = useState<CreatorIdentity | null>(null);
   const [loading, setLoading] = useState(true);
+  const [podcastEligible, setPodcastEligible] = useState(false);
+  const [podcastEligibilityError, setPodcastEligibilityError] = useState('');
+  const [activePageTab, setActivePageTab] = useState<'show' | 'podcast'>('show');
 
   useEffect(() => {
     let current = true;
@@ -625,10 +647,11 @@ const StudioShowPage = () => {
       }
 
       setLoading(true);
+      setPodcastBrandLoadFailed(false);
       const { data, error } = await supabase
         .from('studio_show_applications' as any)
         .select(
-          'applicant_id, show_title, description, category, format, preferred_days, preferred_time, approved_show_id',
+          'applicant_id, show_title, description, category, format, preferred_days, preferred_time, timezone, approved_show_id',
         )
         .eq('approved_show_id', showId)
         .eq('status', 'approved')
@@ -640,18 +663,25 @@ const StudioShowPage = () => {
         console.error('Could not load approved TV show:', error);
         setApplication(null);
         setShowDetails(null);
+        setPodcastBrand(null);
+        setPodcastBrandLoadFailed(false);
         setCreatorIdentity(null);
       } else if (data) {
         const approvedApplication = data as ApprovedShowApplication;
         setApplication(approvedApplication);
 
-        const [showResult, channelResult, creatorResult] = await Promise.all([
+        const [showResult, podcastBrandResult, channelResult, creatorResult] = await Promise.all([
           supabase
             .from('studio_shows')
             .select(
-              'title, description, category, thumbnail_url, logo_url, banner_url, brand_color, approved_days',
+              'title, description, category, thumbnail_url, logo_url, banner_url, brand_color, approved_days, time_slot_start, time_slot_end',
             )
             .eq('id', approvedApplication.approved_show_id)
+            .maybeSingle(),
+          supabase
+            .from('studio_podcast_branding')
+            .select('cover_url, logo_url, intro_url, outro_url, podcast_name, podcast_description, subscription_mode, subscription_price')
+            .eq('show_id', approvedApplication.approved_show_id)
             .maybeSingle(),
           supabase
             .from('studio_channels')
@@ -669,7 +699,11 @@ const StudioShowPage = () => {
         if (!current) return;
         if (showResult.error)
           console.error('Could not load TV show branding:', showResult.error);
+        if (podcastBrandResult.error)
+          console.error('Could not load separate Podcast branding:', podcastBrandResult.error);
+        setPodcastBrandLoadFailed(Boolean(podcastBrandResult.error));
         setShowDetails((showResult.data as StudioShowRecord | null) || null);
+        setPodcastBrand((podcastBrandResult.data as PodcastBrandRecord | null) || null);
         setCreatorIdentity({
           username: creatorResult.data?.username || null,
           channelId: channelResult.data?.id || null,
@@ -678,6 +712,8 @@ const StudioShowPage = () => {
       } else {
         setApplication(null);
         setShowDetails(null);
+        setPodcastBrand(null);
+        setPodcastBrandLoadFailed(false);
         setCreatorIdentity(null);
       }
       setLoading(false);
@@ -690,6 +726,34 @@ const StudioShowPage = () => {
   }, [showId, user?.id]);
 
   const isOwner = application?.applicant_id === user?.id;
+
+  useEffect(() => {
+    let current = true;
+    setPodcastEligible(false);
+    setPodcastEligibilityError('');
+
+    if (!isOwner || !user?.id) {
+      setActivePageTab('show');
+      return () => { current = false; };
+    }
+
+    void getPodcastStudioEligibility(user.id)
+      .then((eligibility) => {
+        if (!current) return;
+        setPodcastEligible(eligibility.eligible);
+        if (!eligibility.eligible) setActivePageTab('show');
+      })
+      .catch((error: unknown) => {
+        console.error('Could not check approved-show Podcast tab eligibility:', error);
+        if (current) {
+          setActivePageTab('show');
+          setPodcastEligibilityError(error instanceof Error ? error.message : 'Could not verify Podcast Studio eligibility.');
+        }
+      });
+
+    return () => { current = false; };
+  }, [isOwner, user?.id]);
+
   const formatMeta = application
     ? FORMAT_META[application.format] || FORMAT_META.recorded
     : FORMAT_META.recorded;
@@ -714,18 +778,67 @@ const StudioShowPage = () => {
     );
   };
 
+  const handlePodcastBrandUpdated = (updatedBrand: Partial<PodcastBrandRecord>) => {
+    setPodcastBrand((current) => ({
+      cover_url: current?.cover_url || null,
+      logo_url: current?.logo_url || null,
+      intro_url: current?.intro_url || null,
+      outro_url: current?.outro_url || null,
+      podcast_name: current?.podcast_name || '',
+      podcast_description: current?.podcast_description || '',
+      subscription_mode: current?.subscription_mode || 'free',
+      subscription_price: current?.subscription_price || 0,
+      ...updatedBrand,
+    }));
+    setPodcastBrandLoadFailed(false);
+  };
+
   return (
     <Layout hideSidebar hideRightSidebar>
       <div className="mx-auto max-w-5xl space-y-5 pb-16">
-        {/* Back button */}
-        <button
-          type="button"
-          onClick={() => navigate('/studio')}
-          className="group -ml-2 inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
-          Back to Studio
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => navigate('/studio')}
+            className="group -ml-2 inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          >
+            <ArrowLeft className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
+            Back to Studio
+          </button>
+          <button
+            type="button"
+            onClick={() => setActivePageTab('show')}
+            aria-pressed={activePageTab === 'show'}
+            className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold transition-colors ${
+              activePageTab === 'show'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+            }`}
+          >
+            <Tv className="h-3.5 w-3.5" />
+            TV Show
+          </button>
+          {isOwner && podcastEligible && (
+            <button
+              type="button"
+              onClick={() => setActivePageTab('podcast')}
+              aria-pressed={activePageTab === 'podcast'}
+              className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold transition-colors ${
+                activePageTab === 'podcast'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
+              }`}
+            >
+              <Mic2 className="h-3.5 w-3.5" />
+              Podcast
+            </button>
+          )}
+        </div>
+        {podcastEligibilityError && (
+          <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            Could not verify Podcast Studio eligibility: {podcastEligibilityError}
+          </p>
+        )}
 
         {loading ? (
           <LoadingState />
@@ -760,10 +873,11 @@ const StudioShowPage = () => {
           </Card>
         ) : (
           <>
-            {/* ═══════════════════════════════════════════════════════
-                HERO SHOW CARD
-               ═══════════════════════════════════════════════════════ */}
-            <Card className="overflow-hidden rounded-3xl border-border/60 bg-card shadow-sm">
+            <div hidden={activePageTab === 'podcast'}>
+              {/* ═══════════════════════════════════════════════════════
+                  HERO SHOW CARD
+                 ═══════════════════════════════════════════════════════ */}
+              <Card className="overflow-hidden rounded-3xl border-border/60 bg-card shadow-sm">
               {/* ── Banner ───────────────────────────────────────────
                   Fixed height, object-cover center, dark gradient from
                   bottom-left for text readability. No more stretched FC. */}
@@ -924,16 +1038,49 @@ const StudioShowPage = () => {
                   </div>
                 )}
               </div>
-            </Card>
+              </Card>
 
-            {/* ═══════════════════════════════════════════════════════
-                MANAGEMENT
-               ═══════════════════════════════════════════════════════ */}
-            <StudioShowManagement
-              showId={application.approved_show_id || ''}
-              isOwner={isOwner}
-              onShowUpdated={handleShowUpdated}
-            />
+              {/* ═══════════════════════════════════════════════════════
+                  MANAGEMENT
+                 ═══════════════════════════════════════════════════════ */}
+              <StudioShowManagement
+                showId={application.approved_show_id || ''}
+                isOwner={isOwner}
+                onShowUpdated={handleShowUpdated}
+              />
+            </div>
+            {isOwner && podcastEligible && (
+              <div hidden={activePageTab !== 'podcast'}>
+                {podcastBrandLoadFailed && (
+                  <p role="alert" className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+                    Separate Podcast artwork could not be loaded. Confirm the Podcast branding database migration is applied, then reload this page.
+                  </p>
+                )}
+                <CreatorPodcastStudio
+                  embedded
+                  show={{
+                    id: application.approved_show_id,
+                    title: showDetails?.title || application.show_title,
+                    description: showDetails?.description || application.description,
+                    category: showDetails?.category || application.category,
+                    podcastName: podcastBrand?.podcast_name || null,
+                    podcastDescription: podcastBrand?.podcast_description || null,
+                    subscriptionMode: podcastBrand?.subscription_mode || 'free',
+                    subscriptionPrice: Number(podcastBrand?.subscription_price || 0),
+                    podcastCoverUrl: podcastBrand?.cover_url || null,
+                    podcastLogoUrl: podcastBrand?.logo_url || null,
+                    podcastIntroUrl: podcastBrand?.intro_url || null,
+                    podcastOutroUrl: podcastBrand?.outro_url || null,
+                    brandColor: showDetails?.brand_color || null,
+                    broadcastDays: broadcastDays,
+                    timeSlotStart: showDetails?.time_slot_start || null,
+                    timeSlotEnd: showDetails?.time_slot_end || null,
+                    timeZone: application.timezone || 'UTC',
+                  }}
+                  onPodcastBrandUpdated={handlePodcastBrandUpdated}
+                />
+              </div>
+            )}
           </>
         )}
       </div>

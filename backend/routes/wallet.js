@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
+const requireAdmin = require('../utils/requireAdmin.cjs');
 
 const router = express.Router();
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
@@ -37,18 +38,6 @@ async function requireVerifiedWallet(userId) {
   const profile = response.data?.[0];
   if (!profile || profile.kyc_status !== 'verified' || profile.risk_status !== 'active') {
     const error = new Error('Complete identity verification before using real-money transfers or payouts');
-    error.status = 403;
-    throw error;
-  }
-}
-
-async function requireAdmin(userId) {
-  const response = await axios.get(
-    `${SUPABASE_URL}/rest/v1/user_roles?select=role&user_id=eq.${encodeURIComponent(userId)}&role=eq.admin&limit=1`,
-    { headers: headers() }
-  );
-  if (!response.data?.length) {
-    const error = new Error('Administrator access required');
     error.status = 403;
     throw error;
   }

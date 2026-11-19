@@ -276,6 +276,7 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
     const { data, error } = await (supabase.from('studio_episodes') as any)
       .select('id, title, video_url, thumbnail_url, created_at')
       .eq('show_id', showId)
+      .not('video_url', 'like', 'podcast-private://%')
       .order('created_at', { ascending: false });
     if (error) console.error('Could not load show episodes:', error);
     else setEpisodes((data || []) as ShowEpisode[]);
@@ -294,6 +295,7 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
         (supabase.from('studio_episodes') as any)
           .select('id, title, video_url, thumbnail_url, created_at')
           .eq('show_id', showId)
+          .not('video_url', 'like', 'podcast-private://%')
           .order('created_at', { ascending: false }),
       ]);
       if (!active) return;
@@ -675,7 +677,37 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
       )}
 
       {section === 'branding' && (
-        <form onSubmit={saveDetails} className="space-y-4">
+        <>
+          <div className="space-y-4 md:hidden">
+            <p className="rounded-2xl border border-blue-500/20 bg-blue-500/[0.06] px-4 py-3 text-sm text-muted-foreground">
+              Your TV branding is shown here. To update the cover, artwork, logo, or brand color, use NexSq in a desktop or laptop browser so this page stays uncluttered on mobile.
+            </p>
+            <Card className="overflow-hidden rounded-3xl border-border/60 bg-card shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-sm font-bold">Current TV branding</CardTitle>
+              </CardHeader>
+              <CardContent className="grid grid-cols-2 gap-4">
+                {ARTWORK_FIELDS.map(({ field, label, aspect, contain }) => (
+                  <div key={field} className={`min-w-0 space-y-2 ${field === 'banner_url' ? 'col-span-2' : ''}`}>
+                    <p className="text-xs font-semibold text-muted-foreground">{label}</p>
+                    <div className={`relative ${aspect} overflow-hidden rounded-xl border bg-muted`}>
+                      {show[field]
+                        ? <img src={show[field] || ''} alt={`${label} preview`} className={`h-full w-full ${contain ? 'object-contain p-4' : 'object-cover'}`} />
+                        : <span className="flex h-full items-center justify-center px-2 text-center text-xs text-muted-foreground">No image uploaded</span>}
+                    </div>
+                  </div>
+                ))}
+                <div className="col-span-2 flex items-center gap-3 rounded-xl border p-3">
+                  <span className="h-8 w-8 rounded-lg border" style={{ backgroundColor: show.brand_color || '#7c3aed' }} />
+                  <div>
+                    <p className="text-xs font-semibold">Brand color</p>
+                    <p className="text-xs text-muted-foreground">{show.brand_color || '#7c3aed'}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+          <form onSubmit={saveDetails} className="hidden space-y-4 md:block">
           <Card className="overflow-hidden rounded-3xl border-border/60 bg-card shadow-sm">
             <CardHeader><CardTitle className="flex items-center gap-2 text-sm font-bold"><ImagePlus className="h-5 w-5 text-pink-500" /> Show artwork</CardTitle></CardHeader>
             <CardContent className="grid gap-5 md:grid-cols-2">
@@ -695,7 +727,8 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
           </Card>
           <Card className="overflow-hidden rounded-3xl border-border/60 bg-card shadow-sm"><CardHeader><CardTitle className="text-sm font-bold">Brand color</CardTitle></CardHeader><CardContent className="flex items-center gap-3"><Input type="color" value={brandColor} onChange={(event) => setBrandColor(event.target.value)} className="h-12 w-16 rounded-xl p-1" aria-label="Show brand color" /><span className="text-sm text-muted-foreground">{brandColor}</span></CardContent></Card>
           <Button type="submit" disabled={saving} className="gap-2 rounded-xl bg-gradient-to-br from-pink-600 to-rose-500 font-semibold shadow-md shadow-pink-500/20 hover:from-pink-700 hover:to-rose-600">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}Save artwork and branding</Button>
-        </form>
+          </form>
+        </>
       )}
 
       {section === 'managers' && (
