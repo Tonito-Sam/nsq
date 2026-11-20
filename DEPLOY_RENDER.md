@@ -4,18 +4,11 @@ This project separates frontend (Vite) and backend (Node/Express) under the `bac
 
 1) Push your changes to GitHub
 
-Run the helper script from repository root (PowerShell):
+Stage only the files for this deployment; avoid `git add -A` if the worktree contains local environment files or unrelated changes:
 
 ```powershell
-cd C:\xampp\htdocs\nexsq
-.\scripts\git_push.ps1 -Remote origin -Branch main -Message "Deploy: point frontend to Render backend"
-```
-
-Or use standard git commands:
-
-```powershell
-git add -A
-git commit -m "Deploy: point frontend to Render backend"
+git add backend/server.cjs backend/utils/podcastConferenceSignaling.cjs backend/package.json DEPLOY_RENDER.md
+git commit -m "Deploy podcast conference signaling"
 git push origin main
 ```
 
@@ -23,10 +16,17 @@ git push origin main
 
 - In Render dashboard, create a new "Web Service".
 - Connect the GitHub repo and select the `main` branch.
-- Set the root directory to `/backend` (so Render runs the code in the `backend` folder).
-- Build Command: `npm install --production` (or `npm ci`)
-- Start Command: `node server.cjs` or use `npm run start` depending on `backend/package.json`.
-- Port: Render sets `$PORT` automatically — ensure your backend reads `process.env.PORT` (server already uses `PORT` 3001 locally; Render uses env PORT).
+- Set the root directory to `backend` (relative to the repository root).
+- Build Command: `npm ci --omit=dev` (or `npm install --production`).
+- Start Command: `npm start`.
+- Render sets `PORT`; `backend/server.cjs` uses it (with `3001` as the local default).
+
+The podcast conference signaling server is part of this backend service. `backend/server.cjs`
+attaches it to the HTTP server at `/api/podcast-conference`, and `npm start` starts both
+the API and its WebSocket endpoint. The frontend connects to this path using `wss://` when
+the API base URL is HTTPS; no separate Render service or process is needed for signaling.
+Ensure the Render service deploys the branch containing `backend/utils/podcastConferenceSignaling.cjs`
+and that its auto-deploy is enabled (or manually deploy the latest commit).
 
 3) Add environment variables on Render (Service > Environment)
 
@@ -34,6 +34,12 @@ git push origin main
 - `SUPABASE_SERVICE_ROLE_KEY` = your service_role key (KEEP SECRET)
 - `SUPABASE_ANON_KEY` or other keys your backend expects
 - Any other backend-specific envs (API keys for third-party services)
+- `CORS_ALLOWED_ORIGINS` = comma-separated frontend origins, if the frontend is not hosted at
+  `https://nexsq.com` or `https://www.nexsq.com`.
+
+The signaling server does not relay audio/video; WebRTC connects the participants directly.
+If direct connections fail on restrictive networks, configure the separate TURN service using
+`TURN_URL` and either `TURN_USER`/`TURN_PASS` or `TURN_SECRET`/`STATIC_TURN_SECRET`.
 
 4) Frontend: set `VITE_API_BASE_URL` to Render service URL
 
@@ -49,6 +55,9 @@ git push origin main
 
 - Visit `https://<your-backend>.onrender.com/api/currency/rates?base=USD` — you should see JSON rates.
 - Check that frontend in production points to Render by opening browser network tab and inspecting requests.
+- Confirm that joining a conference reaches the WebSocket endpoint
+  `wss://<your-backend>.onrender.com/api/podcast-conference`. A normal HTTP GET to `/` or to the
+  WebSocket path is not a health check and may return 404.
 
 7) Notes and security
 
