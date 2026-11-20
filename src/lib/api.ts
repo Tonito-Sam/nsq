@@ -7,24 +7,67 @@ const env = (import.meta as any).env || {};
 // Also accept VITE_BASE_API_BASE_URL and VITE_BASE_API_URL if present in .env.
 const explicitBase = env?.VITE_API_BASE_URL || env?.VITE_BASE_API_BASE_URL || env?.VITE_BASE_API_URL;
 const legacyBase = env?.VITE_API_URL;
-export const API_BASE = (() => {
-  // Local development always uses Vite's /api proxy, even if .env has the production URL.
+const RENDER_BACKEND_FALLBACK = 'https://nsq-98et.onrender.com';
+const isLoopbackHostname = (hostname: string) => (
+  hostname === 'localhost'
+  || hostname === '127.0.0.1'
+  || hostname === '::1'
+  || hostname === '[::1]'
+  || hostname.endsWith('.localhost')
+);
+
+function pointsToLoopback(base: string, origin: string) {
   try {
-    if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname === '::1')) {
-      return '';
+    return isLoopbackHostname(new URL(base, origin).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+export function resolveApiBase({
+  hostname,
+  origin,
+  explicitBase,
+  legacyBase,
+  mode,
+  devServer,
+}: {
+  hostname?: string;
+  origin?: string;
+  explicitBase?: string;
+  legacyBase?: string;
+  mode?: string;
+  devServer?: string;
+}) {
+  if (hostname && isLoopbackHostname(hostname.toLowerCase())) return '';
+
+  const isDevelopment = mode === 'development' || devServer === 'true';
+  if (explicitBase) {
+    if (!isDevelopment && origin && pointsToLoopback(explicitBase, origin)) {
+      console.warn('Ignoring a localhost API base on a remote site; using the production backend.');
+    } else {
+      return explicitBase;
     }
-  } catch (e) {}
-  // In deployed environments, an explicit API base takes precedence.
-  if (explicitBase) return explicitBase;
-  // In development environments where MODE is explicitly set, prefer relative paths as well
-  if ((env?.MODE === 'development' || env?.VITE_DEV_SERVER === 'true')) return '';
-  // In production, fall back to legacy VITE_API_URL if present
-  // If no env var is provided in production, default to the Render backend URL so
-  // the static site will call the correct backend until you set VITE_API_BASE_URL
-  // in your frontend deploy environment. Update this value if your backend URL changes.
-  const RENDER_BACKEND_FALLBACK = 'https://nsq-98et.onrender.com';
-  return legacyBase || RENDER_BACKEND_FALLBACK;
-})();
+  }
+  if (isDevelopment) return '';
+  if (legacyBase) {
+    if (origin && pointsToLoopback(legacyBase, origin)) {
+      console.warn('Ignoring a localhost API base on a remote site; using the production backend.');
+    } else {
+      return legacyBase;
+    }
+  }
+  return RENDER_BACKEND_FALLBACK;
+}
+
+export const API_BASE = resolveApiBase({
+  hostname: typeof window !== 'undefined' ? window.location.hostname : undefined,
+  origin: typeof window !== 'undefined' ? window.location.origin : undefined,
+  explicitBase,
+  legacyBase,
+  mode: env?.MODE,
+  devServer: env?.VITE_DEV_SERVER,
+});
 
 export function apiUrl(path: string) {
   if (!path) return API_BASE || '';

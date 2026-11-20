@@ -45,6 +45,7 @@ If direct connections fail on restrictive networks, configure the separate TURN 
 
 - Your frontend should call the backend using a full origin when deployed. Set `VITE_API_BASE_URL` to your Render service URL, e.g. `https://nsq-98et.onrender.com` (no trailing slash preferred).
 - On Render, under the frontend service (if you deploy frontend separately) set an environment variable `VITE_API_BASE_URL=https://<your-backend>.onrender.com`.
+- Do not set the frontend's production `VITE_API_BASE_URL` to `http://localhost:3001`; localhost refers to each visitor's own device. The frontend now ignores a localhost API URL on a remote site and falls back to the Render backend, but the deploy setting should still be corrected.
 
 5) Build & Deploy frontend
 
