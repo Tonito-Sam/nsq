@@ -5,9 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   createPodcastConferenceParticipantId,
+  createPodcastPeerConnection,
   connectToPodcastConference,
   getPodcastConferenceIceServers,
   isPodcastConferenceSignal,
+  PODCAST_STUN_ICE_SERVERS,
   sendPodcastConferenceSignal,
   type PodcastConferenceConnection,
 } from '@/lib/podcastConference';
@@ -98,14 +100,16 @@ export default function PodcastConferenceGuest() {
     try {
       iceServers = await getPodcastConferenceIceServers();
       if (!iceServers.length) {
-        setPlaybackError('No self-hosted TURN server is configured. Direct connections may fail on some networks.');
+        iceServers = [...PODCAST_STUN_ICE_SERVERS];
+        setPlaybackError('No TURN server is configured. Trying a STUN-assisted direct connection; some networks may block it.');
       }
     } catch (turnError) {
-      setPlaybackError(`${errorMessage(turnError, 'Self-hosted TURN is unavailable.')} Trying a direct connection; some networks may block it.`);
+      iceServers = [...PODCAST_STUN_ICE_SERVERS];
+      setPlaybackError(`${errorMessage(turnError, 'Self-hosted TURN is unavailable.')} Trying a STUN-assisted direct connection; some networks may block it.`);
     }
 
     hostIdRef.current = signal.from;
-    const peerConnection = new RTCPeerConnection({ iceServers });
+    const peerConnection = createPodcastPeerConnection({ iceServers });
     peerConnectionRef.current = peerConnection;
     localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
     peerConnection.onicecandidate = (event) => {

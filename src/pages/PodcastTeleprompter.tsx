@@ -8,9 +8,11 @@ import { supabase } from '@/integrations/supabase/client';
 import {
   createPodcastConferenceParticipantId,
   createPodcastConferenceRoomToken,
+  createPodcastPeerConnection,
   connectToPodcastConference,
   getPodcastConferenceIceServers,
   isPodcastConferenceSignal,
+  PODCAST_STUN_ICE_SERVERS,
   sendPodcastConferenceSignal,
   type PodcastConferenceConnection,
   type PodcastConferenceSignal,
@@ -256,6 +258,7 @@ export default function PodcastTeleprompter() {
   const hostParticipantIdRef = useRef('');
   const pendingGuestsRef = useRef<PodcastGuest[]>([]);
   const activeGuestsRef = useRef<PodcastGuest[]>([]);
+  const admittingGuestsRef = useRef(new Set<string>());
   const guestConnectionsRef = useRef(new Map<string, RTCPeerConnection>());
   const guestFeedsRef = useRef(new Map<string, PodcastGuestFeed>());
   const queuedGuestCandidatesRef = useRef(new Map<string, RTCIceCandidateInit[]>());
@@ -396,13 +399,13 @@ export default function PodcastTeleprompter() {
       return;
     }
     if (!pendingGuestsRef.current.some((request) => request.guestId === guest.guestId)) return;
+    if (admittingGuestsRef.current.has(guest.guestId)) return;
     if (activeGuestsRef.current.length >= 2) {
       setConferenceError('A recording can include up to two guests.');
       return;
     }
 
-    updatePendingGuests(pendingGuestsRef.current.filter((request) => request.guestId !== guest.guestId));
-    updateActiveGuests([...activeGuestsRef.current, guest]);
+    admittingGuestsRef.current.add(guest.guestId);
     setConferenceError('');
     let peerConnection: RTCPeerConnection | null = null;
     try {
@@ -410,17 +413,21 @@ export default function PodcastTeleprompter() {
       try {
         iceServers = await getPodcastConferenceIceServers();
         if (!iceServers.length) {
-          setConferenceError('No self-hosted TURN server is configured. Direct connections may fail on some networks.');
+          iceServers = [...PODCAST_STUN_ICE_SERVERS];
+          setConferenceError('No TURN server is configured. Trying a STUN-assisted direct connection; some networks may block it.');
         }
       } catch (turnError) {
+        iceServers = [...PODCAST_STUN_ICE_SERVERS];
         setConferenceError(
-          `${turnError instanceof Error ? turnError.message : 'Self-hosted TURN is unavailable.'} Trying a direct connection; some networks may block it.`,
+          `${turnError instanceof Error ? turnError.message : 'Self-hosted TURN is unavailable.'} Trying a STUN-assisted direct connection; some networks may block it.`,
         );
       }
 
-      const peer = new RTCPeerConnection({ iceServers });
+      const peer = createPodcastPeerConnection({ iceServers });
       peerConnection = peer;
       guestConnectionsRef.current.set(guest.guestId, peer);
+      updatePendingGuests(pendingGuestsRef.current.filter((request) => request.guestId !== guest.guestId));
+      updateActiveGuests([...activeGuestsRef.current, guest]);
       peer.onicecandidate = (event) => {
         if (!event.candidate || !conferenceConnectionRef.current) return;
         void sendPodcastConferenceSignal(conferenceConnectionRef.current, {
@@ -492,12 +499,10 @@ export default function PodcastTeleprompter() {
         sdp: peer.localDescription.toJSON(),
       });
     } catch (admissionError) {
-      if (!peerConnection) {
-        updatePendingGuests([...pendingGuestsRef.current, guest]);
-        updateActiveGuests(activeGuestsRef.current.filter((activeGuest) => activeGuest.guestId !== guest.guestId));
-      }
-      removeGuestConnection(guest.guestId);
+      if (peerConnection) removeGuestConnection(guest.guestId);
       setConferenceError(admissionError instanceof Error ? admissionError.message : 'Could not admit this guest.');
+    } finally {
+      admittingGuestsRef.current.delete(guest.guestId);
     }
   };
 

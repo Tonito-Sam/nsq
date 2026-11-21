@@ -1,4 +1,4 @@
-import { apiUrl } from '@/lib/api';
+import { apiUrl } from './api';
 
 export type PodcastConferenceSignal =
   | { type: 'guest-request'; guestId: string; guestName: string }
@@ -31,6 +31,40 @@ type PendingSend = {
   reject: (error: Error) => void;
   timeout: number;
 };
+
+export const PODCAST_STUN_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+];
+
+type PodcastPeerConnectionWindow = Window & {
+  RTCPeerConnection?: typeof RTCPeerConnection;
+  webkitRTCPeerConnection?: typeof RTCPeerConnection;
+  mozRTCPeerConnection?: typeof RTCPeerConnection;
+};
+
+const isPeerConnectionConstructor = (candidate: unknown): candidate is typeof RTCPeerConnection => {
+  if (typeof candidate !== 'function') return false;
+  try {
+    Reflect.construct(Function, [], candidate);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export function createPodcastPeerConnection(configuration: RTCConfiguration) {
+  const browserWindow = window as PodcastPeerConnectionWindow;
+  const PeerConnection = [
+    browserWindow.RTCPeerConnection,
+    browserWindow.webkitRTCPeerConnection,
+    browserWindow.mozRTCPeerConnection,
+  ].find(isPeerConnectionConstructor);
+
+  if (!PeerConnection) {
+    throw new Error('WebRTC is not supported in this browser. Use a current browser over HTTPS.');
+  }
+  return new PeerConnection(configuration);
+}
 
 export function createPodcastConferenceRoomToken() {
   const bytes = new Uint8Array(24);
