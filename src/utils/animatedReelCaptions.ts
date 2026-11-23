@@ -1,3 +1,5 @@
+import { throwIfAborted, waitForAbort } from './abortSignal';
+
 export type ReelCaptionSegment = {
   id: string;
   start: number;
@@ -214,7 +216,9 @@ export async function renderCaptionedReel(
   onProgress: (progress: number) => void = () => {},
   enhancements: ReelEnhancementOptions = { audioPreset: 'original', videoPreset: 'original' },
   durationHintSeconds = 0,
+  signal?: AbortSignal,
 ): Promise<Blob> {
+  throwIfAborted(signal);
   const hasEnhancements = enhancements.audioPreset !== 'original' || enhancements.videoPreset !== 'original';
   if (!segments.length && !cameraAnimationEnabled && !hasEnhancements) throw new Error('There are no effects to render.');
   if (typeof MediaRecorder === 'undefined') throw new Error('This browser cannot process reel effects.');
@@ -231,12 +235,19 @@ export async function renderCaptionedReel(
   }
 
   let audioContext: AudioContext | null = null;
+  let canvasStream: MediaStream | null = null;
   let outputStream: MediaStream | null = null;
   let drawTimer: number | null = null;
   let recorder: MediaRecorder | null = null;
+  let recordingResult: Promise<Blob> | null = null;
+  const handleAbort = () => {
+    video.pause();
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+  };
+  signal?.addEventListener('abort', handleAbort, { once: true });
 
   try {
-    await new Promise<void>((resolve, reject) => {
+    await waitForAbort(new Promise<void>((resolve, reject) => {
       if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
         resolve();
         return;
@@ -244,7 +255,8 @@ export async function renderCaptionedReel(
       video.addEventListener('loadedmetadata', () => resolve(), { once: true });
       video.addEventListener('error', () => reject(new Error('The recorded video could not be loaded.')), { once: true });
       video.load();
-    });
+    }), signal);
+    throwIfAborted(signal);
 
     if (!video.videoWidth || !video.videoHeight) {
       throw new Error('The recorded video has no readable frames.');
@@ -257,7 +269,7 @@ export async function renderCaptionedReel(
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    const canvasStream = canvas.captureStream(30);
+    canvasStream = canvas.captureStream(30);
     const browserWindow = window as Window & { webkitAudioContext?: typeof AudioContext };
     const AudioContextConstructor = window.AudioContext || browserWindow.webkitAudioContext;
     if (!AudioContextConstructor) {
@@ -281,7 +293,7 @@ export async function renderCaptionedReel(
     const mimeType = mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate));
     recorder = mimeType ? new MediaRecorder(outputStream, { mimeType }) : new MediaRecorder(outputStream);
 
-    const recordedBlob = new Promise<Blob>((resolve, reject) => {
+    recordingResult = new Promise<Blob>((resolve, reject) => {
       const chunks: Blob[] = [];
       recorder!.ondataavailable = (event) => {
         if (event.data.size > 0) chunks.push(event.data);
@@ -345,22 +357,26 @@ export async function renderCaptionedReel(
     recorder.start(250);
     drawFrame();
     drawTimer = window.setInterval(drawFrame, 1000 / 30);
-    await audioContext?.resume();
-    await video.play();
-    await playbackFinished;
+    if (audioContext) await waitForAbort(audioContext.resume(), signal);
+    await waitForAbort(video.play(), signal);
+    await waitForAbort(playbackFinished, signal);
     if (recorder.state !== 'inactive') recorder.stop();
-    const result = await recordedBlob;
+    const result = await waitForAbort(recordingResult, signal);
+    throwIfAborted(signal);
     onProgress(100);
     return result;
   } catch (error) {
     if (recorder && recorder.state !== 'inactive') recorder.stop();
+    await recordingResult?.catch(() => undefined);
     throw error;
   } finally {
+    signal?.removeEventListener('abort', handleAbort);
     if (drawTimer !== null) window.clearInterval(drawTimer);
     video.pause();
     video.removeAttribute('src');
     video.load();
     outputStream?.getTracks().forEach((track) => track.stop());
+    canvasStream?.getTracks().forEach((track) => track.stop());
     if (audioContext && audioContext.state !== 'closed') await audioContext.close();
   }
 }

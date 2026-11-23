@@ -27,6 +27,19 @@ import {
 import { renderPodcastAudioCleanup, type PodcastAudioCleanupOptions } from '@/utils/podcastAudioCleanup';
 import { PODCAST_SOUNDTRACKS } from '@/utils/podcastSoundtracks';
 import {
+  deletePodcastRecordingRecovery,
+  loadPodcastRecordingRecovery,
+  savePodcastRecordingRecovery,
+} from '@/utils/podcastRecordingRecovery';
+import {
+  deletePodcastRecordingBackup,
+  deletePodcastRecordingBackups,
+  downloadPodcastRecordingBackup,
+  getPodcastRecordingStoragePaths,
+  uploadPodcastRecordingBackup,
+  type PodcastRecordingStoragePaths,
+} from '@/utils/podcastRecordingStorage';
+import {
   drawPodcastBroadcastOverlays,
   drawPodcastIntroFrame,
   drawPodcastNextEpisodeSlot,
@@ -54,6 +67,17 @@ type DraftPayload = {
   logoImageUrl?: string | null;
   introVideoUrl?: string | null;
   outroVideoUrl?: string | null;
+  supabaseOriginalSaved?: boolean;
+  supabaseRecordingSeconds?: number;
+  supabaseLatestSaved?: boolean;
+  supabaseRenderSettings?: SavedPodcastRenderSettings;
+};
+type SavedPodcastRenderSettings = {
+  audioPreset: ReelAudioPreset;
+  videoPreset: ReelVideoPreset;
+  audioCleanup: PodcastAudioCleanupOptions;
+  backgroundAudioUrl: string;
+  backgroundAudioVolume: number;
 };
 type ScriptSection = { heading: string; body: string };
 type RecordingState = 'idle' | 'recording' | 'paused' | 'recorded';
@@ -77,6 +101,56 @@ const introPreviewBackgrounds = [
   'linear-gradient(135deg, #08212a, #080f18 58%, #030605)',
   'linear-gradient(135deg, #25180a, #100e0b 58%, #030605)',
 ];
+
+function getSavedPodcastRenderSettings(value: unknown): SavedPodcastRenderSettings | null {
+  if (!value || typeof value !== 'object') return null;
+  const settings = value as Record<string, unknown>;
+  const audioPresets: ReelAudioPreset[] = ['original', 'voice-clarity', 'warm-studio', 'bass-boost', 'volume-boost'];
+  const videoPresets: ReelVideoPreset[] = ['original', 'balanced', 'bright', 'vivid'];
+  if (
+    typeof settings.audioPreset !== 'string'
+    || !audioPresets.some((preset) => preset === settings.audioPreset)
+    || typeof settings.videoPreset !== 'string'
+    || !videoPresets.some((preset) => preset === settings.videoPreset)
+    || typeof settings.backgroundAudioUrl !== 'string'
+    || (
+      settings.backgroundAudioUrl !== ''
+      && !PODCAST_SOUNDTRACKS.some((track) => track.url === settings.backgroundAudioUrl)
+    )
+    || typeof settings.backgroundAudioVolume !== 'number'
+    || !Number.isFinite(settings.backgroundAudioVolume)
+    || settings.backgroundAudioVolume < 0
+    || settings.backgroundAudioVolume > 0.2
+    || !settings.audioCleanup
+    || typeof settings.audioCleanup !== 'object'
+  ) return null;
+
+  const cleanup = settings.audioCleanup as Record<string, unknown>;
+  if (
+    typeof cleanup.noiseGate !== 'boolean'
+    || typeof cleanup.declip !== 'boolean'
+    || typeof cleanup.declick !== 'boolean'
+    || typeof cleanup.trimSilence !== 'boolean'
+    || typeof cleanup.minimumSilenceSeconds !== 'number'
+    || !Number.isFinite(cleanup.minimumSilenceSeconds)
+    || cleanup.minimumSilenceSeconds < 0.5
+    || cleanup.minimumSilenceSeconds > 2.5
+  ) return null;
+
+  return {
+    audioPreset: settings.audioPreset as ReelAudioPreset,
+    videoPreset: settings.videoPreset as ReelVideoPreset,
+    audioCleanup: {
+      noiseGate: cleanup.noiseGate,
+      declip: cleanup.declip,
+      declick: cleanup.declick,
+      trimSilence: cleanup.trimSilence,
+      minimumSilenceSeconds: cleanup.minimumSilenceSeconds,
+    },
+    backgroundAudioUrl: settings.backgroundAudioUrl,
+    backgroundAudioVolume: settings.backgroundAudioVolume,
+  };
+}
 
 function parseSections(script: string, title: string): ScriptSection[] {
   const sections: ScriptSection[] = [];
@@ -242,9 +316,18 @@ export default function PodcastTeleprompter() {
   const [backgroundAudioVolume, setBackgroundAudioVolume] = useState(0.1);
   const [videoPreset, setVideoPreset] = useState<ReelVideoPreset>('original');
   const [effectsRendered, setEffectsRendered] = useState(false);
+  const [effectsCancelled, setEffectsCancelled] = useState(false);
   const [isRenderingEffects, setIsRenderingEffects] = useState(false);
+  const [isSyncingSupabase, setIsSyncingSupabase] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderStatus, setRenderStatus] = useState('');
+  const [isCheckingRecovery, setIsCheckingRecovery] = useState(false);
+  const [isPersistingRecording, setIsPersistingRecording] = useState(false);
+  const [isRecoveryCopyAvailable, setIsRecoveryCopyAvailable] = useState(false);
+  const [isSupabaseCopyAvailable, setIsSupabaseCopyAvailable] = useState(false);
+  const [supabaseSyncNotice, setSupabaseSyncNotice] = useState('');
+  const [cloudRecordingPaths, setCloudRecordingPaths] = useState<PodcastRecordingStoragePaths | null>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState('');
   const [isSavingRecording, setIsSavingRecording] = useState(false);
   const [introMontageActive, setIntroMontageActive] = useState(false);
   const [introScene, setIntroScene] = useState(0);
@@ -264,6 +347,9 @@ export default function PodcastTeleprompter() {
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingBlobRef = useRef<Blob | null>(null);
   const originalRecordingBlobRef = useRef<Blob | null>(null);
+  const recordingSecondsRef = useRef(0);
+  const renderAbortControllerRef = useRef<AbortController | null>(null);
+  const cloudOriginalSavedRef = useRef(false);
   const recordingStateRef = useRef<RecordingState>('idle');
   const introElapsedMsRef = useRef(0);
   const animationFrameRef = useRef<number | null>(null);
@@ -302,6 +388,68 @@ export default function PodcastTeleprompter() {
     || audioCleanup.declick
     || audioCleanup.trimSilence
     || Boolean(backgroundAudioUrl);
+
+  const updateHandoffBackupMetadata = useCallback((updates: Partial<Pick<
+    DraftPayload,
+    'supabaseOriginalSaved' | 'supabaseRecordingSeconds' | 'supabaseLatestSaved' | 'supabaseRenderSettings'
+  >>) => {
+    try {
+      const current = localStorage.getItem(handoffKey(sessionId));
+      if (!current) return;
+      const payload = JSON.parse(current) as DraftPayload;
+      localStorage.setItem(handoffKey(sessionId), JSON.stringify({ ...payload, ...updates }));
+    } catch (metadataError) {
+      console.error('Could not update podcast recording recovery metadata:', metadataError);
+    }
+  }, [sessionId]);
+
+  const persistOriginalRecordingToSupabase = useCallback(async (blob: Blob, durationSeconds: number) => {
+    if (!cloudRecordingPaths) throw new Error('Secure recording storage is not ready yet.');
+    setSupabaseSyncNotice('Uploading the original recording to private Supabase storage…');
+    await uploadPodcastRecordingBackup(cloudRecordingPaths.original, blob);
+    cloudOriginalSavedRef.current = true;
+    setIsSupabaseCopyAvailable(true);
+    updateHandoffBackupMetadata({
+      supabaseOriginalSaved: true,
+      supabaseRecordingSeconds: durationSeconds,
+      supabaseLatestSaved: false,
+      supabaseRenderSettings: undefined,
+    });
+    setSupabaseSyncNotice('Original recording backed up to private Supabase storage.');
+    try {
+      await deletePodcastRecordingBackup(cloudRecordingPaths.latest);
+    } catch (cleanupError) {
+      console.error('Could not remove the previous rendered podcast backup:', cleanupError);
+    }
+  }, [cloudRecordingPaths, updateHandoffBackupMetadata]);
+
+  const syncLatestRecordingToSupabase = useCallback(async (blob: Blob, renderSettings: SavedPodcastRenderSettings) => {
+    if (!cloudRecordingPaths) {
+      setSupabaseSyncNotice('Could not sync this render: secure recording storage is not ready.');
+      return;
+    }
+    setIsSyncingSupabase(true);
+    try {
+      if (!cloudOriginalSavedRef.current) {
+        await persistOriginalRecordingToSupabase(
+          originalRecordingBlobRef.current || blob,
+          recordingSecondsRef.current,
+        );
+      }
+      setSupabaseSyncNotice('Uploading the latest completed render to private Supabase storage…');
+      await uploadPodcastRecordingBackup(cloudRecordingPaths.latest, blob);
+      updateHandoffBackupMetadata({
+        supabaseLatestSaved: true,
+        supabaseRenderSettings: renderSettings,
+      });
+      setSupabaseSyncNotice('Latest completed render backed up to Supabase. The original is preserved separately.');
+    } catch (syncError) {
+      console.error('Could not sync the podcast recording to Supabase:', syncError);
+      setSupabaseSyncNotice(`Supabase sync failed: ${syncError instanceof Error ? syncError.message : 'Could not upload the latest recording.'} The original take remains unchanged; check the recovery status above.`);
+    } finally {
+      setIsSyncingSupabase(false);
+    }
+  }, [cloudRecordingPaths, persistOriginalRecordingToSupabase, updateHandoffBackupMetadata]);
 
   const updatePendingGuests = (guests: PodcastGuest[]) => {
     pendingGuestsRef.current = guests;
@@ -674,6 +822,12 @@ export default function PodcastTeleprompter() {
 
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) throw new Error('Sign in to open the podcast recording desk.');
+        setCloudRecordingPaths(getPodcastRecordingStoragePaths(user.id, sessionId));
+        cloudOriginalSavedRef.current = parsedDraft.supabaseOriginalSaved === true;
+        setIsSupabaseCopyAvailable(cloudOriginalSavedRef.current);
+        if (cloudOriginalSavedRef.current) {
+          setSupabaseSyncNotice('Original recording is backed up to private Supabase storage.');
+        }
 
         if (parsedDraft.mode === 'creator') {
           if (parsedDraft.ownerId !== user.id || !parsedDraft.draftId) {
@@ -717,6 +871,125 @@ export default function PodcastTeleprompter() {
   }, [sessionId]);
 
   useEffect(() => {
+    if (!authorized || !sessionId || !cloudRecordingPaths) return;
+    let active = true;
+    setIsCheckingRecovery(true);
+    const restoreRecovery = async () => {
+      try {
+        let recovery: Awaited<ReturnType<typeof loadPodcastRecordingRecovery>> = null;
+        try {
+          recovery = await loadPodcastRecordingRecovery(sessionId);
+        } catch (localRecoveryError) {
+          console.error('Could not read the local podcast recovery copy:', localRecoveryError);
+        }
+        if (!active) return;
+        if (recovery && (
+          !(recovery.blob instanceof Blob)
+          || !Number.isFinite(recovery.savedAt)
+          || recovery.savedAt > Date.now()
+          || Date.now() - recovery.savedAt > HANDOFF_TTL_MS
+          || !Number.isFinite(recovery.recordingSeconds)
+          || recovery.recordingSeconds < 0
+        )) {
+          try {
+            await deletePodcastRecordingRecovery(sessionId);
+          } catch (deleteError) {
+            console.error('Could not remove an expired podcast recovery copy:', deleteError);
+          }
+          recovery = null;
+        }
+        if (recordingStateRef.current !== 'idle') return;
+
+        let recoveryBlob = recovery?.blob || null;
+        let recoverySeconds = recovery?.recordingSeconds || 0;
+        let recoverySource = 'this browser';
+        if (!recoveryBlob) {
+          recoveryBlob = await downloadPodcastRecordingBackup(cloudRecordingPaths.original);
+          if (!active || !recoveryBlob) return;
+          const storedDraft = localStorage.getItem(handoffKey(sessionId));
+          if (storedDraft) {
+            const backupDuration = Number((JSON.parse(storedDraft) as DraftPayload).supabaseRecordingSeconds);
+            if (Number.isFinite(backupDuration) && backupDuration >= 0) recoverySeconds = backupDuration;
+          }
+          setIsSupabaseCopyAvailable(true);
+          cloudOriginalSavedRef.current = true;
+          setSupabaseSyncNotice('Original recording is backed up to private Supabase storage.');
+          recoverySource = 'Supabase';
+          void savePodcastRecordingRecovery(sessionId, recoveryBlob, recoverySeconds).then(() => {
+            if (active) setIsRecoveryCopyAvailable(true);
+          }).catch((saveError: unknown) => {
+            console.error('Could not cache the Supabase podcast backup in this browser:', saveError);
+          });
+        }
+        if (!recoveryBlob) return;
+
+        const storedDraft = localStorage.getItem(handoffKey(sessionId));
+        const backupMetadata = storedDraft ? JSON.parse(storedDraft) as DraftPayload : null;
+        let currentBlob = recoveryBlob;
+        const savedRenderSettings = backupMetadata?.supabaseLatestSaved
+          ? getSavedPodcastRenderSettings(backupMetadata.supabaseRenderSettings)
+          : null;
+        let latestRenderRestored = false;
+        if (backupMetadata?.supabaseLatestSaved && !savedRenderSettings) {
+          updateHandoffBackupMetadata({ supabaseLatestSaved: false, supabaseRenderSettings: undefined });
+        }
+        if (savedRenderSettings) {
+          try {
+            const latestBlob = await downloadPodcastRecordingBackup(cloudRecordingPaths.latest);
+            if (!active) return;
+            if (latestBlob) {
+              currentBlob = latestBlob;
+              latestRenderRestored = true;
+              setAudioPreset(savedRenderSettings.audioPreset);
+              setVideoPreset(savedRenderSettings.videoPreset);
+              setAudioCleanup(savedRenderSettings.audioCleanup);
+              setBackgroundAudioUrl(savedRenderSettings.backgroundAudioUrl);
+              setBackgroundAudioVolume(savedRenderSettings.backgroundAudioVolume);
+              setSupabaseSyncNotice('Latest completed render restored from private Supabase storage. The original is preserved separately.');
+            } else {
+              updateHandoffBackupMetadata({ supabaseLatestSaved: false, supabaseRenderSettings: undefined });
+            }
+          } catch (latestError) {
+            console.error('Could not restore the latest podcast render from Supabase:', latestError);
+            setSupabaseSyncNotice('Could not restore the latest effects render; the original recording is available.');
+          }
+        }
+
+        recordingBlobRef.current = currentBlob;
+        originalRecordingBlobRef.current = recoveryBlob;
+        recordingSecondsRef.current = Math.max(0, recoverySeconds);
+        setRecordingSeconds(recordingSecondsRef.current);
+        if (recovery) setIsRecoveryCopyAvailable(true);
+        setRecordingUrl(URL.createObjectURL(currentBlob));
+        recordingStateRef.current = 'recorded';
+        setRecordingState('recorded');
+        setEffectsRendered(latestRenderRestored);
+        setEffectsCancelled(false);
+        setRecoveryNotice(latestRenderRestored
+          ? `Recovered the original take from ${recoverySource} and restored its latest completed effects render.`
+          : `Recovered the original take from ${recoverySource}. Any unfinished effects were discarded; you can retry them.`);
+        if (recovery && !cloudOriginalSavedRef.current) {
+          setIsPersistingRecording(true);
+          void persistOriginalRecordingToSupabase(recoveryBlob, recoverySeconds).catch((uploadError: unknown) => {
+            console.error('Could not restore the cloud podcast backup from the local recovery copy:', uploadError);
+            setSupabaseSyncNotice(`Supabase backup retry failed: ${uploadError instanceof Error ? uploadError.message : 'Could not upload the original recording.'}`);
+          }).finally(() => setIsPersistingRecording(false));
+        }
+      } catch (recoveryError) {
+        if (active) {
+          console.error('Could not restore a podcast recording backup:', recoveryError);
+          setRecoveryNotice('Could not restore a recovery copy from this browser or Supabase. Keep this page open and save your recording before refreshing.');
+        }
+      } finally {
+        if (active) setIsCheckingRecovery(false);
+      }
+    };
+
+    void restoreRecovery();
+    return () => { active = false; };
+  }, [authorized, cloudRecordingPaths, persistOriginalRecordingToSupabase, sessionId, updateHandoffBackupMetadata]);
+
+  useEffect(() => {
     const video = previewRef.current;
     if (!video) return;
     if (recordingUrl) {
@@ -750,9 +1023,31 @@ export default function PodcastTeleprompter() {
 
   useEffect(() => {
     if (recordingState !== 'recording') return;
-    const timer = window.setInterval(() => setRecordingSeconds((seconds) => seconds + 1), 1000);
+    const timer = window.setInterval(() => {
+      setRecordingSeconds((seconds) => {
+        const nextSeconds = seconds + 1;
+        recordingSecondsRef.current = nextSeconds;
+        return nextSeconds;
+      });
+    }, 1000);
     return () => window.clearInterval(timer);
   }, [recordingState]);
+
+  useEffect(() => {
+    const hasUnsavedRecording = recordingState === 'recording'
+      || recordingState === 'paused'
+      || isPersistingRecording
+      || isSyncingSupabase
+      || (recordingState === 'recorded' && !isRecoveryCopyAvailable && !isSupabaseCopyAvailable);
+    if (!hasUnsavedRecording) return;
+
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [isPersistingRecording, isRecoveryCopyAvailable, isSupabaseCopyAvailable, isSyncingSupabase, recordingState]);
 
   const startOutro = useCallback(() => {
     if (outroActiveRef.current) return;
@@ -830,6 +1125,7 @@ export default function PodcastTeleprompter() {
   }, [activeSection, draft]);
 
   useEffect(() => () => {
+    renderAbortControllerRef.current?.abort();
     recorderRef.current?.stop();
     void closeConference(true, false).catch((cleanupError: unknown) => {
       console.error('Could not close the podcast guest room.', cleanupError);
@@ -849,11 +1145,23 @@ export default function PodcastTeleprompter() {
   }, [recordingUrl]);
 
   useEffect(() => {
-    const handleHandoffResult = (event: MessageEvent) => {
+    const handleHandoffResult = async (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.source !== window.opener) return;
       if (event.data?.sessionId !== sessionId) return;
       if (event.data.type === 'NEXSQ_PODCAST_RECORDING_STORED') {
         localStorage.removeItem(handoffKey(sessionId));
+        try {
+          await deletePodcastRecordingRecovery(sessionId);
+        } catch (recoveryError) {
+          console.error('Could not remove the saved podcast recovery copy:', recoveryError);
+        }
+        if (cloudRecordingPaths) {
+          try {
+            await deletePodcastRecordingBackups(cloudRecordingPaths);
+          } catch (cleanupError) {
+            console.error('Could not remove the saved podcast staging copies:', cleanupError);
+          }
+        }
         window.close();
       } else if (event.data.type === 'NEXSQ_PODCAST_RECORDING_FAILED') {
         setHandoffSaving(false);
@@ -862,7 +1170,7 @@ export default function PodcastTeleprompter() {
     };
     window.addEventListener('message', handleHandoffResult);
     return () => window.removeEventListener('message', handleHandoffResult);
-  }, [sessionId]);
+  }, [cloudRecordingPaths, sessionId]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1133,12 +1441,24 @@ export default function PodcastTeleprompter() {
       recordingChunksRef.current = [];
       recordingBlobRef.current = null;
       originalRecordingBlobRef.current = null;
+      setIsRecoveryCopyAvailable(false);
+      setIsSupabaseCopyAvailable(false);
+      cloudOriginalSavedRef.current = false;
+      updateHandoffBackupMetadata({
+        supabaseOriginalSaved: false,
+        supabaseRecordingSeconds: 0,
+        supabaseLatestSaved: false,
+        supabaseRenderSettings: undefined,
+      });
+      setSupabaseSyncNotice('A secure Supabase copy will be saved when this recording stops.');
+      setRecoveryNotice('');
       setAudioPreset('original');
       setVideoPreset('original');
       setEffectsRendered(false);
       setRenderProgress(0);
       applyPreviewAudioPreset('original');
       setRecordingUrl('');
+      recordingSecondsRef.current = 0;
       setRecordingSeconds(0);
       recorder.ondataavailable = (event) => {
         if (event.data.size) recordingChunksRef.current.push(event.data);
@@ -1178,6 +1498,28 @@ export default function PodcastTeleprompter() {
         originalRecordingBlobRef.current = blob;
         setRecordingUrl(URL.createObjectURL(blob));
         setRecordingState('recorded');
+        setIsPersistingRecording(true);
+        setIsRecoveryCopyAvailable(false);
+        setRecoveryNotice('Saving a recovery copy in this browser…');
+        void (async () => {
+          setSupabaseSyncNotice('Uploading the original recording to private Supabase storage…');
+          const localSave = savePodcastRecordingRecovery(sessionId, blob, recordingSecondsRef.current)
+            .then(() => {
+              setIsRecoveryCopyAvailable(true);
+              setRecoveryNotice('Recovery copy saved in this browser.');
+            })
+            .catch((recoveryError: unknown) => {
+              console.error('Could not save a podcast recording recovery copy in this browser:', recoveryError);
+              setRecoveryNotice('Could not save a browser recovery copy. Check the Supabase backup status below.');
+            });
+          const cloudSave = persistOriginalRecordingToSupabase(blob, recordingSecondsRef.current)
+            .catch((uploadError: unknown) => {
+              console.error('Could not save the original podcast recording to Supabase:', uploadError);
+              setSupabaseSyncNotice(`Supabase upload failed: ${uploadError instanceof Error ? uploadError.message : 'Could not upload the original.'}`);
+            });
+          await Promise.all([localSave, cloudSave]);
+          setIsPersistingRecording(false);
+        })();
       };
       recorderRef.current = recorder;
       setActiveSection(0);
@@ -1218,6 +1560,12 @@ export default function PodcastTeleprompter() {
   };
 
   const restoreOriginalRecording = () => {
+    setEffectsCancelled(false);
+    updateHandoffBackupMetadata({
+      supabaseLatestSaved: false,
+      supabaseRenderSettings: undefined,
+    });
+    setSupabaseSyncNotice('Settings changed. The original remains backed up; completed renders sync automatically.');
     const originalBlob = originalRecordingBlobRef.current;
     if (!effectsRendered || !originalBlob) return;
     recordingBlobRef.current = originalBlob;
@@ -1289,12 +1637,17 @@ export default function PodcastTeleprompter() {
       recordingBlobRef.current = sourceBlob;
       setRecordingUrl(URL.createObjectURL(sourceBlob));
       setEffectsRendered(false);
+      setEffectsCancelled(false);
       return sourceBlob;
     }
 
+    const renderController = new AbortController();
+    renderAbortControllerRef.current = renderController;
+    const { signal } = renderController;
     setIsRenderingEffects(true);
     setRenderProgress(0);
     setRenderStatus('Preparing selected effects…');
+    setEffectsCancelled(false);
     try {
       let renderedBlob = sourceBlob;
       if (shouldCleanAudio) {
@@ -1304,9 +1657,10 @@ export default function PodcastTeleprompter() {
           if (!soundtrack) throw new Error('The selected soundtrack is no longer available.');
           setRenderStatus('Loading the selected soundtrack…');
           setRenderProgress(2);
-          const response = await fetch(soundtrack.url);
+          const response = await fetch(soundtrack.url, { signal });
           if (!response.ok) throw new Error(`Could not load the selected soundtrack (${response.status}).`);
           soundtrackFile = new File([await response.blob()], `${soundtrack.name}.mp3`, { type: 'audio/mpeg' });
+          if (signal.aborted) throw new Error('Rendering cancelled.');
         }
         renderedBlob = await renderPodcastAudioCleanup(
           sourceBlob,
@@ -1316,6 +1670,7 @@ export default function PodcastTeleprompter() {
             ? { file: soundtrackFile, volume: selectedBackgroundAudioVolume }
             : null,
           setRenderStatus,
+          signal,
         );
       }
 
@@ -1331,23 +1686,46 @@ export default function PodcastTeleprompter() {
             (progress) => setRenderProgress(shouldCleanAudio ? 60 + Math.round(progress * 0.4) : progress),
             { audioPreset: selectedAudioPreset, videoPreset: selectedVideoPreset },
             recordingSeconds,
+            signal,
           );
         } finally {
           URL.revokeObjectURL(sourceUrl);
         }
       }
 
+      await syncLatestRecordingToSupabase(renderedBlob, {
+        audioPreset: selectedAudioPreset,
+        videoPreset: selectedVideoPreset,
+        audioCleanup: selectedAudioCleanup,
+        backgroundAudioUrl: selectedBackgroundAudioUrl,
+        backgroundAudioVolume: selectedBackgroundAudioVolume,
+      });
       recordingBlobRef.current = renderedBlob;
       setRecordingUrl(URL.createObjectURL(renderedBlob));
       setEffectsRendered(true);
+      setEffectsCancelled(false);
       setRenderStatus('Effects are ready to preview and save.');
       return renderedBlob;
     } catch (renderError) {
+      if (signal.aborted) {
+        recordingBlobRef.current = sourceBlob;
+        setRecordingUrl(URL.createObjectURL(sourceBlob));
+        setEffectsRendered(false);
+        setEffectsCancelled(true);
+        setRenderStatus('Rendering cancelled. The original recording is preserved; you can save it or retry.');
+        setSupabaseSyncNotice('Rendering cancelled. Supabase keeps the original and the last completed render.');
+        return sourceBlob;
+      }
       setRenderStatus('Rendering failed.');
       throw renderError;
     } finally {
+      if (renderAbortControllerRef.current === renderController) renderAbortControllerRef.current = null;
       setIsRenderingEffects(false);
     }
+  };
+
+  const cancelEffectRendering = () => {
+    renderAbortControllerRef.current?.abort();
   };
 
   const saveAndLoadDraft = async () => {
@@ -1361,10 +1739,14 @@ export default function PodcastTeleprompter() {
     setError('');
     try {
       let blob = currentRecording;
-      if ((audioPreset !== 'original' || videoPreset !== 'original' || hasAudioProcessing) && !effectsRendered) {
+      if (
+        (audioPreset !== 'original' || videoPreset !== 'original' || hasAudioProcessing)
+        && !effectsRendered
+        && !effectsCancelled
+      ) {
         blob = await renderPodcastEffects();
       }
-      if (draft.mode === 'creator') setHandoffSaving(true);
+      setHandoffSaving(true);
       const extension = blob.type.toLowerCase().includes('mp4') ? 'mp4' : 'webm';
       window.opener.postMessage({
         type: 'NEXSQ_PODCAST_RECORDING_SAVED',
@@ -1379,10 +1761,6 @@ export default function PodcastTeleprompter() {
         recording: blob,
         fileName: `${draft.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'podcast'}-${Date.now()}.${extension}`,
       }, window.location.origin);
-      if (draft.mode !== 'creator') {
-        localStorage.removeItem(handoffKey(sessionId));
-        window.close();
-      }
     } catch (saveError) {
       setHandoffSaving(false);
       setError(saveError instanceof Error ? saveError.message : 'Could not save this recording.');
@@ -1723,9 +2101,17 @@ export default function PodcastTeleprompter() {
             </section>
           )}
           {recordingState === 'idle' || recordingState === 'recorded' ? (
-            <Button className="w-full gap-2 bg-red-600 text-white hover:bg-red-700" onClick={() => void startRecording()}>
+            <Button
+              className="w-full gap-2 bg-red-600 text-white hover:bg-red-700"
+              onClick={() => void startRecording()}
+              disabled={isCheckingRecovery || isPersistingRecording || isRenderingEffects || isSavingRecording}
+            >
               {recordingState === 'recorded' ? <RotateCcw className="h-4 w-4" /> : <Video className="h-4 w-4" />}
-              {recordingState === 'recorded' ? 'Record again' : 'Start recording'}
+              {isCheckingRecovery
+                ? 'Checking for a saved take…'
+                : isPersistingRecording
+                  ? 'Saving original recording…'
+                  : recordingState === 'recorded' ? 'Record again' : 'Start recording'}
             </Button>
           ) : (
             <div className="grid grid-cols-2 gap-2">
@@ -1758,17 +2144,37 @@ export default function PodcastTeleprompter() {
             </div>
           )}
           {recordingState === 'recorded' && (
+            <p className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-[10px] leading-relaxed text-white/55" aria-live="polite">
+              {recoveryNotice || (isRecoveryCopyAvailable
+                ? 'A recovery copy is saved in this browser. Browser storage can be cleared, so save your recording to a draft too.'
+                : isSupabaseCopyAvailable
+                  ? 'The original is backed up to Supabase. Browser recovery storage is not available for this take.'
+                  : 'No recovery copy is available yet. Keep this page open or save your recording before refreshing.')}
+            </p>
+          )}
+          {recordingState === 'recorded' && supabaseSyncNotice && (
+            <p
+              className={`rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-[10px] leading-relaxed ${supabaseSyncNotice.toLowerCase().includes('failed') ? 'text-amber-200' : 'text-emerald-200/75'}`}
+              aria-live="polite"
+            >
+              {supabaseSyncNotice}
+            </p>
+          )}
+          {recordingState === 'recorded' && (
             <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3" aria-labelledby="podcast-effects-title">
               <div>
                 <h2 id="podcast-effects-title" className="text-sm font-semibold text-white">Audio and video effects</h2>
                 <p className="mt-1 text-[11px] leading-relaxed text-white/50">Choose optional cleanup and a soundtrack, then apply or save.</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-white/45">
+                  Effects run locally in this browser using FFmpeg; the recording is not uploaded to a processing service.
+                </p>
               </div>
               <MediaEnhancementTabs
                 audioPreset={audioPreset}
                 videoPreset={videoPreset}
                 onAudioPresetChange={handleAudioPresetChange}
                 onVideoPresetChange={handleVideoPresetChange}
-                disabled={isRenderingEffects || isSavingRecording}
+                disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                 accent="emerald"
               />
               <fieldset className="space-y-2 rounded-md border border-white/10 p-2.5">
@@ -1779,7 +2185,7 @@ export default function PodcastTeleprompter() {
                   <select
                     value={backgroundAudioUrl}
                     aria-label="Choose background soundtrack"
-                    disabled={isRenderingEffects || isSavingRecording}
+                    disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                     onChange={handleBackgroundAudioChange}
                     className="h-8 min-w-0 flex-1 rounded border border-white/10 bg-[#111715] px-2 text-[10px] text-white"
                   >
@@ -1800,7 +2206,7 @@ export default function PodcastTeleprompter() {
                         step="1"
                         value={Math.round(backgroundAudioVolume * 100)}
                         aria-label="Background soundtrack volume"
-                        disabled={isRenderingEffects || isSavingRecording}
+                        disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                         onChange={(event) => {
                           setBackgroundAudioVolume(Number(event.target.value) / 100);
                           restoreOriginalRecording();
@@ -1814,12 +2220,12 @@ export default function PodcastTeleprompter() {
                 )}
               </fieldset>
               <fieldset className="space-y-2 rounded-md border border-white/10 p-2.5">
-                <legend className="px-1 text-[11px] font-medium text-white/75">Audio cleanup (processed on this device)</legend>
+                <legend className="px-1 text-[11px] font-medium text-white/75">Audio cleanup (runs in your browser)</legend>
                 <label className="flex items-center gap-2 text-[11px] text-white/70">
                   <input
                     type="checkbox"
                     checked={audioCleanup.noiseGate}
-                    disabled={isRenderingEffects || isSavingRecording}
+                    disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                     onChange={(event) => handleAudioCleanupChange('noiseGate', event.target.checked)}
                     className="accent-emerald-400"
                   />
@@ -1829,7 +2235,7 @@ export default function PodcastTeleprompter() {
                   <input
                     type="checkbox"
                     checked={audioCleanup.declip}
-                    disabled={isRenderingEffects || isSavingRecording}
+                    disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                     onChange={(event) => handleAudioCleanupChange('declip', event.target.checked)}
                     className="accent-emerald-400"
                   />
@@ -1839,7 +2245,7 @@ export default function PodcastTeleprompter() {
                   <input
                     type="checkbox"
                     checked={audioCleanup.declick}
-                    disabled={isRenderingEffects || isSavingRecording}
+                    disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                     onChange={(event) => handleAudioCleanupChange('declick', event.target.checked)}
                     className="accent-emerald-400"
                   />
@@ -1849,7 +2255,7 @@ export default function PodcastTeleprompter() {
                   <input
                     type="checkbox"
                     checked={audioCleanup.trimSilence}
-                    disabled={isRenderingEffects || isSavingRecording}
+                    disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                     onChange={(event) => handleAudioCleanupChange('trimSilence', event.target.checked)}
                     className="accent-emerald-400"
                   />
@@ -1865,7 +2271,7 @@ export default function PodcastTeleprompter() {
                       step="0.25"
                       value={audioCleanup.minimumSilenceSeconds}
                       aria-label="Minimum silence to remove"
-                      disabled={isRenderingEffects || isSavingRecording}
+                      disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                       onChange={(event) => handleAudioCleanupChange('minimumSilenceSeconds', Number(event.target.value))}
                       className="min-w-0 flex-1 accent-emerald-400"
                     />
@@ -1880,7 +2286,7 @@ export default function PodcastTeleprompter() {
                   onClick={() => void renderPodcastEffects().catch((renderError: unknown) => {
                     setError(renderError instanceof Error ? renderError.message : 'Could not clean the podcast audio.');
                   })}
-                  disabled={isRenderingEffects || isSavingRecording}
+                  disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                   className="w-full border-emerald-400/30 text-emerald-100"
                 >
                   Apply audio changes
@@ -1895,26 +2301,44 @@ export default function PodcastTeleprompter() {
                   ? `${renderStatus || 'Rendering audio/video effects…'} ${renderProgress}%`
                   : effectsRendered
                     ? renderStatus || 'Selected effects rendered and ready to save.'
+                    : effectsCancelled
+                      ? renderStatus || 'Rendering cancelled. The original recording is preserved.'
                     : hasAudioProcessing
                       ? 'Apply audio changes, or save to render the selected effects.'
                       : 'Select a preset to render it automatically.'}
               </p>
               {isRenderingEffects && (
-                <div
-                  className="h-1.5 overflow-hidden rounded-full bg-white/10"
-                  role="progressbar"
-                  aria-label="Rendering podcast effects"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={renderProgress}
-                >
-                  <div className="h-full rounded-full bg-emerald-400 transition-[width]" style={{ width: `${renderProgress}%` }} />
+                <div className="space-y-2">
+                  <div
+                    className="h-1.5 overflow-hidden rounded-full bg-white/10"
+                    role="progressbar"
+                    aria-label="Rendering podcast effects"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={renderProgress}
+                  >
+                    <div className="h-full rounded-full bg-emerald-400 transition-[width]" style={{ width: `${renderProgress}%` }} />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full border-red-400/30 text-red-200"
+                    onClick={cancelEffectRendering}
+                    disabled={isSyncingSupabase}
+                  >
+                    {isSyncingSupabase ? 'Saving render to Supabase…' : 'Cancel rendering'}
+                  </Button>
+                  <p className="text-center text-[10px] text-white/45">
+                    {isSyncingSupabase
+                      ? 'The completed render is being saved privately; the original is already preserved.'
+                      : 'Rendering may take a few minutes on slower devices. Cancelling keeps the original take.'}
+                  </p>
                 </div>
               )}
             </section>
           )}
           {recordingState === 'recorded' && (
-            <Button className="w-full gap-2 bg-emerald-700 text-white hover:bg-emerald-800" onClick={() => void saveAndLoadDraft()} disabled={handoffSaving || isSavingRecording || isRenderingEffects}>
+            <Button className="w-full gap-2 bg-emerald-700 text-white hover:bg-emerald-800" onClick={() => void saveAndLoadDraft()} disabled={handoffSaving || isSavingRecording || isRenderingEffects || isPersistingRecording}>
               {handoffSaving ? <RotateCcw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               {isRenderingEffects || isSavingRecording
                 ? isRenderingEffects ? `Rendering ${renderProgress}%` : 'Saving recording…'

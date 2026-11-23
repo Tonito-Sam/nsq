@@ -7,6 +7,7 @@ import {
   parseSilenceRanges,
   type TimeRange,
 } from './podcastSilence';
+import { createAbortError, throwIfAborted } from './abortSignal';
 
 export type PodcastAudioCleanupOptions = {
   noiseGate: boolean;
@@ -47,7 +48,9 @@ export async function renderPodcastAudioCleanup(
   onProgress: (progress: number) => void = () => {},
   backgroundAudio?: PodcastBackgroundAudio | null,
   onStatus: (status: string) => void = () => {},
+  signal?: AbortSignal,
 ): Promise<Blob> {
+  throwIfAborted(signal);
   if (!options.noiseGate && !options.declip && !options.declick && !options.trimSilence && !backgroundAudio) {
     return source;
   }
@@ -58,10 +61,18 @@ export async function renderPodcastAudioCleanup(
   }
 
   onProgress(3);
-  onStatus('Loading the on-device audio processor…');
+  onStatus('Loading the browser-based audio processor…');
   const { FFmpeg } = await import('@ffmpeg/ffmpeg');
+  throwIfAborted(signal);
   const ffmpeg = new FFmpeg();
   const silenceLogs: string[] = [];
+  let terminated = false;
+  const terminate = () => {
+    if (terminated) return;
+    terminated = true;
+    ffmpeg.terminate();
+  };
+  const handleAbort = () => terminate();
   const handleSilenceLog = ({ message }: { message: string }) => silenceLogs.push(message);
   const handleAnalysisProgress = ({ progress }: { progress: number }) => {
     if (Number.isFinite(progress)) onProgress(Math.max(6, Math.min(10, Math.round(6 + progress * 4))));
@@ -70,8 +81,13 @@ export async function renderPodcastAudioCleanup(
     if (Number.isFinite(progress)) onProgress(Math.max(10, Math.min(95, Math.round(10 + progress * 85))));
   };
 
+  signal?.addEventListener('abort', handleAbort, { once: true });
+  if (signal?.aborted) handleAbort();
+
   try {
+    throwIfAborted(signal);
     await ffmpeg.load({ coreURL: ffmpegCoreURL, wasmURL: ffmpegWasmURL });
+    throwIfAborted(signal);
     onProgress(4);
     onStatus('Preparing the recording…');
     const inputName = source.type.toLowerCase().includes('mp4') ? 'input.mp4' : 'input.webm';
@@ -81,6 +97,7 @@ export async function renderPodcastAudioCleanup(
         `background.${backgroundExtension}`,
         new Uint8Array(await backgroundAudio.file.arrayBuffer()),
       );
+      throwIfAborted(signal);
     }
 
     let retainedRanges: TimeRange[] = [];
@@ -97,6 +114,7 @@ export async function renderPodcastAudioCleanup(
         '-f', 'null',
         '-',
       ]);
+      throwIfAborted(signal);
       ffmpeg.off('log', handleSilenceLog);
       ffmpeg.off('progress', handleAnalysisProgress);
       if (detectExitCode !== 0) throw new Error('Could not analyze silent sections in the recording.');
@@ -177,6 +195,7 @@ export async function renderPodcastAudioCleanup(
 
     ffmpeg.on('progress', handleProgress);
     const exitCode = await ffmpeg.exec(args);
+    throwIfAborted(signal);
     ffmpeg.off('progress', handleProgress);
     if (exitCode !== 0) {
       throw new Error('The selected audio cleanup could not be rendered. Try disabling one effect and retry.');
@@ -191,10 +210,14 @@ export async function renderPodcastAudioCleanup(
     bytes.set(output);
     onProgress(100);
     return new Blob([bytes], { type: 'video/webm' });
+  } catch (error) {
+    if (signal?.aborted) throw createAbortError();
+    throw error;
   } finally {
+    signal?.removeEventListener('abort', handleAbort);
     ffmpeg.off('log', handleSilenceLog);
     ffmpeg.off('progress', handleAnalysisProgress);
     ffmpeg.off('progress', handleProgress);
-    ffmpeg.terminate();
+    terminate();
   }
 }

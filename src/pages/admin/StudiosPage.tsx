@@ -1524,14 +1524,24 @@ const StudiosPage = () => {
         message.fileName || `podcast-recording-${Date.now()}.webm`,
         { type: message.recording.type || 'video/webm' },
       );
-      podcastWindowRef.current = null;
-      setPodcastSessionId(null);
       toast({ title: 'Uploading recording', description: 'Saving the recorded video to Supabase Storage.' });
       try {
         const videoUrl = await uploadToStorage(recording, 'podcast-recordings');
         handleLoadPodcastDraft(message.title || 'Daily Podcast', videoUrl);
+        event.source?.postMessage({
+          type: 'NEXSQ_PODCAST_RECORDING_STORED',
+          sessionId: message.sessionId,
+        }, { targetOrigin: window.location.origin } as WindowPostMessageOptions);
+        window.localStorage.removeItem(`podcast-recording:${message.sessionId}`);
+        podcastWindowRef.current = null;
+        setPodcastSessionId(null);
       } catch (uploadError) {
         console.error('Podcast recording upload failed:', uploadError);
+        event.source?.postMessage({
+          type: 'NEXSQ_PODCAST_RECORDING_FAILED',
+          sessionId: message.sessionId,
+          error: uploadError instanceof Error ? uploadError.message : 'Could not save this recording.',
+        }, { targetOrigin: window.location.origin } as WindowPostMessageOptions);
         toast({
           title: 'Recording upload failed',
           description: uploadError instanceof Error ? uploadError.message : 'Could not save the video to Supabase Storage.',
