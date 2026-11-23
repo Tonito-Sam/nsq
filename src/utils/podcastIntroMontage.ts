@@ -22,10 +22,11 @@ function drawCameraCover(
   width: number,
   height: number,
   alpha: number,
+  zoom = 1,
 ) {
   if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) return;
 
-  const scale = Math.max(width / video.videoWidth, height / video.videoHeight);
+  const scale = Math.max(width / video.videoWidth, height / video.videoHeight) * zoom;
   const drawWidth = video.videoWidth * scale;
   const drawHeight = video.videoHeight * scale;
   context.save();
@@ -425,6 +426,7 @@ export function drawPodcastIntroFrame(
   coverImage?: HTMLImageElement | null,
   logoImage?: HTMLImageElement | null,
   introBackgroundVideo?: HTMLVideoElement | null,
+  cameraZoom = 1,
 ) {
   const duration = PODCAST_INTRO_DURATION_MS;
   const introActive = elapsedMs < duration;
@@ -547,12 +549,12 @@ export function drawPodcastIntroFrame(
     context.fillRect(margin, height * 0.91, (width - margin * 2) * progress, Math.max(3, height * 0.006));
 
     if (elapsedMs > duration - 1000) {
-      drawCameraCover(context, video, width, height, (elapsedMs - (duration - 1000)) / 1000);
+      drawCameraCover(context, video, width, height, (elapsedMs - (duration - 1000)) / 1000, cameraZoom);
     }
   } else {
     context.fillStyle = '#050807';
     context.fillRect(0, 0, width, height);
-    drawCameraCover(context, video, width, height, 1);
+    drawCameraCover(context, video, width, height, 1, cameraZoom);
   }
 
   return { introActive, sceneIndex };
@@ -582,9 +584,6 @@ export function drawPodcastOutroFrame(
   drawArtworkCover(context, logoImage, margin, height * 0.16, width * 0.08, width * 0.08);
   context.textAlign = 'left';
   context.textBaseline = 'middle';
-  context.fillStyle = '#20d890';
-  context.font = `700 ${Math.max(15, width * 0.018)}px "Segoe UI", Arial, sans-serif`;
-  context.fillText('NEXSQ PODCAST', margin + (logoImage?.complete ? width * 0.095 : 0), height * 0.2);
   context.fillStyle = '#ffffff';
   context.font = `700 ${Math.min(width * 0.08, height * 0.15)}px "Segoe UI", Arial, sans-serif`;
   context.fillText(showTitle || 'Podcast', margin, height * 0.48);

@@ -25,6 +25,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { getPodcastStudioEligibility } from '@/lib/podcastStudioEligibility';
 import { buildPodcastBrandedOutro, buildPodcastVoiceoverIntro } from '@/utils/podcastVoiceoverIntro';
 import { getNextPodcastBroadcastSlot, PODCAST_INTRO_DURATION_MS } from '@/utils/podcastIntroMontage';
+import { PODCAST_SOUNDTRACKS } from '@/utils/podcastSoundtracks';
 import { type ReelAudioPreset } from '@/utils/animatedReelCaptions';
 import { insertSharedFeedPost, insertVideoMoment } from '@/lib/feedShare';
 import {
@@ -35,7 +36,6 @@ import {
 } from '@/utils/podcastShorts';
 
 const PRIVATE_BUCKET = 'creator-podcast-drafts';
-const SOUNDTRACK_BUCKET = 'studio-videos';
 const SIGNED_ASSET_TTL_SECONDS = 12 * 60 * 60;
 const PODCAST_COVER_ASPECT = 16 / 7;
 const VOICE_EFFECTS: { value: ReelAudioPreset; label: string }[] = [
@@ -45,31 +45,6 @@ const VOICE_EFFECTS: { value: ReelAudioPreset; label: string }[] = [
   { value: 'bass-boost', label: 'Bass boost' },
   { value: 'volume-boost', label: 'Volume boost' },
 ];
-const PODCAST_SOUNDTRACK_ASSETS = [
-  'Aylex - Born to Win (freetouse.com).mp3',
-  'Aylex - Daydreams (freetouse.com).mp3',
-  'Aylex - Okay Energy (freetouse.com).mp3',
-  'Aylex - Rise Up (freetouse.com).mp3',
-  'Aylex - Snap Attack (freetouse.com).mp3',
-  'Aylex - Summer Sound (freetouse.com).mp3',
-  'Aylex - These Days (freetouse.com).mp3',
-  'Calima - Usual Rigmarole (freetouse.com).mp3',
-  'Dagored - Urban Timelapse (freetouse.com).mp3',
-  'Moavii - Root (freetouse.com).mp3',
-  'Nebulite - Andromeda (freetouse.com).mp3',
-  'Pufino - Rock Me Now (freetouse.com).mp3',
-  'Unheard - Void (freetouse.com).mp3',
-  'Waesto - Funky (freetouse.com).mp3',
-  'Zambolino - Riding The Wave (freetouse.com).mp3',
-].map((filename) => ({
-  name: filename.replace(/\.mp3$/i, ''),
-  path: `podcast-soundtracks/${filename}`,
-}));
-const PODCAST_SOUNDTRACKS = PODCAST_SOUNDTRACK_ASSETS.map((soundtrack) => ({
-  ...soundtrack,
-  url: supabase.storage.from(SOUNDTRACK_BUCKET).getPublicUrl(soundtrack.path).data.publicUrl,
-}));
-
 type PodcastShortShareTarget = 'facebook' | 'instagram' | 'whatsapp' | 'whatsapp-status';
 
 type PodcastDraft = {
@@ -408,16 +383,19 @@ export default function CreatorPodcastStudio({
   const [logoImage, setLogoImage] = useState<File | null>(null);
   const [introVideo, setIntroVideo] = useState<File | null>(null);
   const [outroVideo, setOutroVideo] = useState<File | null>(null);
+  const [outroAudio, setOutroAudio] = useState<File | null>(null);
   const [introVoiceover, setIntroVoiceover] = useState<File | null>(null);
   const [introVoiceoverNeedsBuild, setIntroVoiceoverNeedsBuild] = useState(false);
   const [introVoiceoverUrl, setIntroVoiceoverUrl] = useState('');
   const [introVideoPreviewUrl, setIntroVideoPreviewUrl] = useState('');
   const [outroVideoPreviewUrl, setOutroVideoPreviewUrl] = useState('');
+  const [outroAudioPreviewUrl, setOutroAudioPreviewUrl] = useState('');
   const [selectedSoundtrackUrl, setSelectedSoundtrackUrl] = useState(PODCAST_SOUNDTRACKS[0]?.url || '');
   const [soundtrackVolume, setSoundtrackVolume] = useState(18);
   const [voiceoverVolume, setVoiceoverVolume] = useState(100);
   const [voiceEffect, setVoiceEffect] = useState<ReelAudioPreset>('original');
   const [recordingVoiceover, setRecordingVoiceover] = useState(false);
+  const [recordingOutroAudio, setRecordingOutroAudio] = useState(false);
   const [buildingIntro, setBuildingIntro] = useState(false);
   const [recordingUrl, setRecordingUrl] = useState('');
   const [saving, setSaving] = useState(false);
@@ -448,6 +426,12 @@ export default function CreatorPodcastStudio({
   const introVoiceStreamRef = useRef<MediaStream | null>(null);
   const introVoiceChunksRef = useRef<Blob[]>([]);
   const introVoiceStopTimerRef = useRef<number | null>(null);
+  const outroAudioRecorderRef = useRef<MediaRecorder | null>(null);
+  const outroAudioStreamRef = useRef<MediaStream | null>(null);
+  const outroAudioChunksRef = useRef<Blob[]>([]);
+  const outroAudioStopTimerRef = useRef<number | null>(null);
+  const outroAudioInputRef = useRef<HTMLInputElement>(null);
+  const discardOutroAudioRecordingRef = useRef(false);
   const soundtrackPreviewRef = useRef<HTMLAudioElement>(null);
   const voiceoverPreviewRef = useRef<HTMLAudioElement>(null);
   const activeShow = show || loadedShow;
@@ -1104,6 +1088,16 @@ export default function CreatorPodcastStudio({
   }, [outroVideo]);
 
   useEffect(() => {
+    if (!outroAudio) {
+      setOutroAudioPreviewUrl('');
+      return;
+    }
+    const url = URL.createObjectURL(outroAudio);
+    setOutroAudioPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [outroAudio]);
+
+  useEffect(() => {
     if (broadcastTab !== 'create' || !editingBroadcastDefault) return;
     const frameId = window.requestAnimationFrame(() => {
       if (editingBroadcastDefault === 'intro') {
@@ -1121,6 +1115,11 @@ export default function CreatorPodcastStudio({
     const recorder = introVoiceRecorderRef.current;
     if (recorder && recorder.state !== 'inactive') recorder.stop();
     introVoiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    if (outroAudioStopTimerRef.current !== null) window.clearTimeout(outroAudioStopTimerRef.current);
+    const outroAudioRecorder = outroAudioRecorderRef.current;
+    discardOutroAudioRecordingRef.current = true;
+    if (outroAudioRecorder && outroAudioRecorder.state !== 'inactive') outroAudioRecorder.stop();
+    outroAudioStreamRef.current?.getTracks().forEach((track) => track.stop());
   }, []);
 
   useEffect(() => () => recordingWindowRef.current?.close(), []);
@@ -1231,6 +1230,8 @@ export default function CreatorPodcastStudio({
 
   const resetEditor = () => {
     stopVoiceoverRecording();
+    discardOutroAudioRecordingRef.current = recordingOutroAudio;
+    stopOutroAudioRecording();
     setDraftId(null);
     setTopic('');
     setDescription('');
@@ -1248,6 +1249,7 @@ export default function CreatorPodcastStudio({
     setLogoImage(null);
     setIntroVideo(null);
     setOutroVideo(null);
+    setOutroAudio(null);
     setIntroVoiceover(null);
     setIntroVoiceoverNeedsBuild(false);
     if (recordingUrl) URL.revokeObjectURL(recordingUrl);
@@ -1261,6 +1263,74 @@ export default function CreatorPodcastStudio({
     }
     const recorder = introVoiceRecorderRef.current;
     if (recorder && recorder.state !== 'inactive') recorder.stop();
+  };
+
+  const stopOutroAudioRecording = () => {
+    if (outroAudioStopTimerRef.current !== null) {
+      window.clearTimeout(outroAudioStopTimerRef.current);
+      outroAudioStopTimerRef.current = null;
+    }
+    const recorder = outroAudioRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+  };
+
+  const recordOutroAudio = async () => {
+    if (recordingOutroAudio) {
+      stopOutroAudioRecording();
+      return;
+    }
+    setError('');
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+        throw new Error('Audio recording is not supported in this browser.');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      outroAudioStreamRef.current = stream;
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
+        .find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      outroAudioChunksRef.current = [];
+      outroAudioRecorderRef.current = recorder;
+      discardOutroAudioRecordingRef.current = false;
+      let recorderFailed = false;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) outroAudioChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        recorderFailed = true;
+        setError('Could not record outro audio. Check your microphone and try again.');
+        setRecordingOutroAudio(false);
+      };
+      recorder.onstop = () => {
+        const chunks = outroAudioChunksRef.current;
+        const type = recorder.mimeType || 'audio/webm';
+        const audio = new Blob(chunks, { type });
+        if (audio.size && !discardOutroAudioRecordingRef.current) {
+          setOutroAudio(new File([audio], `podcast-outro-audio.${type.includes('mp4') ? 'm4a' : 'webm'}`, { type }));
+        } else if (!audio.size && !recorderFailed && !discardOutroAudioRecordingRef.current) {
+          setError('No outro audio was captured. Please record again.');
+        }
+        discardOutroAudioRecordingRef.current = false;
+        if (outroAudioStopTimerRef.current !== null) {
+          window.clearTimeout(outroAudioStopTimerRef.current);
+          outroAudioStopTimerRef.current = null;
+        }
+        outroAudioStreamRef.current?.getTracks().forEach((track) => track.stop());
+        outroAudioStreamRef.current = null;
+        outroAudioRecorderRef.current = null;
+        setRecordingOutroAudio(false);
+      };
+      recorder.start(250);
+      setOutroAudio(null);
+      setRecordingOutroAudio(true);
+      outroAudioStopTimerRef.current = window.setTimeout(stopOutroAudioRecording, 15_000);
+    } catch (recordingError) {
+      setError(recordingError instanceof Error ? recordingError.message : 'Could not start outro audio recording.');
+      outroAudioStreamRef.current?.getTracks().forEach((track) => track.stop());
+      outroAudioStreamRef.current = null;
+      outroAudioRecorderRef.current = null;
+      setRecordingOutroAudio(false);
+    }
   };
 
   const recordIntroVoiceover = async () => {
@@ -1385,6 +1455,7 @@ export default function CreatorPodcastStudio({
         hostNames: getBroadcastHostName(),
         coverImageUrl: coverPreviewUrl || activeShow?.podcastCoverUrl,
         logoImageUrl: logoPreviewUrl || activeShow?.podcastLogoUrl,
+        audioFile: outroAudio,
       });
       setOutroVideo(generatedOutro);
       await saveGeneratedBroadcastDefault(generatedOutro, 'outro');
@@ -2781,8 +2852,11 @@ export default function CreatorPodcastStudio({
           {error && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}
 
           <label className="block space-y-1.5 text-sm font-medium">
-            Podcast script
-            <textarea value={script} onChange={(event) => setScript(event.target.value)} rows={18} maxLength={40000} placeholder="Generate a script from your topic or write your own." className="w-full resize-y rounded-md border border-input bg-background p-3 font-mono text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring" />
+            Presenter guide / podcast script
+            <textarea value={script} onChange={(event) => setScript(event.target.value)} rows={18} maxLength={40000} placeholder="Generate a guided rundown from your topic or write your own." className="w-full resize-y rounded-md border border-input bg-background p-3 font-mono text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring" />
+            <span className="block text-xs font-normal text-muted-foreground">
+              Topic-only generations are paced conversation guides with angles, synopses, and prompts—not dialogue to read word for word.
+            </span>
           </label>
           <label className="block space-y-1.5 text-sm font-medium">
             Episode description <span className="font-normal text-muted-foreground">(optional)</span>
@@ -2822,7 +2896,7 @@ export default function CreatorPodcastStudio({
               </label>
               <label className="space-y-1.5 text-xs font-medium">
                 Optional prebuilt outro video (loops during the 15-second outro)
-                <Input type="file" accept="video/mp4,video/webm,video/quicktime" disabled={buildingOutro || saving || savingBroadcastDefaults} onChange={(event) => event.target.files?.[0] && void validateCustomVideo(event.target.files[0], 'outro')} />
+                <Input type="file" accept="video/mp4,video/webm,video/quicktime" disabled={recordingOutroAudio || buildingOutro || saving || savingBroadcastDefaults} onChange={(event) => event.target.files?.[0] && void validateCustomVideo(event.target.files[0], 'outro')} />
                 {outroVideo && <span className="block truncate text-muted-foreground">{outroVideo.name}</span>}
               </label>
             </div>
@@ -2931,7 +3005,7 @@ export default function CreatorPodcastStudio({
                     type="button"
                     variant={recordingVoiceover ? 'destructive' : 'outline'}
                     onClick={() => void recordIntroVoiceover()}
-                    disabled={saving || buildingIntro}
+                    disabled={recordingOutroAudio || saving || buildingIntro}
                     className="gap-2"
                   >
                     {recordingVoiceover ? <CircleStop className="h-4 w-4" /> : <Mic2 className="h-4 w-4" />}
@@ -2971,7 +3045,7 @@ export default function CreatorPodcastStudio({
               <div>
                 <h3 className="text-sm font-semibold">Branded outro</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Create an 8-second NexSq end card with your Podcast artwork, show name, and host. The next approved slot is added to each episode when it is recorded.
+                  Create a 15-second NexSq end card with your Podcast artwork, show name, and host. Record or upload optional audio to play over the end card; audio is trimmed to 15 seconds. The next approved slot is added to each episode when it is recorded.
                 </p>
                 {editingBroadcastDefault === 'outro' && (
                   <p role="status" className="mt-2 text-xs text-muted-foreground">
@@ -2979,11 +3053,55 @@ export default function CreatorPodcastStudio({
                   </p>
                 )}
               </div>
+              <div className="space-y-2 rounded-md border p-3">
+                <label className="block space-y-1.5 text-xs font-medium">
+                  Optional outro audio
+                  <Input
+                    ref={outroAudioInputRef}
+                    type="file"
+                    accept="audio/*"
+                    disabled={recordingVoiceover || recordingOutroAudio || buildingOutro || saving || savingBroadcastDefaults}
+                    onChange={(event) => {
+                      setOutroAudio(event.target.files?.[0] || null);
+                      setError('');
+                    }}
+                  />
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant={recordingOutroAudio ? 'destructive' : 'outline'}
+                    onClick={() => void recordOutroAudio()}
+                    disabled={recordingVoiceover || buildingOutro || saving || savingBroadcastDefaults}
+                    className="gap-2"
+                  >
+                    {recordingOutroAudio ? <CircleStop className="h-4 w-4" /> : <Mic2 className="h-4 w-4" />}
+                    {recordingOutroAudio ? 'Stop outro audio' : 'Record outro audio'}
+                  </Button>
+                  {recordingOutroAudio && <span className="text-xs text-red-600">Recording · stops automatically after 15 seconds</span>}
+                  {outroAudio && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setOutroAudio(null);
+                        if (outroAudioInputRef.current) outroAudioInputRef.current.value = '';
+                      }}
+                    >
+                      Remove audio
+                    </Button>
+                  )}
+                </div>
+                {outroAudioPreviewUrl && (
+                  <audio src={outroAudioPreviewUrl} controls className="w-full" aria-label="Preview outro audio" />
+                )}
+              </div>
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => void createBrandedOutro()}
-                disabled={buildingOutro || saving || savingBroadcastDefaults}
+                disabled={recordingOutroAudio || buildingOutro || saving || savingBroadcastDefaults}
                 className="gap-2"
               >
                 {buildingOutro ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}

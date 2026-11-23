@@ -99,9 +99,6 @@ function getRecurringTerms(stories) {
 }
 
 // --- Conversation Arc Planner ---
-// Produces a narrative plan: { leadTheme, threads: [{ story, link }] }
-// link = { type: 'lead' | 'connected' | 'contrast' | 'pivot', via?: string[], from?: story }
-
 function formatSharedTerm(term) {
   return term.replace(/^south africa\b/i, 'South Africa');
 }
@@ -164,20 +161,14 @@ function planConversationArc(stories) {
     if (bestTerms.length >= 1) {
       link = { type: 'connected', via: bestTerms, from: bestFrom };
     } else if (getCategoryLabel(next) === getCategoryLabel(priorThread)) {
-      link = {
-        type: 'contrast',
-        via: [],
-        from: priorThread,
-      };
+      link = { type: 'contrast', via: [], from: priorThread };
     } else {
       link = { type: 'pivot', via: [], from: priorThread };
     }
     ordered.push({ ...next, _link: link });
   }
 
-  // First story is always the lead
   ordered[0] = { ...ordered[0], _link: { type: 'lead' } };
-
   return { threads: ordered };
 }
 
@@ -186,13 +177,184 @@ function orderStoriesForConversation(stories) {
   return plan.threads;
 }
 
-// --- Host voice helpers ---
-// hostOne: analytical / contextual / sets up the frame
-// hostTwo: probing / challenges / draws out stakes
+// ---------------------------------------------------------------------------
+// Guide formatting helpers
+// ---------------------------------------------------------------------------
+
+function formatGuideMinutes(minutes) {
+  if (!Number.isFinite(minutes) || minutes <= 0) return '0';
+  return Number.isInteger(minutes) ? String(minutes) : minutes.toFixed(1);
+}
+
+function getTimeBudget(duration, angleCount) {
+  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 20;
+  if (angleCount <= 0) {
+    return { opening: safeDuration, angle: 0, closing: 0, angleCount: 0 };
+  }
+  const opening = Math.max(1, Math.round(safeDuration * 0.1 * 10) / 10);
+  const closing = Math.max(1, Math.round(safeDuration * 0.15 * 10) / 10);
+  const angle = Math.max(1, Math.round(((safeDuration - opening - closing) / angleCount) * 10) / 10);
+  return { opening, angle, closing, angleCount };
+}
+
+function ensureBullets(rawBullets, fallback) {
+  const list = Array.isArray(rawBullets)
+    ? rawBullets.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (list.length >= 3) return list.slice(0, 5);
+  const merged = [...list];
+  for (const bullet of fallback) {
+    if (merged.length >= 3) break;
+    if (!merged.includes(bullet)) merged.push(bullet);
+  }
+  return merged.slice(0, 5);
+}
+
+function normaliseAngle(rawAngle, index, topic) {
+  const fallbackTitle = `Angle ${index + 1}`;
+  if (typeof rawAngle === 'string') {
+    const title = rawAngle.trim() || fallbackTitle;
+    return {
+      title,
+      synopsis: `Why "${title}" matters to "${topic}".`,
+      bullets: ensureBullets([], [
+        `What does "${title}" mean to you?`,
+        `Where have you seen "${title}" play out?`,
+        `What is usually missed when people discuss "${title}"?`,
+      ]),
+    };
+  }
+
+  if (!rawAngle || typeof rawAngle !== 'object') {
+    return {
+      title: fallbackTitle,
+      synopsis: `Open the next layer of the conversation about "${topic}".`,
+      bullets: [
+        `What is the question we have not asked yet?`,
+        `What would change if we are wrong about this?`,
+        `What do you want listeners to carry forward?`,
+      ],
+    };
+  }
+
+  const title = String(rawAngle.title || rawAngle.name || fallbackTitle).trim();
+  const synopsis = String(
+    rawAngle.synopsis || rawAngle.setup || rawAngle.description ||
+    `Why "${title}" matters to "${topic}".`,
+  ).trim();
+
+  const explicitBullets = Array.isArray(rawAngle.bullets) ? rawAngle.bullets : null;
+  const legacyBullets = [rawAngle.question, rawAngle.prompt]
+    .filter(Boolean)
+    .map((value) => String(value).trim());
+
+  const bullets = ensureBullets(
+    explicitBullets || legacyBullets,
+    [
+      `What does "${title}" look like in real life?`,
+      `Which assumption about "${title}" deserves to be challenged?`,
+      `What is the follow-up question this raises?`,
+    ],
+  );
+
+  const followUp = rawAngle.followUp && !explicitBullets
+    ? String(rawAngle.followUp).trim()
+    : undefined;
+
+  return { title, synopsis, bullets, followUp };
+}
+
+function buildGuideOpening(showTitle, topic, budgetMinutes) {
+  return [
+    'INTRO',
+    `Opening frame (~${formatGuideMinutes(budgetMinutes)} min)`,
+    `Synopsis: Open "${topic}" as a live, unresolved conversation, not a lecture and not a reported news story.`,
+    'Prompts:',
+    `- Introduce the show (${showTitle}) and the topic in one sentence.`,
+    '- Say plainly: this is a conversation, not a verdict.',
+    `- Opening question to the room: What does "${topic}" mean to you?`,
+    '- Set the tone: stories over statistics, questions over certainty.',
+  ];
+}
+
+function buildGuideAngle(angle, index, budgetMinutes) {
+  return [
+    '',
+    `ANGLE ${index + 1}: ${angle.title} (~${formatGuideMinutes(budgetMinutes)} min)`,
+    `Synopsis: ${angle.synopsis}`,
+    'Prompts:',
+    ...angle.bullets.map((bullet) => `- ${bullet}`),
+    ...(angle.followUp ? [`Follow-up if time allows: ${angle.followUp}`] : []),
+  ];
+}
+
+function buildGuideClosing(topic, budgetMinutes) {
+  return [
+    '',
+    'OUTRO',
+    `Wrap-up (~${formatGuideMinutes(budgetMinutes)} min)`,
+    '- Recap one idea that landed, without forcing agreement.',
+    `- Bring it back to the opening question: "${topic}" — has the answer shifted?`,
+    '- Final prompt: What is one question listeners should carry into their week?',
+    '- Thank listeners, name the next episode if known, close clean.',
+  ];
+}
+
+function buildGuidePresenterNotes() {
+  return [
+    '',
+    'PRESENTER NOTES',
+    '- Label personal experience and interpretation; never present them as universal facts.',
+    '- Prefer concrete examples over generalisations.',
+    '- Leave room for silence; the strongest moments are usually the pauses.',
+    '- If a claim is disputed, say so on air rather than smoothing it over.',
+    '- Factual claims must be checkable; if not, frame as a personal view rather than a fact.',
+  ];
+}
+
+function buildCreatorTopicGuide({
+  hostOne,
+  hostTwo,
+  showTitle,
+  duration,
+  customTopic,
+  customAngles,
+}) {
+  const rawAngles = Array.isArray(customAngles) ? customAngles : [];
+  const angles = rawAngles.length
+    ? rawAngles.map((angle, index) => normaliseAngle(angle, index, customTopic))
+    : [normaliseAngle(undefined, 0, customTopic)];
+
+  const budget = getTimeBudget(duration, angles.length);
+  const presenters = hostOne === hostTwo ? hostOne : `${hostOne} and ${hostTwo}`;
+
+  const lines = [
+    showTitle,
+    `Target runtime: ${formatGuideMinutes(duration)} minutes`,
+    `Topic: ${customTopic}`,
+    `Presenters: ${presenters}`,
+    'Format: presenter guide — short synopsis, time budget, and bullet prompts per angle.',
+    '',
+    ...buildGuideOpening(showTitle, customTopic, budget.opening),
+  ];
+
+  angles.forEach((angle, index) => {
+    lines.push(...buildGuideAngle(angle, index, budget.angle));
+  });
+
+  lines.push(...buildGuideClosing(customTopic, budget.closing));
+  lines.push(...buildGuidePresenterNotes());
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Story (newsroom) guide
+// ---------------------------------------------------------------------------
 
 function describeThread(story) {
   const category = getStoryCategory(story);
-  return `${category} — “${story.headline}”`;
+  return `${category} — ${story.headline}`;
 }
 
 function summariseStory(story) {
@@ -200,142 +362,69 @@ function summariseStory(story) {
   const summary = getUsableSummary(story);
   return summary
     ? `${source} reports: ${summary}`
-    : `${source} provides a headline but no usable summary. We should verify the linked report before adding context or drawing conclusions.`;
+    : `${source} provides a headline but no usable summary. Verify the linked report before adding context or drawing conclusions.`;
 }
 
-function buildOpening(hostOne, hostTwo, showTitle, threads, customTopic) {
-  const lines = [];
-  const count = threads.length;
-
-  if (count === 0) {
-    lines.push(
-      `${hostOne}: Welcome to ${showTitle}. Today we’re opening a focused studio conversation about ${customTopic}.`,
-      `${hostTwo}: And we’ll keep it honest — this is a discussion topic, not a reported news story, so we’ll flag what’s reportable and what’s our own analysis.`,
-    );
-    return lines;
-  }
-
-  const recurring = getRecurringTerms(threads);
-  const categories = [...new Set(threads.map((story) => getStoryCategory(story).toLowerCase()))];
-  const frame = recurring.length
-    ? `A detail recurring across the coverage is ${recurring.map((term) => `“${formatSharedTerm(term)}”`).join(' and ')}. That gives us a thread to explore, not proof that the reports describe one event.`
-    : `The reports range across ${categories.join(' and ')}, and the source material doesn’t establish one shared event. We’ll make each transition clear rather than force a connection.`;
-
-  lines.push(
-    `${hostOne}: Welcome to ${showTitle}. We’re following ${count} report${count === 1 ? '' : 's'} today. ${frame} Let’s begin with the first story and let the reporting set the conversation.`,
-    `${hostTwo}: And as we move through the stories, we’ll separate what’s reported from what’s still a question.`,
-  );
-  return lines;
-}
-
-function buildBridge(hostOne, hostTwo, prior, next) {
-  const link = next._link || { type: 'pivot' };
-  const linkedStory = link.from || prior;
-  const category = getStoryCategory(next);
-  const lines = [];
-
-  if (link.type === 'connected' && link.via?.length) {
-    const shared = link.via.map((term) => `“${formatSharedTerm(term)}”`).join(' and ');
-    let transition;
-    if (link.via.some((term) => term.startsWith('south africa'))) {
-      const previousCategory = getStoryCategory(linkedStory).toLowerCase();
-      transition = previousCategory.includes('politic') && category.toLowerCase().includes('sport')
-        ? 'South Africa comes up again, but the focus shifts from politics to sport. Same setting, different events; the sources do not establish a direct link.'
-        : `South Africa appears in both headlines. It gives us a location to carry forward, not evidence that these are the same event.`;
-    } else if (link.via.includes('election')) {
-      transition = `The election thread carries over from “${linkedStory.headline}” to this report. They share a topic, but the sources do not establish a direct link.`;
-    } else {
-      transition = `The shared detail from “${linkedStory.headline}” is ${shared}. That is a point of overlap, not evidence that one development caused the other.`;
-    }
-    lines.push(
-      `${hostOne}: ${transition} What does this report add?`,
-      `${hostTwo}: The next report is “${next.headline}.” ${summariseStory(next)}`,
-    );
-  } else if (link.type === 'contrast') {
-    lines.push(
-      `${hostOne}: We have another ${category} report, but it’s a separate story. Let’s hear what this one adds on its own terms.`,
-      `${hostTwo}: The report is “${next.headline}.” ${summariseStory(next)}`,
-      `${hostOne}: What question does this report raise that the earlier one didn’t?`,
-    );
-  } else {
-    lines.push(
-      `${hostOne}: Let’s change subject to ${category}. The reports so far don’t establish a connection to this story, so we’ll let it stand on its own.`,
-      `${hostTwo}: The report is “${next.headline}.” ${summariseStory(next)}`,
-      `${hostOne}: Given that this is a separate thread, what context would a listener need to understand why it matters on its own terms?`,
-    );
-  }
-  return lines;
-}
-
-function buildFollowUp(hostOne, hostTwo, story, index) {
+function getStoryTalkingPoints(story, index, leadStory) {
   const category = getCategoryLabel(story);
-  let question;
+  const summary = getUsableSummary(story);
+  const headline = story.headline || 'this report';
+
+  const points = [
+    `Headline: "${headline}" (${story.source || 'source unlisted'}, published ${formatPublishedDate(story.publishedAt)}).`,
+    summary
+      ? `What the source reports: ${summary}`
+      : 'The source provides a headline but no usable summary. Read the linked article before stating facts.',
+  ];
+
   if (category.includes('politic')) {
-    question = 'what decision or process is confirmed here, who is affected, and what happens next?';
+    points.push('What decision or process is confirmed here, and who is affected?');
+    points.push('What is still unresolved, and what happens next?');
   } else if (category.includes('sport')) {
-    question = 'what is confirmed about the result or decision, and what should listeners watch for next?';
+    points.push('What is confirmed about the result or decision?');
+    points.push('What should listeners watch for next?');
   } else if (category.includes('geopolitic')) {
-    question = 'what do the sources confirm about the parties involved, and what remains unresolved?';
+    points.push('What do sources confirm about the parties involved?');
+    points.push('What remains unresolved between them?');
   } else if (category.includes('entertainment')) {
-    question = 'what does the report confirm, and whose perspective may still be missing?';
+    points.push('What does the report confirm, and whose perspective is missing?');
+    points.push('Is this a one-off story or the top of a trend?');
   } else {
-    question = 'what context would listeners need to understand why this matters now?';
+    points.push('What context would listeners need to understand why this matters now?');
+    points.push('What question does this report leave open?');
   }
 
-  const responses = [
-    `Right. The summary gives us the reported detail, but it doesn’t settle that question. Let’s keep the distinction clear rather than turn an open question into a claim.`,
-    `And the source excerpt doesn’t answer that yet. We should leave it open instead of filling the gap with a guess.`,
-    `That remains unresolved in the material we have, so it belongs in our follow-up questions — not in the facts we state.`,
-  ];
+  if (index > 0 && leadStory) {
+    const shared = getSharedTerms(leadStory, story);
+    if (shared.length) {
+      points.push(`Connected to the lead via: ${shared.map((term) => `"${formatSharedTerm(term)}"`).join(' and ')} — a segue, not proof of cause.`);
+    }
+  }
 
+  return points.slice(0, 5);
+}
+
+function buildStoryGuide(hostOne, hostTwo, story, index, leadStory, budgetMinutes) {
+  const category = getStoryCategory(story);
+  const talkingPoints = getStoryTalkingPoints(story, index, leadStory);
+  const sourceName = story.source || 'the linked publisher';
+  const publishedDate = formatPublishedDate(story.publishedAt);
+  const sourceUrl = story.url || 'no url';
   return [
-    `${hostOne}: The follow-up I’d put to the reporting is: ${question}`,
-    `${hostTwo}: ${getUsableSummary(story)
-      ? responses[index % responses.length]
-      : 'The headline alone doesn’t answer that. Let’s keep it as a reporting question until we verify the linked article.'}`,
-    `[SOURCE NOTE — NOT FOR READ-OUT: ${story.source || 'the linked publisher'} | Published ${formatPublishedDate(story.publishedAt)} | ${story.url}]`,
-  ];
-}
-
-function buildStudioDiscussion(hostOne, hostTwo, { customTopic, customCategory, customAngles }) {
-  const lines = [
     '',
-    'STUDIO DISCUSSION',
-    `${hostOne}: Before we close, there’s a studio topic worth its own conversation: ${customCategory} — ${customTopic}. This isn’t a reported news story, so we’ll flag it as analysis rather than reporting.`,
-    `${hostTwo}: And we’ll keep it honest — no invented facts, just angles to think with.`,
+    `SEGMENT ${index + 1}: ${category} | ${story.headline}`,
+    `Time budget: ~${formatGuideMinutes(budgetMinutes)} min`,
+    `Synopsis: ${summariseStory(story)}`,
+    'Talking points:',
+    ...talkingPoints.map((point) => `- ${point}`),
+    `[SOURCE NOTE — NOT FOR READ-OUT: ${sourceName} | Published ${publishedDate} | ${sourceUrl}]`,
+    `${hostOne} opens; ${hostTwo} probes. Keep the source note on screen only.`,
   ];
-  customAngles.forEach((angle, index) => {
-    const first = index % 2 === 0 ? hostTwo : hostOne;
-    const second = first === hostOne ? hostTwo : hostOne;
-    lines.push(
-      `${first}: One way into it is ${angle.title}: ${angle.setup}`,
-      `${second}: ${angle.question}`,
-      `${first}: ${angle.followUp}`,
-    );
-  });
-  return lines;
 }
 
-function buildClosing(hostOne, hostTwo, showTitle, threads) {
-  const recurring = getRecurringTerms(threads);
-  const lines = ['', 'OUTRO'];
-  if (recurring.length) {
-    lines.push(
-      `${hostOne}: As we step back, the phrases ${recurring
-        .map((term) => `“${formatSharedTerm(term)}”`)
-        .join(' and ')} recurred across multiple headlines and summaries. That’s a thread worth following — but it doesn’t mean every story is part of the same event, and we’ve kept that distinction clear throughout.`,
-    );
-  } else {
-    lines.push(
-      `${hostOne}: These reports don’t establish one shared cause, so we’ve treated them as distinct developments and stayed with what each source supports.`,
-    );
-  }
-  lines.push(
-    `${hostTwo}: We’ll keep following the questions the reporting leaves open. Check the source notes for the full reports, and join us next time.`,
-    `${hostOne}: Thanks for listening to ${showTitle}.`,
-  );
-  return lines;
-}
+// ---------------------------------------------------------------------------
+// Main entry
+// ---------------------------------------------------------------------------
 
 function createDailyPodcastRundown({
   stories,
@@ -347,40 +436,76 @@ function createDailyPodcastRundown({
   customCategory,
   customAngles,
 }) {
-  const { threads } = planConversationArc(stories);
+  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 20;
+  const { threads } = planConversationArc(stories || []);
+
+  // Topic-only mode: nothing but the guide.
+  if (customTopic && !threads.length) {
+    return buildCreatorTopicGuide({
+      hostOne,
+      hostTwo,
+      showTitle,
+      duration: safeDuration,
+      customTopic,
+      customAngles,
+    });
+  }
+
+  // Stories mode: newsroom guide, then optional topic guide appended.
+  const angleCount = Array.isArray(customAngles) && customAngles.length ? customAngles.length : 0;
+  const topicBudgetShare = customTopic ? 0.35 : 0;
+  const storyBudgetTotal = safeDuration * (1 - topicBudgetShare);
+  const storyBudget = threads.length ? storyBudgetTotal / threads.length : 0;
+
   const lines = [
     showTitle,
-    `Target runtime: ${duration} minutes`,
-    '[EDITORIAL NOTE — NOT FOR READ-OUT: Use the linked publisher reports for facts. Shared words are a segue, not proof of cause and effect; do not add details that are absent from the source summaries.]',
+    `Target runtime: ${formatGuideMinutes(safeDuration)} minutes`,
+    '[EDITORIAL NOTE — NOT FOR READ-OUT: Use the linked publisher reports for facts. Shared words are a segue, not proof of cause and effect. Do not add details that are absent from the source summaries.]',
     '',
     'INTRO',
-    ...buildOpening(hostOne, hostTwo, showTitle, threads, customTopic),
+    `Time budget: ~${formatGuideMinutes(Math.max(1, Math.round(storyBudget * 0.15 * 10) / 10))} min`,
+    `Synopsis: Open the show by naming ${threads.length} report${threads.length === 1 ? '' : 's'} on the rundown and telling listeners you will separate reported facts from open questions.`,
+    'Prompts:',
+    `- Welcome to ${showTitle}.`,
+    `- Today we are following ${threads.length} report${threads.length === 1 ? '' : 's'}. We will stay with what each source supports.`,
+    '- Set the rule: reported facts first, open questions flagged as such.',
+    '- Hand off to the lead story.',
   ];
 
-  if (threads.length) {
-    lines.push(
-      '',
-      `SEGMENT 1: ${getStoryCategory(threads[0])} | ${threads[0].headline}`,
-      `${hostOne}: Let’s start with “${threads[0].headline}.”`,
-      `${hostTwo}: ${summariseStory(threads[0])}`,
-    );
-    lines.push(...buildFollowUp(hostOne, hostTwo, threads[0], 0));
-  }
-
-  for (let index = 1; index < threads.length; index += 1) {
-    lines.push(
-      '',
-      `SEGMENT ${index + 1}: ${getStoryCategory(threads[index])} | ${threads[index].headline}`,
-      ...buildBridge(hostOne, hostTwo, threads[index - 1], threads[index]),
-    );
-    lines.push(...buildFollowUp(hostOne, hostTwo, threads[index], index));
-  }
+  threads.forEach((story, index) => {
+    lines.push(...buildStoryGuide(hostOne, hostTwo, story, index, threads[0], storyBudget));
+  });
 
   if (customTopic) {
-    lines.push(...buildStudioDiscussion(hostOne, hostTwo, { customTopic, customCategory, customAngles }));
+    lines.push(
+      '',
+      '================================================================',
+      'STUDIO DISCUSSION GUIDE',
+      '================================================================',
+      '',
+      buildCreatorTopicGuide({
+        hostOne,
+        hostTwo,
+        showTitle,
+        duration: safeDuration * topicBudgetShare,
+        customTopic,
+        customAngles,
+      }),
+    );
   }
 
-  lines.push(...buildClosing(hostOne, hostTwo, showTitle, threads));
+  const recurring = getRecurringTerms(threads);
+  lines.push(
+    '',
+    'OUTRO',
+    `Time budget: ~${formatGuideMinutes(Math.max(1, Math.round(safeDuration * 0.08 * 10) / 10))} min`,
+    'Prompts:',
+    recurring.length
+      ? `- Note the recurring phrase${recurring.length > 1 ? 's' : ''}: ${recurring.map((term) => `"${formatSharedTerm(term)}"`).join(' and ')} — a thread worth following, not proof of one event.`
+      : '- Note that the reports stay distinct; no single cause was established.',
+    '- One open question to carry into next week.',
+    `- Thanks for listening to ${showTitle}.`,
+  );
 
   return lines.join('\n');
 }
@@ -390,4 +515,9 @@ module.exports = {
   orderStoriesForConversation,
   getUsableSummary,
   isLowQualityStreamHeadline,
+  // Exposed for testing / reuse:
+  normaliseAngle,
+  ensureBullets,
+  getTimeBudget,
+  buildCreatorTopicGuide,
 };

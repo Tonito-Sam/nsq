@@ -194,14 +194,20 @@ export async function buildPodcastBrandedOutro({
   hostNames,
   coverImageUrl,
   logoImageUrl,
+  audioFile,
 }: {
   showName: string;
   hostNames: string;
   coverImageUrl?: string | null;
   logoImageUrl?: string | null;
+  audioFile?: File | null;
 }): Promise<File> {
   if (typeof MediaRecorder === 'undefined') {
     throw new Error('Your browser does not support creating a podcast outro.');
+  }
+  const AudioContextConstructor = window.AudioContext;
+  if (audioFile && !AudioContextConstructor) {
+    throw new Error('Your browser does not support adding audio to a podcast outro.');
   }
   const canvas = document.createElement('canvas');
   canvas.width = 1280;
@@ -211,25 +217,49 @@ export async function buildPodcastBrandedOutro({
     throw new Error('Your browser does not support rendering a branded podcast outro.');
   }
 
-  const [coverImage, logoImage] = await Promise.all([
-    loadImage(coverImageUrl),
-    loadImage(logoImageUrl),
-  ]);
-  const stream = canvas.captureStream(30);
-  const videoTrack = stream.getVideoTracks()[0];
-  if (!videoTrack) {
-    stream.getTracks().forEach((track) => track.stop());
-    throw new Error('Could not prepare video for the podcast outro.');
-  }
-
-  const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
-    .find((type) => MediaRecorder.isTypeSupported(type));
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-  const chunks: Blob[] = [];
+  let audioContext: AudioContext | null = null;
+  let audioStream: MediaStream | null = null;
+  let canvasStream: MediaStream | null = null;
+  let audioSource: AudioBufferSourceNode | null = null;
   let animationFrame = 0;
   let stopTimer = 0;
 
   try {
+    const [coverImage, logoImage] = await Promise.all([
+      loadImage(coverImageUrl),
+      loadImage(logoImageUrl),
+    ]);
+    if (audioFile) {
+      audioContext = new AudioContextConstructor();
+      await audioContext.resume();
+      let audioBuffer: AudioBuffer;
+      try {
+        audioBuffer = await audioContext.decodeAudioData(await audioFile.arrayBuffer());
+      } catch {
+        throw new Error('Could not decode the selected outro audio. Choose a supported audio file and try again.');
+      }
+      const destination = audioContext.createMediaStreamDestination();
+      audioStream = destination.stream;
+      audioSource = audioContext.createBufferSource();
+      audioSource.buffer = audioBuffer;
+      audioSource.connect(destination);
+    }
+
+    canvasStream = canvas.captureStream(30);
+    const videoTrack = canvasStream.getVideoTracks()[0];
+    if (!videoTrack) throw new Error('Could not prepare video for the podcast outro.');
+    const recordingStream = new MediaStream([
+      ...canvasStream.getVideoTracks(),
+      ...(audioStream?.getAudioTracks() || []),
+    ]);
+
+    const mimeTypes = audioFile
+      ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+      : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    const mimeType = mimeTypes.find((type) => MediaRecorder.isTypeSupported(type));
+    const recorder = new MediaRecorder(recordingStream, mimeType ? { mimeType } : undefined);
+    const chunks: Blob[] = [];
+
     const recordingResult = new Promise<File>((resolve, reject) => {
       recorder.ondataavailable = (event) => {
         if (event.data.size) chunks.push(event.data);
@@ -272,6 +302,9 @@ export async function buildPodcastBrandedOutro({
     };
 
     recorder.start(250);
+    if (audioContext && audioSource) {
+      audioSource.start(audioContext.currentTime + 0.05);
+    }
     animationFrame = window.requestAnimationFrame(drawFrame);
     stopTimer = window.setTimeout(() => {
       if (recorder.state !== 'inactive') recorder.stop();
@@ -280,7 +313,8 @@ export async function buildPodcastBrandedOutro({
   } finally {
     window.clearTimeout(stopTimer);
     window.cancelAnimationFrame(animationFrame);
-    if (recorder.state !== 'inactive') recorder.stop();
-    stream.getTracks().forEach((track) => track.stop());
+    canvasStream?.getTracks().forEach((track) => track.stop());
+    audioStream?.getTracks().forEach((track) => track.stop());
+    if (audioContext && audioContext.state !== 'closed') await audioContext.close();
   }
 }

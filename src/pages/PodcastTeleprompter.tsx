@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useParams } from 'react-router-dom';
-import { ArrowLeft, Check, ChevronLeft, ChevronRight, Copy, Maximize, Mic, Pause, Play, RotateCcw, Save, Square, UserPlus, UserX, Video } from 'lucide-react';
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, Copy, Maximize, Mic, Music2, Pause, Play, RotateCcw, Save, Square, UserPlus, UserX, Video } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { MediaEnhancementTabs } from '@/components/studio/MediaEnhancementTabs';
 import { useReelAudioPreview } from '@/hooks/useReelAudioPreview';
@@ -24,6 +24,8 @@ import {
   type ReelAudioPreset,
   type ReelVideoPreset,
 } from '@/utils/animatedReelCaptions';
+import { renderPodcastAudioCleanup, type PodcastAudioCleanupOptions } from '@/utils/podcastAudioCleanup';
+import { PODCAST_SOUNDTRACKS } from '@/utils/podcastSoundtracks';
 import {
   drawPodcastBroadcastOverlays,
   drawPodcastIntroFrame,
@@ -63,6 +65,13 @@ type PodcastGuestFeed = PodcastGuest & {
 
 const handoffKey = (sessionId: string) => `podcast-recording:${sessionId}`;
 const HANDOFF_TTL_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_AUDIO_CLEANUP: PodcastAudioCleanupOptions = {
+  noiseGate: false,
+  declip: false,
+  declick: false,
+  trimSilence: false,
+  minimumSilenceSeconds: 1,
+};
 const introPreviewBackgrounds = [
   'linear-gradient(135deg, #062116, #07110f 58%, #030605)',
   'linear-gradient(135deg, #08212a, #080f18 58%, #030605)',
@@ -80,7 +89,7 @@ function parseSections(script: string, title: string): ScriptSection[] {
       ? 'INTRO'
       : /^(CLOSING|OUTRO)$/i.test(text)
         ? 'OUTRO'
-        : /^(SEGMENT \d+:.*|STUDIO DISCUSSION)$/i.test(text)
+        : /^(SEGMENT \d+:.*|ANGLE \d+:.*|STUDIO DISCUSSION|PRESENTER NOTES)$/i.test(text)
           ? text
           : '';
     if (normalizedHeading) {
@@ -150,6 +159,7 @@ const drawPodcastConferenceLayout = (
   introTitle: string,
   introHostNames: string,
   introVisible: boolean,
+  cameraZoom: number,
 ) => {
   const participants = [{ name: 'Host', video: hostVideo }, ...guests];
   const tileWidth = width / participants.length;
@@ -159,7 +169,8 @@ const drawPodcastConferenceLayout = (
     const x = index * tileWidth;
     const video = participant.video;
     if (video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth && video.videoHeight) {
-      const scale = Math.max(tileWidth / video.videoWidth, height / video.videoHeight);
+      const baseScale = Math.max(tileWidth / video.videoWidth, height / video.videoHeight);
+      const scale = baseScale * (index === 0 ? cameraZoom : 1);
       const drawWidth = video.videoWidth * scale;
       const drawHeight = video.videoHeight * scale;
       context.save();
@@ -222,13 +233,18 @@ export default function PodcastTeleprompter() {
   const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
   const [selectedMicrophoneId, setSelectedMicrophoneId] = useState('');
+  const [cameraZoom, setCameraZoom] = useState(1);
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [audioPreset, setAudioPreset] = useState<ReelAudioPreset>('original');
+  const [audioCleanup, setAudioCleanup] = useState<PodcastAudioCleanupOptions>(DEFAULT_AUDIO_CLEANUP);
+  const [backgroundAudioUrl, setBackgroundAudioUrl] = useState('');
+  const [backgroundAudioVolume, setBackgroundAudioVolume] = useState(0.1);
   const [videoPreset, setVideoPreset] = useState<ReelVideoPreset>('original');
   const [effectsRendered, setEffectsRendered] = useState(false);
   const [isRenderingEffects, setIsRenderingEffects] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
+  const [renderStatus, setRenderStatus] = useState('');
   const [isSavingRecording, setIsSavingRecording] = useState(false);
   const [introMontageActive, setIntroMontageActive] = useState(false);
   const [introScene, setIntroScene] = useState(0);
@@ -256,6 +272,7 @@ export default function PodcastTeleprompter() {
   const audioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
   const conferenceConnectionRef = useRef<PodcastConferenceConnection | null>(null);
   const hostParticipantIdRef = useRef('');
+  const cameraZoomRef = useRef(1);
   const pendingGuestsRef = useRef<PodcastGuest[]>([]);
   const activeGuestsRef = useRef<PodcastGuest[]>([]);
   const admittingGuestsRef = useRef(new Set<string>());
@@ -280,6 +297,11 @@ export default function PodcastTeleprompter() {
   const liveLowerThirdVisible = liveOverlaysVisible
     && shouldShowPodcastLowerThird(recordingSeconds * 1000);
   const showArtworkUrl = draft?.coverImageUrl || draft?.logoImageUrl;
+  const hasAudioProcessing = audioCleanup.noiseGate
+    || audioCleanup.declip
+    || audioCleanup.declick
+    || audioCleanup.trimSilence
+    || Boolean(backgroundAudioUrl);
 
   const updatePendingGuests = (guests: PodcastGuest[]) => {
     pendingGuestsRef.current = guests;
@@ -703,7 +725,14 @@ export default function PodcastTeleprompter() {
       video.controls = true;
       video.muted = false;
       video.load();
-      void video.play().catch(() => undefined);
+      void video.play().catch((playError: unknown) => {
+        if (video.error) return;
+        if (playError instanceof Error && playError.name === 'NotAllowedError') {
+          setError('Your browser blocked automatic playback with sound. Press Play in the preview to hear the recording.');
+          return;
+        }
+        setError(playError instanceof Error ? `Could not start recording playback: ${playError.message}` : 'Could not start recording playback.');
+      });
     } else if (streamRef.current) {
       video.src = '';
       video.srcObject = streamRef.current;
@@ -859,6 +888,7 @@ export default function PodcastTeleprompter() {
     originalRecordingBlobRef.current = null;
     setEffectsRendered(false);
     setAudioPreset('original');
+    setAudioCleanup(DEFAULT_AUDIO_CLEANUP);
     setVideoPreset('original');
   };
 
@@ -1030,6 +1060,7 @@ export default function PodcastTeleprompter() {
             title,
             hostNames,
             elapsedMs < PODCAST_INTRO_DURATION_MS && !outroActiveRef.current,
+            cameraZoomRef.current,
           );
           if (outroActiveRef.current) {
             drawPodcastNextEpisodeSlot(context, canvas.width, canvas.height, draft?.nextEpisodeSlot);
@@ -1070,6 +1101,7 @@ export default function PodcastTeleprompter() {
             coverImageRef.current,
             logoImageRef.current,
             introIsPlaying ? intro : null,
+            cameraZoomRef.current,
           );
         }
         drawPodcastBroadcastOverlays(
@@ -1111,13 +1143,15 @@ export default function PodcastTeleprompter() {
       recorder.ondataavailable = (event) => {
         if (event.data.size) recordingChunksRef.current.push(event.data);
       };
+      recorder.onerror = () => {
+        setError('The browser could not finish encoding the recording. Try recording again.');
+      };
       recorder.onstop = () => {
         const blob = new Blob(recordingChunksRef.current, { type: recorder.mimeType || 'video/webm' });
         if (animationFrameRef.current !== null) window.cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
         compositeVideoTrackRef.current?.stop();
         compositeVideoTrackRef.current = null;
-        recordingStateRef.current = 'recorded';
         setIntroMontageActive(false);
         setOutroActive(false);
         outroActiveRef.current = false;
@@ -1131,6 +1165,15 @@ export default function PodcastTeleprompter() {
         void closeConference(true).catch((conferenceCloseError: unknown) => {
           setConferenceError(conferenceCloseError instanceof Error ? conferenceCloseError.message : 'Could not close the guest room.');
         });
+        if (blob.size === 0) {
+          recordingBlobRef.current = null;
+          originalRecordingBlobRef.current = null;
+          recordingStateRef.current = 'idle';
+          setRecordingState('idle');
+          setError('The browser produced an empty recording. Check camera access and try again.');
+          return;
+        }
+        recordingStateRef.current = 'recorded';
         recordingBlobRef.current = blob;
         originalRecordingBlobRef.current = blob;
         setRecordingUrl(URL.createObjectURL(blob));
@@ -1180,6 +1223,7 @@ export default function PodcastTeleprompter() {
     recordingBlobRef.current = originalBlob;
     setRecordingUrl(URL.createObjectURL(originalBlob));
     setEffectsRendered(false);
+    setRenderStatus('');
   };
 
   const handleAudioPresetChange = (preset: ReelAudioPreset) => {
@@ -1189,7 +1233,7 @@ export default function PodcastTeleprompter() {
     restoreOriginalRecording();
     setAudioPreset(preset);
     setError('');
-    if (preset !== 'original' || videoPreset !== 'original') {
+    if (preset !== 'original' || videoPreset !== 'original' || hasAudioProcessing) {
       void renderPodcastEffects(preset, videoPreset).catch((renderError: unknown) => {
         setError(renderError instanceof Error ? renderError.message : 'Could not render podcast effects.');
       });
@@ -1202,40 +1246,106 @@ export default function PodcastTeleprompter() {
     restoreOriginalRecording();
     setVideoPreset(preset);
     setError('');
-    if (audioPreset !== 'original' || preset !== 'original') {
+    if (audioPreset !== 'original' || preset !== 'original' || hasAudioProcessing) {
       void renderPodcastEffects(audioPreset, preset).catch((renderError: unknown) => {
         setError(renderError instanceof Error ? renderError.message : 'Could not render podcast effects.');
       });
     }
   };
 
+  const handleAudioCleanupChange = <K extends keyof PodcastAudioCleanupOptions,>(
+    key: K,
+    value: PodcastAudioCleanupOptions[K],
+  ) => {
+    if (isRenderingEffects || isSavingRecording) return;
+    const nextOptions = { ...audioCleanup, [key]: value };
+    setAudioCleanup(nextOptions);
+    restoreOriginalRecording();
+  };
+
+  const handleBackgroundAudioChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    if (isRenderingEffects || isSavingRecording) return;
+    setBackgroundAudioUrl(event.target.value);
+    setError('');
+    restoreOriginalRecording();
+  };
+
   const renderPodcastEffects = async (
     selectedAudioPreset: ReelAudioPreset = audioPreset,
     selectedVideoPreset: ReelVideoPreset = videoPreset,
+    selectedAudioCleanup: PodcastAudioCleanupOptions = audioCleanup,
+    selectedBackgroundAudioUrl: string = backgroundAudioUrl,
+    selectedBackgroundAudioVolume = backgroundAudioVolume,
   ) => {
     const sourceBlob = originalRecordingBlobRef.current;
     if (!sourceBlob) throw new Error('Record a podcast before applying effects.');
-    if (selectedAudioPreset === 'original' && selectedVideoPreset === 'original') return sourceBlob;
+    const shouldCleanAudio = selectedAudioCleanup.noiseGate
+      || selectedAudioCleanup.declip
+      || selectedAudioCleanup.declick
+      || selectedAudioCleanup.trimSilence
+      || Boolean(selectedBackgroundAudioUrl);
+    const shouldRenderReel = selectedAudioPreset !== 'original' || selectedVideoPreset !== 'original';
+    if (!shouldCleanAudio && !shouldRenderReel) {
+      recordingBlobRef.current = sourceBlob;
+      setRecordingUrl(URL.createObjectURL(sourceBlob));
+      setEffectsRendered(false);
+      return sourceBlob;
+    }
 
     setIsRenderingEffects(true);
     setRenderProgress(0);
-    const sourceUrl = URL.createObjectURL(sourceBlob);
+    setRenderStatus('Preparing selected effects…');
     try {
-      const renderedBlob = await renderCaptionedReel(
-        sourceUrl,
-        [],
-        'classic',
-        false,
-        setRenderProgress,
-        { audioPreset: selectedAudioPreset, videoPreset: selectedVideoPreset },
-        recordingSeconds,
-      );
+      let renderedBlob = sourceBlob;
+      if (shouldCleanAudio) {
+        let soundtrackFile: File | null = null;
+        if (selectedBackgroundAudioUrl) {
+          const soundtrack = PODCAST_SOUNDTRACKS.find((item) => item.url === selectedBackgroundAudioUrl);
+          if (!soundtrack) throw new Error('The selected soundtrack is no longer available.');
+          setRenderStatus('Loading the selected soundtrack…');
+          setRenderProgress(2);
+          const response = await fetch(soundtrack.url);
+          if (!response.ok) throw new Error(`Could not load the selected soundtrack (${response.status}).`);
+          soundtrackFile = new File([await response.blob()], `${soundtrack.name}.mp3`, { type: 'audio/mpeg' });
+        }
+        renderedBlob = await renderPodcastAudioCleanup(
+          sourceBlob,
+          selectedAudioCleanup,
+          (progress) => setRenderProgress(shouldRenderReel ? Math.round(progress * 0.6) : progress),
+          soundtrackFile
+            ? { file: soundtrackFile, volume: selectedBackgroundAudioVolume }
+            : null,
+          setRenderStatus,
+        );
+      }
+
+      if (shouldRenderReel) {
+        setRenderStatus('Rendering video effects…');
+        const sourceUrl = URL.createObjectURL(renderedBlob);
+        try {
+          renderedBlob = await renderCaptionedReel(
+            sourceUrl,
+            [],
+            'classic',
+            false,
+            (progress) => setRenderProgress(shouldCleanAudio ? 60 + Math.round(progress * 0.4) : progress),
+            { audioPreset: selectedAudioPreset, videoPreset: selectedVideoPreset },
+            recordingSeconds,
+          );
+        } finally {
+          URL.revokeObjectURL(sourceUrl);
+        }
+      }
+
       recordingBlobRef.current = renderedBlob;
       setRecordingUrl(URL.createObjectURL(renderedBlob));
       setEffectsRendered(true);
+      setRenderStatus('Effects are ready to preview and save.');
       return renderedBlob;
+    } catch (renderError) {
+      setRenderStatus('Rendering failed.');
+      throw renderError;
     } finally {
-      URL.revokeObjectURL(sourceUrl);
       setIsRenderingEffects(false);
     }
   };
@@ -1251,7 +1361,7 @@ export default function PodcastTeleprompter() {
     setError('');
     try {
       let blob = currentRecording;
-      if ((audioPreset !== 'original' || videoPreset !== 'original') && !effectsRendered) {
+      if ((audioPreset !== 'original' || videoPreset !== 'original' || hasAudioProcessing) && !effectsRendered) {
         blob = await renderPodcastEffects();
       }
       if (draft.mode === 'creator') setHandoffSaving(true);
@@ -1405,6 +1515,24 @@ export default function PodcastTeleprompter() {
                   ? 'These inputs are used for both preview and recording.'
                   : 'Allow camera and microphone access to choose your recording devices.'}
             </p>
+            <label className="col-span-2 flex items-center gap-3 text-[10px] text-white/65">
+              <span className="shrink-0">Camera framing</span>
+              <input
+                type="range"
+                min="1"
+                max="2.5"
+                step="0.05"
+                value={cameraZoom}
+                aria-label="Camera framing zoom"
+                onChange={(event) => {
+                  const zoom = Number(event.target.value);
+                  cameraZoomRef.current = zoom;
+                  setCameraZoom(zoom);
+                }}
+                className="min-w-0 flex-1 accent-emerald-400"
+              />
+              <span className="w-10 shrink-0 text-right tabular-nums">{cameraZoom.toFixed(2)}×</span>
+            </label>
             {!cameraReady && (
               <Button
                 type="button"
@@ -1424,7 +1552,26 @@ export default function PodcastTeleprompter() {
               autoPlay
               playsInline
               className={`h-full w-full object-cover ${activeGuests.length > 0 && !recordingUrl ? 'invisible' : ''}`}
-              style={recordingUrl && !effectsRendered ? { filter: getReelVideoFilter(videoPreset) } : undefined}
+              onError={(event) => {
+                if (!recordingUrl) return;
+                const mediaErrorCode = event.currentTarget.error?.code;
+                const source = effectsRendered ? 'processed recording' : 'original recording';
+                const blob = recordingBlobRef.current;
+                const details = blob ? ` ${blob.type || 'unknown format'}, ${blob.size} bytes.` : '';
+                if (effectsRendered && originalRecordingBlobRef.current) {
+                  const originalBlob = originalRecordingBlobRef.current;
+                  recordingBlobRef.current = originalBlob;
+                  setRecordingUrl(URL.createObjectURL(originalBlob));
+                  setEffectsRendered(false);
+                  setError(`The ${source} could not be decoded${mediaErrorCode ? ` (media error ${mediaErrorCode})` : ''}.${details} The original recording was restored; disable an effect or retry.`);
+                  return;
+                }
+                setError(`The ${source} could not be decoded${mediaErrorCode ? ` (media error ${mediaErrorCode})` : ''}.${details} Record again and retry.`);
+              }}
+              style={{
+                ...(recordingUrl && !effectsRendered ? { filter: getReelVideoFilter(videoPreset) } : {}),
+                ...(!recordingUrl ? { transform: `scale(${cameraZoom})` } : {}),
+              }}
             />
             {activeGuests.length > 0 && !recordingUrl && (
               <div
@@ -1438,6 +1585,7 @@ export default function PodcastTeleprompter() {
                       muted
                       playsInline
                       className="h-full w-full object-cover"
+                      style={index === 0 ? { transform: `scale(${cameraZoom})` } : undefined}
                       ref={(video) => {
                         if (!video) return;
                         const stream = index === 0
@@ -1484,7 +1632,6 @@ export default function PodcastTeleprompter() {
             {outroActive && activeGuests.length === 0 && (
               <div className="absolute inset-0 z-10 grid place-items-center bg-[#07110f]/85 text-center">
                 <div>
-                  <p className="text-[9px] font-semibold uppercase tracking-[0.2em] text-emerald-300">NexSq Podcast · Outro</p>
                   <h2 className="mt-2 text-xl font-bold">{draft.title}</h2>
                   <p className="mt-1 text-xs text-white/75">Thanks for watching</p>
                 </div>
@@ -1614,7 +1761,7 @@ export default function PodcastTeleprompter() {
             <section className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3" aria-labelledby="podcast-effects-title">
               <div>
                 <h2 id="podcast-effects-title" className="text-sm font-semibold text-white">Audio and video effects</h2>
-                <p className="mt-1 text-[11px] leading-relaxed text-white/50">Changes preview and render automatically when selected.</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-white/50">Choose optional cleanup and a soundtrack, then apply or save.</p>
               </div>
               <MediaEnhancementTabs
                 audioPreset={audioPreset}
@@ -1624,16 +1771,133 @@ export default function PodcastTeleprompter() {
                 disabled={isRenderingEffects || isSavingRecording}
                 accent="emerald"
               />
+              <fieldset className="space-y-2 rounded-md border border-white/10 p-2.5">
+                <legend className="px-1 text-[11px] font-medium text-white/75">Background soundtrack</legend>
+                <label className="flex items-center gap-2 text-[11px] text-white/70">
+                  <Music2 className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
+                  <span className="shrink-0">Optional track</span>
+                  <select
+                    value={backgroundAudioUrl}
+                    aria-label="Choose background soundtrack"
+                    disabled={isRenderingEffects || isSavingRecording}
+                    onChange={handleBackgroundAudioChange}
+                    className="h-8 min-w-0 flex-1 rounded border border-white/10 bg-[#111715] px-2 text-[10px] text-white"
+                  >
+                    <option value="">None — voice only</option>
+                    {PODCAST_SOUNDTRACKS.map((soundtrack) => (
+                      <option key={soundtrack.url} value={soundtrack.url}>{soundtrack.name}</option>
+                    ))}
+                  </select>
+                </label>
+                {backgroundAudioUrl && (
+                  <>
+                    <label className="flex items-center gap-3 pl-5 text-[10px] text-white/55">
+                      Background volume
+                      <input
+                        type="range"
+                        min="0"
+                        max="20"
+                        step="1"
+                        value={Math.round(backgroundAudioVolume * 100)}
+                        aria-label="Background soundtrack volume"
+                        disabled={isRenderingEffects || isSavingRecording}
+                        onChange={(event) => {
+                          setBackgroundAudioVolume(Number(event.target.value) / 100);
+                          restoreOriginalRecording();
+                        }}
+                        className="min-w-0 flex-1 accent-emerald-400"
+                      />
+                      <span className="w-8 text-right tabular-nums">{Math.round(backgroundAudioVolume * 100)}%</span>
+                    </label>
+                    <p className="pl-5 text-[10px] text-white/45">Mixed under the voice after recording; shorter tracks repeat to fill the recording.</p>
+                  </>
+                )}
+              </fieldset>
+              <fieldset className="space-y-2 rounded-md border border-white/10 p-2.5">
+                <legend className="px-1 text-[11px] font-medium text-white/75">Audio cleanup (processed on this device)</legend>
+                <label className="flex items-center gap-2 text-[11px] text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={audioCleanup.noiseGate}
+                    disabled={isRenderingEffects || isSavingRecording}
+                    onChange={(event) => handleAudioCleanupChange('noiseGate', event.target.checked)}
+                    className="accent-emerald-400"
+                  />
+                  Reduce background noise between speech
+                </label>
+                <label className="flex items-center gap-2 text-[11px] text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={audioCleanup.declip}
+                    disabled={isRenderingEffects || isSavingRecording}
+                    onChange={(event) => handleAudioCleanupChange('declip', event.target.checked)}
+                    className="accent-emerald-400"
+                  />
+                  Repair clipped/distorted peaks
+                </label>
+                <label className="flex items-center gap-2 text-[11px] text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={audioCleanup.declick}
+                    disabled={isRenderingEffects || isSavingRecording}
+                    onChange={(event) => handleAudioCleanupChange('declick', event.target.checked)}
+                    className="accent-emerald-400"
+                  />
+                  Reduce clicks and pops
+                </label>
+                <label className="flex items-center gap-2 text-[11px] text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={audioCleanup.trimSilence}
+                    disabled={isRenderingEffects || isSavingRecording}
+                    onChange={(event) => handleAudioCleanupChange('trimSilence', event.target.checked)}
+                    className="accent-emerald-400"
+                  />
+                  Remove long silent gaps (video stays in sync)
+                </label>
+                {audioCleanup.trimSilence && (
+                  <label className="flex items-center gap-3 pl-6 text-[10px] text-white/55">
+                    Silence longer than
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="2.5"
+                      step="0.25"
+                      value={audioCleanup.minimumSilenceSeconds}
+                      aria-label="Minimum silence to remove"
+                      disabled={isRenderingEffects || isSavingRecording}
+                      onChange={(event) => handleAudioCleanupChange('minimumSilenceSeconds', Number(event.target.value))}
+                      className="min-w-0 flex-1 accent-emerald-400"
+                    />
+                    <span className="w-10 text-right tabular-nums">{audioCleanup.minimumSilenceSeconds.toFixed(2)}s</span>
+                  </label>
+                )}
+              </fieldset>
+              {hasAudioProcessing && !effectsRendered && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void renderPodcastEffects().catch((renderError: unknown) => {
+                    setError(renderError instanceof Error ? renderError.message : 'Could not clean the podcast audio.');
+                  })}
+                  disabled={isRenderingEffects || isSavingRecording}
+                  className="w-full border-emerald-400/30 text-emerald-100"
+                >
+                  Apply audio changes
+                </Button>
+              )}
               <details className="text-[11px] text-white/45">
                 <summary className="cursor-pointer text-white/60">Effect notes</summary>
-                <p className="mt-1.5">Voice clarity reduces low rumble, not full noise cancellation. Warm studio adds room ambience, not surround sound. Video presets adjust light, contrast, and color.</p>
+                <p className="mt-1.5">The noise gate reduces steady noise in pauses, not under speech. De-clipping and click repair can reduce mild artifacts but cannot restore audio that was lost to severe distortion. Silence removal cuts long gaps and re-encodes the video to keep it synchronized. Voice clarity reduces low rumble; warm studio adds room ambience; video presets adjust light, contrast, and color.</p>
               </details>
               <p className="text-[10px] text-emerald-200/70" aria-live="polite">
                 {isRenderingEffects
-                  ? `Rendering effects automatically: ${renderProgress}%`
+                  ? `${renderStatus || 'Rendering audio/video effects…'} ${renderProgress}%`
                   : effectsRendered
-                    ? 'Selected effects rendered and ready to save.'
-                    : 'Select a preset to render it automatically.'}
+                    ? renderStatus || 'Selected effects rendered and ready to save.'
+                    : hasAudioProcessing
+                      ? 'Apply audio changes, or save to render the selected effects.'
+                      : 'Select a preset to render it automatically.'}
               </p>
               {isRenderingEffects && (
                 <div
