@@ -2,12 +2,14 @@ import ffmpegCoreURL from '@ffmpeg/core?url';
 import ffmpegWasmURL from '@ffmpeg/core/wasm?url';
 import {
   buildTimeRangeExpression,
+  clipTimeRangesToRange,
   getRetainedAudioRanges,
+  getTrimmedTimeRange,
   parseMediaDuration,
   parseSilenceRanges,
   type TimeRange,
 } from './podcastSilence';
-import { createAbortError, throwIfAborted } from './abortSignal';
+import { createAbortError, throwIfAborted, waitForAbort } from './abortSignal';
 
 export type PodcastAudioCleanupOptions = {
   noiseGate: boolean;
@@ -15,6 +17,9 @@ export type PodcastAudioCleanupOptions = {
   declick: boolean;
   trimSilence: boolean;
   minimumSilenceSeconds: number;
+  trimStartSeconds: number;
+  trimEndSeconds: number;
+  fadeOutSeconds: number;
 };
 
 export type PodcastBackgroundAudio = {
@@ -42,6 +47,36 @@ const getAudioExtension = (file: File) => {
   return extension && Object.values(mimeExtensions).includes(extension) ? extension : null;
 };
 
+async function getVideoDuration(source: Blob, signal?: AbortSignal): Promise<number> {
+  if (typeof document === 'undefined') {
+    throw new Error('The recording duration cannot be read in this environment.');
+  }
+  const sourceUrl = URL.createObjectURL(source);
+  const video = document.createElement('video');
+  video.preload = 'metadata';
+  const loadedDuration = new Promise<number>((resolve, reject) => {
+    const handleLoadedMetadata = () => resolve(video.duration);
+    const handleError = () => reject(new Error('Could not read the recording duration.'));
+    video.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+    video.addEventListener('error', handleError, { once: true });
+    video.src = sourceUrl;
+    video.load();
+  });
+
+  try {
+    const duration = await waitForAbort(loadedDuration, signal);
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error('Could not determine the recording duration for trimming.');
+    }
+    return duration;
+  } finally {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
 export async function renderPodcastAudioCleanup(
   source: Blob,
   options: PodcastAudioCleanupOptions,
@@ -51,13 +86,38 @@ export async function renderPodcastAudioCleanup(
   signal?: AbortSignal,
 ): Promise<Blob> {
   throwIfAborted(signal);
-  if (!options.noiseGate && !options.declip && !options.declick && !options.trimSilence && !backgroundAudio) {
+  if (
+    !Number.isFinite(options.trimStartSeconds)
+    || options.trimStartSeconds < 0
+    || !Number.isFinite(options.trimEndSeconds)
+    || options.trimEndSeconds < 0
+    || !Number.isFinite(options.fadeOutSeconds)
+    || options.fadeOutSeconds < 0
+  ) {
+    throw new Error('Enter valid trim and fade durations.');
+  }
+  const hasEdgeTrim = options.trimStartSeconds > 0 || options.trimEndSeconds > 0;
+  const hasFadeOut = options.fadeOutSeconds > 0;
+  if (
+    !options.noiseGate
+    && !options.declip
+    && !options.declick
+    && !options.trimSilence
+    && !hasEdgeTrim
+    && !hasFadeOut
+    && !backgroundAudio
+  ) {
     return source;
   }
-
   const backgroundExtension = backgroundAudio ? getAudioExtension(backgroundAudio.file) : null;
   if (backgroundAudio && !backgroundExtension) {
     throw new Error('Choose a supported soundtrack file: MP3, WAV, OGG, M4A, AAC, FLAC, Opus, or WebM audio.');
+  }
+
+  let mediaDuration = 0;
+  if (hasEdgeTrim || hasFadeOut) {
+    onStatus('Reading the recording timeline…');
+    mediaDuration = await getVideoDuration(source, signal);
   }
 
   onProgress(3);
@@ -132,10 +192,28 @@ export async function renderPodcastAudioCleanup(
     onProgress(10);
     onStatus(backgroundAudio ? 'Mixing the soundtrack with the recording…' : 'Applying audio cleanup…');
 
-    const retainedDuration = retainedRanges.reduce((total, range) => total + range.end - range.start, 0);
+    const timelineDuration = originalDuration ?? mediaDuration;
+    const trimRange = hasEdgeTrim || hasFadeOut
+      ? getTrimmedTimeRange(timelineDuration, options.trimStartSeconds, options.trimEndSeconds)
+      : originalDuration
+        ? { start: 0, end: originalDuration }
+        : { start: 0, end: 0 };
+    const clipDuration = trimRange.end - trimRange.start;
+    const clippedRetainedRanges = options.trimSilence
+      ? clipTimeRangesToRange(retainedRanges, trimRange)
+      : [];
+    const retainedDuration = clippedRetainedRanges.reduce((total, range) => total + range.end - range.start, 0);
     const removeSilence = options.trimSilence
       && originalDuration !== null
-      && retainedDuration < originalDuration - 0.05;
+      && retainedDuration < clipDuration - 0.05;
+    if (removeSilence && clippedRetainedRanges.length === 0) {
+      throw new Error('The selected trim leaves no audio after silent sections are removed.');
+    }
+    const outputDuration = removeSilence ? retainedDuration : clipDuration;
+    const fadeDuration = hasFadeOut ? Math.min(options.fadeOutSeconds, outputDuration) : 0;
+    const fadeFilter = fadeDuration > 0
+      ? `afade=t=out:st=${Math.max(0, outputDuration - fadeDuration).toFixed(3)}:d=${fadeDuration.toFixed(3)}`
+      : '';
     const audioFilters = [
       ...(options.noiseGate ? ['agate=threshold=0.015:ratio=4:attack=10:release=250'] : []),
       ...(options.declip ? ['adeclip'] : []),
@@ -150,15 +228,16 @@ export async function renderPodcastAudioCleanup(
     }
 
     if (removeSilence) {
-      const rangeExpression = buildTimeRangeExpression(retainedRanges);
-      const voiceChain = [
+      const rangeExpression = buildTimeRangeExpression(clippedRetainedRanges);
+      const voiceFilters = [
         `aselect='${rangeExpression}'`,
         'asetpts=N/SR/TB',
         ...audioFilters,
-      ].join(',');
+      ];
+      const voiceChain = voiceFilters.join(',');
       const audioChain = backgroundAudio
-        ? `[0:a]${voiceChain}[voice];[1:a]volume=${Math.max(0, Math.min(1, backgroundAudio.volume)).toFixed(2)},asetpts=N/SR/TB[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[a]`
-        : `[0:a]${voiceChain}[a]`;
+        ? `[0:a]${voiceChain}[voice];[1:a]volume=${Math.max(0, Math.min(1, backgroundAudio.volume)).toFixed(2)},asetpts=N/SR/TB[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixed];[mixed]${fadeFilter || 'anull'}[a]`
+        : `[0:a]${[...voiceFilters, ...(fadeFilter ? [fadeFilter] : [])].join(',')}[a]`;
       args.push(
         '-filter_complex',
         `[0:v]select='${rangeExpression}',setpts=N/(30*TB)[v];${audioChain}`,
@@ -170,13 +249,36 @@ export async function renderPodcastAudioCleanup(
         '-crf', '32',
         '-b:v', '0',
       );
-    } else if (backgroundAudio) {
-      const voiceFilter = audioFilters.length ? audioFilters.join(',') : 'anull';
+    } else if (backgroundAudio || hasEdgeTrim || hasFadeOut) {
+      const hasTimeEdit = hasEdgeTrim || hasFadeOut;
+      const voiceFilters = [
+        ...(hasEdgeTrim
+          ? [`atrim=start=${trimRange.start.toFixed(3)}:end=${trimRange.end.toFixed(3)}`]
+          : []),
+        'asetpts=PTS-STARTPTS',
+        ...(audioFilters.length ? audioFilters : ['anull']),
+      ];
+      const musicFilters = [
+        `volume=${Math.max(0, Math.min(1, backgroundAudio?.volume || 0)).toFixed(2)}`,
+        ...(hasTimeEdit ? [`atrim=duration=${clipDuration.toFixed(3)}`] : []),
+        'asetpts=PTS-STARTPTS',
+      ];
+      const audioOutputChain = backgroundAudio
+        ? `[0:a]${voiceFilters.join(',')}[voice];[1:a]${musicFilters.join(',')}[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixed];[mixed]${fadeFilter || 'anull'}[a]`
+        : `[0:a]${[
+          ...voiceFilters,
+          ...(fadeFilter ? [fadeFilter] : []),
+        ].join(',')}[a]`;
+      const videoOutputChain = hasEdgeTrim
+        ? `[0:v]trim=start=${trimRange.start.toFixed(3)}:end=${trimRange.end.toFixed(3)},setpts=PTS-STARTPTS[v]`
+        : '';
       args.push(
         '-filter_complex',
-        `[0:a]${voiceFilter},asetpts=PTS-STARTPTS[voice];[1:a]volume=${Math.max(0, Math.min(1, backgroundAudio.volume)).toFixed(2)},asetpts=PTS-STARTPTS[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[a]`,
+        [videoOutputChain, audioOutputChain].filter(Boolean).join(';'),
       );
-      if (isWebm) {
+      if (hasEdgeTrim) {
+        args.push('-map', '[v]', '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-crf', '32', '-b:v', '0');
+      } else if (isWebm) {
         args.push('-map', '0:v:0', '-c:v', 'copy');
       } else {
         args.push('-map', '0:v:0', '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-crf', '32', '-b:v', '0');

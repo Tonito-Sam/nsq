@@ -216,15 +216,17 @@ const waitForMetadata = (video: HTMLVideoElement) => new Promise<void>((resolve,
   video.addEventListener('error', onError, { once: true });
 });
 
-const seekTo = (video: HTMLVideoElement, timeSeconds: number) => new Promise<void>((resolve, reject) => {
-  if (Math.abs(video.currentTime - timeSeconds) < 0.05) {
+const restartAtBeginning = (video: HTMLVideoElement) => new Promise<void>((resolve, reject) => {
+  if (video.currentTime < 0.05 && !video.ended) {
     resolve();
     return;
   }
+
+  let timeoutId = 0;
   const cleanup = () => {
+    window.clearTimeout(timeoutId);
     video.removeEventListener('seeked', onSeeked);
     video.removeEventListener('error', onError);
-    window.clearTimeout(timeoutId);
   };
   const onSeeked = () => {
     cleanup();
@@ -232,16 +234,100 @@ const seekTo = (video: HTMLVideoElement, timeSeconds: number) => new Promise<voi
   };
   const onError = () => {
     cleanup();
-    reject(new Error('Could not seek to the selected part of the episode.'));
+    reject(new Error('Could not restart the episode after measuring its duration.'));
   };
-  let timeoutId = 0;
   video.addEventListener('seeked', onSeeked, { once: true });
   video.addEventListener('error', onError, { once: true });
   timeoutId = window.setTimeout(() => {
     cleanup();
-    reject(new Error('The browser could not seek to the selected part of the episode.'));
+    reject(new Error('Could not restart the episode after measuring its duration.'));
   }, 15_000);
-  video.currentTime = timeSeconds;
+  try {
+    video.currentTime = 0;
+    if (video.currentTime < 0.05 && !video.seeking) {
+      cleanup();
+      resolve();
+    }
+  } catch {
+    cleanup();
+    reject(new Error('Could not restart the episode after measuring its duration.'));
+  }
+});
+
+const advanceToTime = (video: HTMLVideoElement, timeSeconds: number) => new Promise<void>((resolve, reject) => {
+  if (video.currentTime >= timeSeconds - 0.05) {
+    resolve();
+    return;
+  }
+
+  const originalMuted = video.muted;
+  const originalPlaybackRate = video.playbackRate;
+  let animationFrameId: number | null = null;
+  let timeoutId = 0;
+  let settled = false;
+  const cleanup = () => {
+    window.clearTimeout(timeoutId);
+    if (animationFrameId !== null) window.cancelAnimationFrame(animationFrameId);
+    video.removeEventListener('timeupdate', onProgress);
+    video.removeEventListener('playing', onPlaying);
+    video.removeEventListener('waiting', onWaiting);
+    video.removeEventListener('ended', onEnded);
+    video.removeEventListener('error', onError);
+  };
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    video.pause();
+    video.muted = originalMuted;
+    video.playbackRate = originalPlaybackRate;
+    resolve();
+  };
+  const fail = (error: Error) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    video.pause();
+    video.muted = originalMuted;
+    video.playbackRate = originalPlaybackRate;
+    reject(error);
+  };
+  const checkProgress = () => {
+    if (video.currentTime >= timeSeconds - 0.05) {
+      finish();
+      return;
+    }
+    animationFrameId = window.requestAnimationFrame(checkProgress);
+  };
+  const onProgress = () => {
+    if (video.currentTime >= timeSeconds - 0.05) finish();
+  };
+  const onPlaying = () => {
+    if (animationFrameId === null) {
+      animationFrameId = window.requestAnimationFrame(checkProgress);
+    }
+  };
+  const onWaiting = () => {
+    if (animationFrameId !== null) {
+      window.cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+  };
+  const onEnded = () => fail(new Error('The episode ended before the next Podshort segment.'));
+  const onError = () => fail(new Error('Could not play through the episode to reach the next Podshort segment.'));
+
+  video.addEventListener('timeupdate', onProgress);
+  video.addEventListener('playing', onPlaying);
+  video.addEventListener('waiting', onWaiting);
+  video.addEventListener('ended', onEnded, { once: true });
+  video.addEventListener('error', onError, { once: true });
+  timeoutId = window.setTimeout(
+    () => fail(new Error('Fast-forwarding to the next Podshort segment timed out. Please try again.')),
+    10 * 60 * 1000,
+  );
+  video.muted = true;
+  video.playbackRate = 8;
+  void video.play().catch(() => fail(new Error('Could not play through the episode to reach the next Podshort segment.')));
 });
 
 const measureDurationByPlayback = (
@@ -465,6 +551,7 @@ export async function extractPodcastShorts(
         video.muted = originalMuted;
         video.playbackRate = originalPlaybackRate;
       }
+      await restartAtBeginning(video);
     }
     const startTimes = getPodcastShortStartTimes(duration, PODCAST_SHORT_CONTENT_DURATION_SECONDS);
     onProgress?.(0, startTimes.length, 'loadingModel', 0, 0);
@@ -499,8 +586,7 @@ export async function extractPodcastShorts(
       >> = [];
       for (let index = 0; index < startTimes.length; index += 1) {
         const startSeconds = startTimes[index];
-        video.pause();
-        await seekTo(video, startSeconds);
+        await advanceToTime(video, startSeconds);
         const recording = await recordSegment(video, canvasContext, stream, mimeType, startSeconds, channelName, outroArtwork);
         rawSegments.push({ index, startSeconds, blob: recording.blob });
         const transcriptionResult = decodePodcastSpeechAudio(recording.audioBlob)

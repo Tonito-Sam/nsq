@@ -27,6 +27,9 @@ import VODLibrary, { VODEpisode } from '@/components/VODLibrary';
 import { useNavigate } from 'react-router-dom';
 import { recordWatchHistory } from '@/lib/watchHistory';
 import { cn } from '@/lib/utils';
+import apiUrl from '@/lib/api';
+import { getVodEpisodeQueue } from '@/utils/vodEpisodeQueue';
+import { getNextLinearTvPlaylistIndex } from '@/utils/linearTvSchedule';
 
 interface StudioShow {
   id: string;
@@ -57,6 +60,34 @@ interface VideoContainerProps {
   onCurrentShowChange?: (index: number) => void;
   scheduleTransition?: boolean;
   nextProgram?: StudioShow;
+  scheduleDrivenPlayback?: boolean;
+  playbackStartOffsetSeconds?: number;
+  scheduleSyncWarning?: string;
+}
+
+async function fetchShowEpisodes(showId: string): Promise<VODEpisode[]> {
+  const episodes: VODEpisode[] = [];
+  const limit = 100;
+  let page = 1;
+  let hasMore = true;
+  while (hasMore) {
+    const response = await fetch(apiUrl(
+      `/api/shows/${encodeURIComponent(showId)}/episodes?page=${page}&limit=${limit}&sort=oldest&filter=all`,
+    ));
+    if (!response.ok) {
+      throw new Error(`Episode request failed with status ${response.status}.`);
+    }
+
+    const result = await response.json() as { episodes?: VODEpisode[]; hasMore?: boolean };
+    if (!Array.isArray(result.episodes)) {
+      throw new Error('The episode service returned an invalid playlist.');
+    }
+    episodes.push(...result.episodes);
+    hasMore = Boolean(result.hasMore) && result.episodes.length > 0;
+    page += 1;
+  }
+
+  return episodes;
 }
 
 declare global {
@@ -106,6 +137,9 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   onCurrentShowChange,
   scheduleTransition = false,
   nextProgram,
+  scheduleDrivenPlayback = false,
+  playbackStartOffsetSeconds = 0,
+  scheduleSyncWarning = '',
 }) => {
   const navigate = useNavigate();
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -125,6 +159,11 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const [modalPlayerProgress, setModalPlayerProgress] = useState(0);
   const [modalPlayerDuration, setModalPlayerDuration] = useState(0);
   const [modalAwaitingUserPlay, setModalAwaitingUserPlay] = useState(false);
+  const [modalQueue, setModalQueue] = useState<VODEpisode[]>([]);
+  const [modalQueueIndex, setModalQueueIndex] = useState(0);
+  const [modalQueueLoading, setModalQueueLoading] = useState(false);
+  const [modalQueueError, setModalQueueError] = useState('');
+  const [modalQueueComplete, setModalQueueComplete] = useState(false);
   const [isMobile, setIsMobile] = useState<boolean>(
     typeof window !== 'undefined' ? window.innerWidth < 768 : false,
   );
@@ -140,7 +179,20 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const modalVideoRef = useRef<HTMLVideoElement>(null);
   const modalYoutubePlayerRef = useRef<any>(null);
+  const modalYoutubePollRef = useRef<number | null>(null);
+  const modalVimeoRef = useRef<HTMLIFrameElement>(null);
   const modalPlayerContainerRef = useRef<HTMLDivElement>(null);
+  const modalQueueRequestRef = useRef(0);
+  const modalPlayerMutedRef = useRef(modalPlayerMuted);
+  modalPlayerMutedRef.current = modalPlayerMuted;
+
+  const sortedShows = shows;
+  const currentShow = scheduleTransition
+    ? undefined
+    : selectedShowId
+      ? sortedShows.find((show) => show.id === selectedShowId || show.show_id === selectedShowId) || sortedShows[currentShowIndex]
+      : sortedShows[currentShowIndex];
+  const trackingShowId = currentShow?.show_id || currentShow?.id;
 
   // ─── Modal mount / scroll lock ────────────────────────────────────────────
   useEffect(() => {
@@ -155,6 +207,12 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       setTimeout(() => setPortalMounted(false), 220);
       document.body.style.overflow = 'auto';
       setPlayingEpisode(null);
+      setModalQueue([]);
+      setModalQueueIndex(0);
+      setModalQueueLoading(false);
+      setModalQueueError('');
+      setModalQueueComplete(false);
+      modalQueueRequestRef.current += 1;
     }
 
     return () => {
@@ -177,12 +235,14 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         const t = videoRef.current.currentTime;
         setVideoCurrentTime(t);
         videoCurrentTimeRef.current = t;
-        try {
-          sessionStorage.setItem(
-            'nsq_video_time',
-            JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }),
-          );
-        } catch {}
+        if (!scheduleDrivenPlayback) {
+          try {
+            sessionStorage.setItem(
+              'nsq_video_time',
+              JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }),
+            );
+          } catch {}
+        }
       }
       if (youtubePlayerRef.current && typeof youtubePlayerRef.current.getCurrentTime === 'function') {
         try {
@@ -190,12 +250,14 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
           if (typeof t === 'number' && !isNaN(t)) {
             setVideoCurrentTime(t);
             videoCurrentTimeRef.current = t;
-            try {
-              sessionStorage.setItem(
-                'nsq_video_time',
-                JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }),
-              );
-            } catch {}
+            if (!scheduleDrivenPlayback) {
+              try {
+                sessionStorage.setItem(
+                  'nsq_video_time',
+                  JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }),
+                );
+              } catch {}
+            }
           }
         } catch {}
       }
@@ -258,7 +320,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
       document.body.style.overflow = 'auto';
     };
-  }, [isFullscreen]);
+  }, [isFullscreen, currentShow?.id, scheduleDrivenPlayback]);
 
   // ─── Overlay auto-hide (unchanged logic) ─────────────────────────────────
   useEffect(() => {
@@ -356,14 +418,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     return { text: formatDuration(show.duration), tone: 'neutral' as const, icon: Clock };
   };
 
-  const sortedShows = shows;
-  const currentShow = scheduleTransition
-    ? undefined
-    : selectedShowId
-      ? sortedShows.find((show) => show.id === selectedShowId || show.show_id === selectedShowId) || sortedShows[currentShowIndex]
-      : sortedShows[currentShowIndex];
-  const trackingShowId = currentShow?.show_id || currentShow?.id;
-
   const { viewCount } = useViewTracking({
     showId: trackingShowId,
     isPlaying: isVideoPlaying,
@@ -404,11 +458,43 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     };
   }, []);
 
-  const moveToNextShow = () => {
-    const nextIndex = (currentShowIndex + 1) % sortedShows.length;
+  const currentProgramId = currentShow?.show_id || currentShow?.id;
+  const moveToNextShow = useCallback(() => {
+    if (!currentProgramId || !sortedShows.length) return;
+    const episodeIndexes = sortedShows.reduce<number[]>((indexes, show, index) => {
+      if ((show.show_id || show.id) === currentProgramId) indexes.push(index);
+      return indexes;
+    }, []);
+    const selectedEpisodeIndex = currentShow
+      ? sortedShows.findIndex((show) => show.id === currentShow.id)
+      : -1;
+    const activeEpisodeIndex = selectedEpisodeIndex >= 0 ? selectedEpisodeIndex : currentShowIndex;
+    const nextProgramEpisodeIndex = getNextLinearTvPlaylistIndex(episodeIndexes, activeEpisodeIndex);
+    const nextIndex = nextProgramEpisodeIndex ?? (currentShowIndex + 1) % sortedShows.length;
+    if (nextIndex === currentShowIndex) {
+      if (youtubePlayerRef.current) {
+        try {
+          youtubePlayerRef.current.seekTo(0, true);
+          youtubePlayerRef.current.playVideo();
+        } catch {}
+      } else if (videoRef.current) {
+        videoRef.current.currentTime = 0;
+        void videoRef.current.play().catch(() => {});
+      } else if (vimeoRef.current?.contentWindow) {
+        vimeoRef.current.contentWindow.postMessage(
+          JSON.stringify({ method: 'setCurrentTime', value: 0 }),
+          'https://player.vimeo.com',
+        );
+        vimeoRef.current.contentWindow.postMessage(
+          JSON.stringify({ method: 'play' }),
+          'https://player.vimeo.com',
+        );
+      }
+      return;
+    }
     setCurrentShowIndex(nextIndex);
     if (typeof onCurrentShowChange === 'function') onCurrentShowChange(nextIndex);
-  };
+  }, [currentProgramId, currentShow, currentShowIndex, sortedShows, onCurrentShowChange]);
 
   // ─── YouTube player (main) ────────────────────────────────────────────────
   useEffect(() => {
@@ -467,12 +553,14 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                       if (typeof t === 'number' && !isNaN(t)) {
                         videoCurrentTimeRef.current = t;
                         setVideoCurrentTime(t);
-                        try {
-                          sessionStorage.setItem(
-                            'nsq_video_time',
-                            JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }),
-                          );
-                        } catch {}
+                        if (!scheduleDrivenPlayback) {
+                          try {
+                            sessionStorage.setItem(
+                              'nsq_video_time',
+                              JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }),
+                            );
+                          } catch {}
+                        }
                       }
                     }
                   } catch {}
@@ -488,19 +576,23 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
           },
           onReady: (event: any) => {
             if (muted) event.target.mute();
-            try {
-              if (!videoCurrentTimeRef.current) {
-                const raw = sessionStorage.getItem('nsq_video_time');
-                if (raw) {
-                  const parsed = JSON.parse(raw);
-                  if (parsed && parsed.showId === currentShow?.id && typeof parsed.time === 'number') {
-                    videoCurrentTimeRef.current = parsed.time;
+            if (!scheduleDrivenPlayback) {
+              try {
+                if (!videoCurrentTimeRef.current) {
+                  const raw = sessionStorage.getItem('nsq_video_time');
+                  if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed && parsed.showId === currentShow?.id && typeof parsed.time === 'number') {
+                      videoCurrentTimeRef.current = parsed.time;
+                    }
                   }
                 }
-              }
-            } catch {}
+              } catch {}
+            }
             try {
-              const seekToTime = videoCurrentTimeRef.current || videoCurrentTime;
+              const seekToTime = scheduleDrivenPlayback
+                ? playbackStartOffsetSeconds
+                : videoCurrentTimeRef.current;
               if (typeof event.target.seekTo === 'function' && seekToTime > 0) {
                 event.target.seekTo(seekToTime, true);
               }
@@ -523,33 +615,94 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         youtubeTimePollRef.current = null;
       }
     };
-  }, [currentShow, ytReady, muted, scheduleTransition]);
+  }, [
+    currentShow,
+    trackingShowId,
+    ytReady,
+    muted,
+    scheduleTransition,
+    scheduleDrivenPlayback,
+    playbackStartOffsetSeconds,
+    moveToNextShow,
+  ]);
 
   // ─── Persisted time restore ──────────────────────────────────────────────
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem('nsq_video_time');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.showId === currentShow?.id && typeof parsed.time === 'number') {
-          videoCurrentTimeRef.current = parsed.time;
-          setVideoCurrentTime(parsed.time);
+    if (scheduleDrivenPlayback) {
+      videoCurrentTimeRef.current = Math.max(0, playbackStartOffsetSeconds);
+      setVideoCurrentTime(Math.max(0, playbackStartOffsetSeconds));
+    } else {
+      try {
+        const raw = sessionStorage.getItem('nsq_video_time');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.showId === currentShow?.id && typeof parsed.time === 'number') {
+            videoCurrentTimeRef.current = parsed.time;
+            setVideoCurrentTime(parsed.time);
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
     nativeSeekRetryRefs.current.forEach((id) => clearTimeout(id));
     nativeSeekRetryRefs.current = [];
     return () => {
       nativeSeekRetryRefs.current.forEach((id) => clearTimeout(id));
       nativeSeekRetryRefs.current = [];
     };
-  }, [currentShow]);
+  }, [currentShow?.id, playbackStartOffsetSeconds, scheduleDrivenPlayback]);
 
   // ─── Native video handlers ───────────────────────────────────────────────
-  const handleVideoEnded = () => {
+  const handleVideoEnded = useCallback(() => {
     setIsVideoPlaying(false);
     moveToNextShow();
-  };
+  }, [moveToNextShow]);
+
+  useEffect(() => {
+    if (scheduleTransition || !currentShow || !isVimeoUrl(currentShow.video_url || '')) return;
+    const iframe = vimeoRef.current;
+    if (!iframe) return;
+
+    const postCommand = (method: string, value?: string | number) => {
+      iframe.contentWindow?.postMessage(JSON.stringify({ method, value }), 'https://player.vimeo.com');
+    };
+    const subscribeToPlayback = () => postCommand('addEventListener', 'ended');
+    const handleVimeoMessage = (event: MessageEvent) => {
+      if (event.origin !== 'https://player.vimeo.com' || event.source !== iframe.contentWindow) return;
+      let payload: { event?: string };
+      try {
+        payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      } catch {
+        return;
+      }
+      if (payload.event === 'ready') {
+        subscribeToPlayback();
+        if (scheduleDrivenPlayback && playbackStartOffsetSeconds > 0) {
+          postCommand('setCurrentTime', playbackStartOffsetSeconds);
+        }
+      } else if (payload.event === 'ended') {
+        handleVideoEnded();
+      } else if (payload.event === 'play') {
+        setIsVideoPlaying(true);
+      } else if (payload.event === 'pause') {
+        setIsVideoPlaying(false);
+      }
+    };
+
+    window.addEventListener('message', handleVimeoMessage);
+    iframe.addEventListener('load', subscribeToPlayback);
+    subscribeToPlayback();
+    return () => {
+      window.removeEventListener('message', handleVimeoMessage);
+      iframe.removeEventListener('load', subscribeToPlayback);
+    };
+  }, [
+    currentShow?.id,
+    currentShow?.video_url,
+    scheduleTransition,
+    scheduleDrivenPlayback,
+    playbackStartOffsetSeconds,
+    handleVideoEnded,
+  ]);
 
   const handleVideoPlay = () => {
     setIsVideoPlaying(true);
@@ -610,12 +763,14 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       const t = videoRef.current.currentTime;
       setVideoCurrentTime(t);
       videoCurrentTimeRef.current = t;
-      try {
-        sessionStorage.setItem(
-          'nsq_video_time',
-          JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }),
-        );
-      } catch {}
+      if (!scheduleDrivenPlayback) {
+        try {
+          sessionStorage.setItem(
+            'nsq_video_time',
+            JSON.stringify({ showId: currentShow?.id, time: t, ts: Date.now() }),
+          );
+        } catch {}
+      }
     }
   };
 
@@ -713,133 +868,276 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       setCurrentShowIndex(0);
       if (typeof onCurrentShowChange === 'function') onCurrentShowChange(0);
     }
-  }, [currentShowIndex, sortedShows.length]);
+  }, [currentShowIndex, sortedShows.length, onCurrentShowChange]);
 
-  // ─── Modal player functions (unchanged logic) ────────────────────────────
-  const playEpisode = useCallback(
-    (episode: VODEpisode) => {
-      setCatchUpOpen(true);
-      setPlayingEpisode(episode);
-      setModalPlayerPlaying(false);
+  const playCatchUpQueue = useCallback(async ({
+    showId,
+    selectedEpisode,
+    startAtBeginning = false,
+  }: {
+    showId?: string;
+    selectedEpisode?: VODEpisode;
+    startAtBeginning?: boolean;
+  }) => {
+    const requestId = modalQueueRequestRef.current + 1;
+    modalQueueRequestRef.current = requestId;
+    setCatchUpOpen(true);
+    setPlayingEpisode(null);
+    setModalPlayerPlaying(false);
+    setModalQueueLoading(true);
+    setModalQueueError('');
+    setModalQueueComplete(false);
+
+    try {
+      const fetchedEpisodes = showId
+        ? await fetchShowEpisodes(showId)
+        : selectedEpisode
+          ? [selectedEpisode]
+          : [];
+      let queue = getVodEpisodeQueue(
+        fetchedEpisodes,
+        startAtBeginning ? undefined : selectedEpisode?.id,
+      );
+      if (!queue.length && selectedEpisode) queue = [selectedEpisode];
+      if (!queue.length) throw new Error('No aired episodes are available for this show.');
+      if (modalQueueRequestRef.current !== requestId) return;
+      const selectedIndex = selectedEpisode
+        ? queue.findIndex((item) => item.id === selectedEpisode.id)
+        : -1;
+      const startIndex = !startAtBeginning && selectedIndex >= 0 ? selectedIndex : 0;
+      setModalQueue(queue);
+      setModalQueueIndex(startIndex);
+      const episodeToPlay = queue[startIndex];
+      setPlayingEpisode(episodeToPlay);
       setModalPlayerProgress(0);
-      const shouldMute = true;
-      setModalPlayerMuted(shouldMute);
-
-      const initModalYouTube = (videoId: string) => {
-        let attempts = 0;
-        const maxAttempts = 20;
-        const tryCreate = () => {
-          attempts += 1;
-          const el = document.getElementById('modal-youtube-player');
-          if (!el || !(window as any).YT || !(window as any).YT.Player) {
-            if (attempts < maxAttempts) setTimeout(tryCreate, 250);
-            return;
-          }
-          if (modalYoutubePlayerRef.current) {
-            try {
-              modalYoutubePlayerRef.current.destroy();
-            } catch {}
-            modalYoutubePlayerRef.current = null;
-          }
-          try {
-            modalYoutubePlayerRef.current = new window.YT.Player('modal-youtube-player', {
-              videoId,
-              playerVars: {
-                autoplay: 1,
-                mute: shouldMute ? 1 : 0,
-                controls: 1,
-                rel: 0,
-                modestbranding: 1,
-                playsinline: 1,
-              },
-              events: {
-                onStateChange: (event: any) => {
-                  setModalPlayerPlaying(event.data === 1);
-                  if (event.data === 0) setModalPlayerPlaying(false);
-                },
-                onReady: (event: any) => {
-                  try {
-                    event.target.mute();
-                  } catch {}
-                  try {
-                    setModalPlayerDuration(event.target.getDuration());
-                  } catch {}
-                  try {
-                    event.target.playVideo();
-                  } catch {}
-                  setModalPlayerPlaying(true);
-                  const poll = () => {
-                    if (modalYoutubePlayerRef.current) {
-                      try {
-                        const t = modalYoutubePlayerRef.current.getCurrentTime();
-                        if (typeof t === 'number') setModalPlayerProgress(t);
-                      } catch {}
-                      setTimeout(poll, 500);
-                    }
-                  };
-                  poll();
-                },
-              },
-            });
-          } catch {}
-        };
-        tryCreate();
-      };
-
-      const isYouTube = episode.video_url && isYouTubeUrl(episode.video_url);
-      const isVimeo = episode.video_url && isVimeoUrl(episode.video_url);
-
-      if (isMobile) {
-        if (!isYouTube && modalVideoRef.current) {
-          modalVideoRef.current.src = episode.video_url || '';
-          modalVideoRef.current.load();
-        }
-        setModalAwaitingUserPlay(true);
+      setModalPlayerDuration(Number(episodeToPlay.duration) || 0);
+      setModalPlayerMuted(true);
+      setModalAwaitingUserPlay(
+        isMobile && !isVimeoUrl(episodeToPlay.video_url || ''),
+      );
+    } catch (error) {
+      if (modalQueueRequestRef.current !== requestId) return;
+      console.error('[VideoContainer] Could not load the Catch Up episode queue:', error);
+      if (!selectedEpisode) {
+        setModalQueue([]);
+        setModalQueueIndex(0);
+        setPlayingEpisode(null);
+        setModalQueueError(
+          `Could not load this show’s episodes. ${error instanceof Error ? error.message : ''}`.trim(),
+        );
         return;
       }
+      setModalQueue([selectedEpisode]);
+      setModalQueueIndex(0);
+      setPlayingEpisode(selectedEpisode);
+      setModalPlayerProgress(0);
+      setModalPlayerDuration(Number(selectedEpisode.duration) || 0);
+      setModalPlayerMuted(true);
+      setModalAwaitingUserPlay(isMobile && !isVimeoUrl(selectedEpisode.video_url || ''));
+      setModalQueueError(
+        `Could not load the remaining episodes. Playing this episode only. ${
+          error instanceof Error ? error.message : ''
+        }`.trim(),
+      );
+    } finally {
+      if (modalQueueRequestRef.current === requestId) setModalQueueLoading(false);
+    }
+  }, [isMobile]);
 
-      if (episode.video_url && isYouTubeUrl(episode.video_url)) {
-        const videoId = extractYouTubeID(episode.video_url);
-        if (videoId) initModalYouTube(videoId);
-      } else if (episode.video_url && isVimeoUrl(episode.video_url)) {
-        // handled in render
-      } else if (episode.video_url) {
-        setTimeout(() => {
-          try {
-            if (modalVideoRef.current) {
-              modalVideoRef.current.pause();
-              modalVideoRef.current.src = episode.video_url || '';
-              modalVideoRef.current.load();
-              modalVideoRef.current.muted = shouldMute;
-              const p = modalVideoRef.current.play();
-              if (p && typeof (p as any).then === 'function') {
-                (p as any).then(() => setModalPlayerPlaying(true)).catch(() => setModalPlayerPlaying(false));
-              } else {
-                setModalPlayerPlaying(!modalVideoRef.current.paused);
-              }
-            }
-          } catch {}
-        }, 150);
-      }
-    },
-    [modalPlayerMuted, modalPlayerPlaying],
-  );
+  const playEpisode = useCallback((episode: VODEpisode) => {
+    void playCatchUpQueue({ showId: episode.show_id, selectedEpisode: episode });
+  }, [playCatchUpQueue]);
+
+  const playShow = useCallback((showId: string) => {
+    void playCatchUpQueue({ showId, startAtBeginning: true });
+  }, [playCatchUpQueue]);
+
+  const advanceModalQueue = useCallback(() => {
+    const nextIndex = modalQueueIndex + 1;
+    if (nextIndex >= modalQueue.length) {
+      setModalPlayerPlaying(false);
+      setModalQueueComplete(true);
+      return;
+    }
+
+    const nextEpisode = modalQueue[nextIndex];
+    setModalQueueIndex(nextIndex);
+    setPlayingEpisode(nextEpisode);
+    setModalPlayerProgress(0);
+    setModalPlayerDuration(Number(nextEpisode.duration) || 0);
+    setModalPlayerPlaying(false);
+    setModalQueueError('');
+    setModalQueueComplete(false);
+    setModalAwaitingUserPlay(
+      isMobile && !isVimeoUrl(nextEpisode.video_url || ''),
+    );
+  }, [isMobile, modalQueue, modalQueueIndex]);
 
   useEffect(() => {
     if (!playingEpisode) return;
-    const isYouTube = playingEpisode.video_url && isYouTubeUrl(playingEpisode.video_url);
-    if (!isYouTube && modalVideoRef.current) {
-      try {
-        modalVideoRef.current.muted = modalPlayerMuted;
-        const p = modalVideoRef.current.play();
-        if (p && typeof (p as any).then === 'function') {
-          (p as any).then(() => setModalPlayerPlaying(true)).catch(() => setModalPlayerPlaying(false));
-        } else {
-          setModalPlayerPlaying(!modalVideoRef.current.paused);
-        }
-      } catch {}
+    const videoUrl = playingEpisode.video_url || '';
+    const isYouTube = isYouTubeUrl(videoUrl);
+    const isVimeo = isVimeoUrl(videoUrl);
+
+    if (isMobile && modalAwaitingUserPlay) {
+      if (!isYouTube && !isVimeo && modalVideoRef.current) {
+        modalVideoRef.current.src = videoUrl;
+        modalVideoRef.current.load();
+      }
+      return;
     }
-  }, [playingEpisode, modalPlayerMuted]);
+
+    let cancelled = false;
+    if (isYouTube) {
+      const videoId = extractYouTubeID(videoUrl);
+      if (!videoId) {
+        setModalQueueError('This YouTube episode has an invalid video URL.');
+        return;
+      }
+
+      let attempts = 0;
+      let retryTimeout: number | null = null;
+      const tryCreatePlayer = () => {
+        if (cancelled) return;
+        attempts += 1;
+        const element = document.getElementById('modal-youtube-player');
+        if (!element || !window.YT?.Player) {
+          if (attempts < 20) retryTimeout = window.setTimeout(tryCreatePlayer, 250);
+          else setModalQueueError('The YouTube player did not finish loading. Please try again.');
+          return;
+        }
+
+        try {
+          modalYoutubePlayerRef.current?.destroy?.();
+          modalYoutubePlayerRef.current = new window.YT.Player('modal-youtube-player', {
+            videoId,
+            playerVars: {
+              autoplay: 1,
+              mute: modalPlayerMutedRef.current ? 1 : 0,
+              controls: 1,
+              rel: 0,
+              modestbranding: 1,
+              playsinline: 1,
+            },
+            events: {
+              onStateChange: (event: { data: number }) => {
+                if (cancelled) return;
+                const isPlaying = event.data === 1;
+                setModalPlayerPlaying(isPlaying);
+                if (event.data === 0) advanceModalQueue();
+              },
+              onReady: (event: {
+                target: {
+                  mute: () => void;
+                  unMute: () => void;
+                  getDuration: () => number;
+                  playVideo: () => void;
+                };
+              }) => {
+                if (cancelled) return;
+                if (modalPlayerMutedRef.current) event.target.mute();
+                else event.target.unMute();
+                setModalPlayerDuration(event.target.getDuration() || 0);
+                event.target.playVideo();
+                setModalPlayerPlaying(true);
+                if (modalYoutubePollRef.current !== null) {
+                  window.clearInterval(modalYoutubePollRef.current);
+                }
+                modalYoutubePollRef.current = window.setInterval(() => {
+                  try {
+                    const time = modalYoutubePlayerRef.current?.getCurrentTime?.();
+                    if (typeof time === 'number' && Number.isFinite(time)) setModalPlayerProgress(time);
+                  } catch (error) {
+                    console.warn('[VideoContainer] Could not read Catch Up playback time:', error);
+                  }
+                }, 500);
+              },
+              onError: (event: { data: number }) => {
+                if (cancelled) return;
+                setModalPlayerPlaying(false);
+                setModalQueueError(`The YouTube episode could not play (error ${event.data}).`);
+              },
+            },
+          });
+        } catch (error) {
+          console.error('[VideoContainer] Could not initialize the Catch Up YouTube player:', error);
+          setModalQueueError('The YouTube episode could not be initialized.');
+        }
+      };
+      tryCreatePlayer();
+
+      return () => {
+        cancelled = true;
+        if (retryTimeout !== null) window.clearTimeout(retryTimeout);
+        if (modalYoutubePollRef.current !== null) {
+          window.clearInterval(modalYoutubePollRef.current);
+          modalYoutubePollRef.current = null;
+        }
+        try {
+          modalYoutubePlayerRef.current?.destroy?.();
+        } catch (error) {
+          console.warn('[VideoContainer] Could not clean up the Catch Up YouTube player:', error);
+        }
+        modalYoutubePlayerRef.current = null;
+      };
+    }
+
+    if (isVimeo) return;
+    const video = modalVideoRef.current;
+    if (!video) return;
+    video.muted = modalPlayerMutedRef.current;
+    video.src = videoUrl;
+    video.load();
+
+    if (isMobile && modalAwaitingUserPlay) return;
+    const playTimeout = window.setTimeout(() => {
+      void video.play().then(() => {
+        setModalPlayerPlaying(true);
+      }).catch((error: unknown) => {
+        console.error('[VideoContainer] Could not play the Catch Up episode:', error);
+        setModalPlayerPlaying(false);
+        setModalQueueError('The selected episode could not be played. Try pressing Play.');
+      });
+    }, 0);
+    return () => window.clearTimeout(playTimeout);
+  }, [playingEpisode, isMobile, modalAwaitingUserPlay, advanceModalQueue]);
+
+  useEffect(() => {
+    if (!playingEpisode || !isVimeoUrl(playingEpisode.video_url || '')) return;
+    const iframe = modalVimeoRef.current;
+    if (!iframe) return;
+
+    const postCommand = (method: string, value?: string) => {
+      iframe.contentWindow?.postMessage(JSON.stringify({ method, value }), 'https://player.vimeo.com');
+    };
+    const subscribeToPlayback = () => postCommand('addEventListener', 'ended');
+    const handleVimeoMessage = (event: MessageEvent) => {
+      if (event.origin !== 'https://player.vimeo.com' || event.source !== iframe.contentWindow) return;
+      let payload: { event?: string };
+      try {
+        payload = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      } catch {
+        return;
+      }
+      if (payload.event === 'ready') {
+        subscribeToPlayback();
+      } else if (payload.event === 'ended') {
+        advanceModalQueue();
+      } else if (payload.event === 'play') {
+        setModalPlayerPlaying(true);
+      } else if (payload.event === 'pause') {
+        setModalPlayerPlaying(false);
+      }
+    };
+
+    window.addEventListener('message', handleVimeoMessage);
+    iframe.addEventListener('load', subscribeToPlayback);
+    subscribeToPlayback();
+    return () => {
+      window.removeEventListener('message', handleVimeoMessage);
+      iframe.removeEventListener('load', subscribeToPlayback);
+    };
+  }, [playingEpisode, advanceModalQueue]);
 
   const handleModalPlayerPlayPause = useCallback(() => {
     if (modalYoutubePlayerRef.current) {
@@ -905,6 +1203,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     if (isVimeoUrl(currentShow.video_url)) {
       return (
         <iframe
+          key={`${currentShow.id}-${scheduleDrivenPlayback ? playbackStartOffsetSeconds : ''}`}
           ref={vimeoRef}
           className="w-full h-full"
           src={`https://player.vimeo.com/video/${extractVimeoID(
@@ -927,7 +1226,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     return (
       <div className="relative w-full h-full">
         <video
-          key={`${currentShow.id}-${isFullscreenMode ? 'fullscreen' : 'normal'}`}
+          key={`${currentShow.id}-${scheduleDrivenPlayback ? playbackStartOffsetSeconds : ''}-${isFullscreenMode ? 'fullscreen' : 'normal'}`}
           ref={videoRef}
           className="w-full h-full object-cover"
           poster={currentShow.thumbnail_url || '/placeholder.svg'}
@@ -949,7 +1248,9 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             objectFit: 'cover',
           }}
           onLoadedMetadata={() => {
-            const seekToTime = videoCurrentTimeRef.current || videoCurrentTime;
+            const seekToTime = scheduleDrivenPlayback
+              ? playbackStartOffsetSeconds
+              : videoCurrentTimeRef.current || videoCurrentTime;
             if (videoRef.current && seekToTime > 0) restoreNativePosition(seekToTime);
           }}
           {...(isIOS && { 'webkit-playsinline': 'true', 'x-webkit-airplay': 'allow' })}
@@ -985,47 +1286,24 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             isMobile && modalAwaitingUserPlay ? (
               <div className="w-full h-full flex items-center justify-center bg-black/60">
                 <button
-                  onClick={() => {
-                    setModalAwaitingUserPlay(false);
-                    const videoId = extractYouTubeID(playingEpisode.video_url || '');
-                    if (videoId) {
-                      try {
-                        if (modalYoutubePlayerRef.current) {
-                          try {
-                            modalYoutubePlayerRef.current.destroy();
-                          } catch {}
-                          modalYoutubePlayerRef.current = null;
-                        }
-                        modalYoutubePlayerRef.current = new window.YT.Player('modal-youtube-player', {
-                          videoId,
-                          playerVars: { autoplay: 1, mute: modalPlayerMuted ? 1 : 0, playsinline: 1 },
-                          events: {
-                            onReady: (ev: any) => {
-                              try {
-                                ev.target.playVideo();
-                              } catch {}
-                              setModalPlayerPlaying(true);
-                            },
-                            onStateChange: (ev: any) => setModalPlayerPlaying(ev.data === 1),
-                          },
-                        });
-                      } catch {}
-                    }
-                  }}
+                  onClick={() => setModalAwaitingUserPlay(false)}
                   className="bg-white/10 hover:bg-white/20 text-white rounded-full p-6"
                 >
                   <Play size={36} />
                 </button>
               </div>
             ) : (
-              <div id="modal-youtube-player" className="w-full h-full" />
+              <div id="modal-youtube-player" key={playingEpisode.id} className="w-full h-full" />
             )
           ) : isVimeo ? (
             <iframe
+              key={playingEpisode.id}
+              ref={modalVimeoRef}
+              id="modal-vimeo-player"
               className="w-full h-full"
               src={`https://player.vimeo.com/video/${extractVimeoID(
                 playingEpisode.video_url!,
-              )}?autoplay=1&muted=${modalPlayerMuted ? 1 : 0}&controls=0`}
+              )}?autoplay=1&muted=${modalPlayerMuted ? 1 : 0}&controls=0&api=1&player_id=modal-vimeo-player`}
               title={playingEpisode.title}
               allow="autoplay; fullscreen"
               allowFullScreen
@@ -1040,6 +1318,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
               playsInline
               onPlay={() => setModalPlayerPlaying(true)}
               onPause={() => setModalPlayerPlaying(false)}
+              onEnded={advanceModalQueue}
               onTimeUpdate={(e) => {
                 const video = e.currentTarget;
                 setModalPlayerProgress(video.currentTime);
@@ -1050,21 +1329,10 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             />
           )}
 
-          {modalAwaitingUserPlay && !isYouTube && (
+          {modalAwaitingUserPlay && !isYouTube && !isVimeo && (
             <div className="absolute inset-0 flex items-center justify-center">
               <button
-                onClick={() => {
-                  setModalAwaitingUserPlay(false);
-                  try {
-                    if (modalVideoRef.current) {
-                      modalVideoRef.current.muted = modalPlayerMuted;
-                      const p = modalVideoRef.current.play();
-                      if (p && typeof (p as any).then === 'function') {
-                        (p as any).then(() => setModalPlayerPlaying(true)).catch(() => setModalPlayerPlaying(false));
-                      }
-                    }
-                  } catch {}
-                }}
+                onClick={() => setModalAwaitingUserPlay(false)}
                 className="bg-white/10 hover:bg-white/20 text-white rounded-full p-6"
               >
                 <Play size={36} />
@@ -1156,6 +1424,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const timeStatus = currentShow
     ? getTimeStatus(currentShow)
     : { text: 'Next up', tone: 'scheduled' as const, icon: Clock };
+  const isPreparingSchedule = scheduleSyncWarning.startsWith('Preparing ');
   const StatusIcon = timeStatus.icon;
   const nextProgramStart = nextProgram?.time_slot_start || nextProgram?.program_scheduled_time || nextProgram?.scheduled_time;
   const formatNextProgramStart = (value?: string) => {
@@ -1204,12 +1473,14 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                 <div className="relative z-10 mx-auto max-w-2xl px-6 py-10 text-center">
                   <PillBadge tone="brand">
                     <Sparkles className="h-3.5 w-3.5" />
-                    Next on NexSq TV
+                    {isPreparingSchedule ? 'Syncing NexSq TV' : 'Next on NexSq TV'}
                   </PillBadge>
                   <h2 className="mt-5 text-2xl font-bold tracking-tight sm:text-4xl">
                     {nextProgram?.show_title || nextProgram?.title || 'No show scheduled'}
                   </h2>
-                  {nextProgram ? (
+                  {isPreparingSchedule ? (
+                    <p className="mt-3 text-sm text-white/75">Preparing the current show’s episode playlist for live schedule playback.</p>
+                  ) : nextProgram ? (
                     <p className="mt-3 text-sm text-white/75">
                       {formatNextProgramStart(nextProgramStart)
                         ? `Starts at ${formatNextProgramStart(nextProgramStart)}`
@@ -1359,6 +1630,12 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             </div>
           </div>
 
+          {scheduleSyncWarning && (
+            <p className="border-t border-amber-500/20 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-700 dark:text-amber-200" role="status">
+              {scheduleSyncWarning}
+            </p>
+          )}
+
           {/* ═══════════════════════════════════════════════════════════════════
               NOW WATCHING · DESCRIPTION · CATCH UP  —  modernized section
               ═══════════════════════════════════════════════════════════════════ */}
@@ -1488,6 +1765,23 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                   <div className="overflow-y-auto max-h-[calc(90vh-80px)]">
                     <div className="p-6">
                       {renderModalPlayer()}
+                      {modalQueueLoading && (
+                        <p className="mb-4 text-sm text-muted-foreground" role="status">
+                          Loading the selected show’s episode queue…
+                        </p>
+                      )}
+                      {modalQueueError && (
+                        <p className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-200" role="alert">
+                          {modalQueueError}
+                        </p>
+                      )}
+                      {playingEpisode && modalQueue.length > 0 && (
+                        <p className="mb-4 text-sm text-muted-foreground" role="status">
+                          {playingEpisode.show_title ? `${playingEpisode.show_title} · ` : ''}
+                          Episode {modalQueueIndex + 1} of {modalQueue.length}
+                          {modalQueueComplete ? ' · You’ve reached the end of this show’s episodes.' : ''}
+                        </p>
+                      )}
 
                       <div className="mb-8">
                         <div className="flex items-center justify-between mb-4">
@@ -1501,6 +1795,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                           showId=""
                           showAllPastShows={true}
                           onEpisodeSelect={playEpisode}
+                          onShowSelect={playShow}
                           playingEpisodeId={playingEpisode?.id}
                         />
                       </div>

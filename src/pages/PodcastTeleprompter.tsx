@@ -95,6 +95,9 @@ const DEFAULT_AUDIO_CLEANUP: PodcastAudioCleanupOptions = {
   declick: false,
   trimSilence: false,
   minimumSilenceSeconds: 1,
+  trimStartSeconds: 0,
+  trimEndSeconds: 0,
+  fadeOutSeconds: 0,
 };
 const introPreviewBackgrounds = [
   'linear-gradient(135deg, #062116, #07110f 58%, #030605)',
@@ -135,6 +138,16 @@ function getSavedPodcastRenderSettings(value: unknown): SavedPodcastRenderSettin
     || !Number.isFinite(cleanup.minimumSilenceSeconds)
     || cleanup.minimumSilenceSeconds < 0.5
     || cleanup.minimumSilenceSeconds > 2.5
+    || typeof cleanup.trimStartSeconds !== 'number'
+    || !Number.isFinite(cleanup.trimStartSeconds)
+    || cleanup.trimStartSeconds < 0
+    || typeof cleanup.trimEndSeconds !== 'number'
+    || !Number.isFinite(cleanup.trimEndSeconds)
+    || cleanup.trimEndSeconds < 0
+    || typeof cleanup.fadeOutSeconds !== 'number'
+    || !Number.isFinite(cleanup.fadeOutSeconds)
+    || cleanup.fadeOutSeconds < 0
+    || cleanup.fadeOutSeconds > 5
   ) return null;
 
   return {
@@ -146,6 +159,9 @@ function getSavedPodcastRenderSettings(value: unknown): SavedPodcastRenderSettin
       declick: cleanup.declick,
       trimSilence: cleanup.trimSilence,
       minimumSilenceSeconds: cleanup.minimumSilenceSeconds,
+      trimStartSeconds: cleanup.trimStartSeconds,
+      trimEndSeconds: cleanup.trimEndSeconds,
+      fadeOutSeconds: cleanup.fadeOutSeconds,
     },
     backgroundAudioUrl: settings.backgroundAudioUrl,
     backgroundAudioVolume: settings.backgroundAudioVolume,
@@ -302,6 +318,7 @@ export default function PodcastTeleprompter() {
   const [scrollSpeed, setScrollSpeed] = useState(18);
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordingMediaDuration, setRecordingMediaDuration] = useState(0);
   const [recordingUrl, setRecordingUrl] = useState('');
   const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
   const [microphoneDevices, setMicrophoneDevices] = useState<MediaDeviceInfo[]>([]);
@@ -387,7 +404,18 @@ export default function PodcastTeleprompter() {
     || audioCleanup.declip
     || audioCleanup.declick
     || audioCleanup.trimSilence
+    || audioCleanup.trimStartSeconds > 0
+    || audioCleanup.trimEndSeconds > 0
+    || audioCleanup.fadeOutSeconds > 0
     || Boolean(backgroundAudioUrl);
+  const recordingDurationForTrim = recordingMediaDuration > 0 ? recordingMediaDuration : recordingSeconds;
+  const keptRecordingDuration = Math.max(
+    0,
+    recordingDurationForTrim - audioCleanup.trimStartSeconds - audioCleanup.trimEndSeconds,
+  );
+  const maximumTrimStart = Math.max(0, recordingDurationForTrim - audioCleanup.trimEndSeconds - 0.1);
+  const maximumTrimEnd = Math.max(0, recordingDurationForTrim - audioCleanup.trimStartSeconds - 0.1);
+  const maximumFadeOut = Math.max(0, Math.min(5, keptRecordingDuration));
 
   const updateHandoffBackupMetadata = useCallback((updates: Partial<Pick<
     DraftPayload,
@@ -992,6 +1020,7 @@ export default function PodcastTeleprompter() {
   useEffect(() => {
     const video = previewRef.current;
     if (!video) return;
+    setRecordingMediaDuration(0);
     if (recordingUrl) {
       video.srcObject = null;
       video.src = recordingUrl;
@@ -1458,6 +1487,7 @@ export default function PodcastTeleprompter() {
       setRenderProgress(0);
       applyPreviewAudioPreset('original');
       setRecordingUrl('');
+      setRecordingMediaDuration(0);
       recordingSecondsRef.current = 0;
       setRecordingSeconds(0);
       recorder.ondataavailable = (event) => {
@@ -1631,6 +1661,9 @@ export default function PodcastTeleprompter() {
       || selectedAudioCleanup.declip
       || selectedAudioCleanup.declick
       || selectedAudioCleanup.trimSilence
+      || selectedAudioCleanup.trimStartSeconds > 0
+      || selectedAudioCleanup.trimEndSeconds > 0
+      || selectedAudioCleanup.fadeOutSeconds > 0
       || Boolean(selectedBackgroundAudioUrl);
     const shouldRenderReel = selectedAudioPreset !== 'original' || selectedVideoPreset !== 'original';
     if (!shouldCleanAudio && !shouldRenderReel) {
@@ -1930,6 +1963,12 @@ export default function PodcastTeleprompter() {
               autoPlay
               playsInline
               className={`h-full w-full object-cover ${activeGuests.length > 0 && !recordingUrl ? 'invisible' : ''}`}
+              onLoadedMetadata={(event) => {
+                const duration = event.currentTarget.duration;
+                if (recordingUrl && Number.isFinite(duration) && duration > 0) {
+                  setRecordingMediaDuration(duration);
+                }
+              }}
               onError={(event) => {
                 if (!recordingUrl) return;
                 const mediaErrorCode = event.currentTarget.error?.code;
@@ -2177,6 +2216,66 @@ export default function PodcastTeleprompter() {
                 disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
                 accent="emerald"
               />
+              <fieldset className="space-y-3 rounded-md border border-white/10 p-2.5">
+                <legend className="px-1 text-[11px] font-medium text-white/75">Trim & fade</legend>
+                <p className="text-[10px] leading-relaxed text-white/50">
+                  Trim values remove time from the beginning or end of both video and audio. A fade softens the final audio, including background room noise.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="space-y-1 text-[10px] text-white/65">
+                    Trim from beginning (seconds)
+                    <input
+                      type="number"
+                      min="0"
+                      max={maximumTrimStart.toFixed(1)}
+                      step="0.1"
+                      value={audioCleanup.trimStartSeconds}
+                      aria-label="Trim from beginning in seconds"
+                      disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
+                      onChange={(event) => handleAudioCleanupChange(
+                        'trimStartSeconds',
+                        Math.min(maximumTrimStart, Math.max(0, Number(event.target.value) || 0)),
+                      )}
+                      className="h-8 w-full rounded border border-white/10 bg-[#111715] px-2 text-white"
+                    />
+                  </label>
+                  <label className="space-y-1 text-[10px] text-white/65">
+                    Trim from end (seconds)
+                    <input
+                      type="number"
+                      min="0"
+                      max={maximumTrimEnd.toFixed(1)}
+                      step="0.1"
+                      value={audioCleanup.trimEndSeconds}
+                      aria-label="Trim from end in seconds"
+                      disabled={isRenderingEffects || isSavingRecording || isPersistingRecording}
+                      onChange={(event) => handleAudioCleanupChange(
+                        'trimEndSeconds',
+                        Math.min(maximumTrimEnd, Math.max(0, Number(event.target.value) || 0)),
+                      )}
+                      className="h-8 w-full rounded border border-white/10 bg-[#111715] px-2 text-white"
+                    />
+                  </label>
+                </div>
+                <p className="text-[10px] tabular-nums text-white/45">
+                  Remaining: {formatTime(audioCleanup.trimStartSeconds)}–{formatTime(Math.max(audioCleanup.trimStartSeconds, recordingDurationForTrim - audioCleanup.trimEndSeconds))} ({keptRecordingDuration.toFixed(1)}s)
+                </p>
+                <label className="flex items-center gap-3 text-[10px] text-white/65">
+                  Fade out last audio
+                  <input
+                    type="range"
+                    min="0"
+                    max={maximumFadeOut}
+                    step="0.25"
+                    value={Math.min(audioCleanup.fadeOutSeconds, maximumFadeOut)}
+                    aria-label="Audio fade-out duration"
+                    disabled={isRenderingEffects || isSavingRecording || isPersistingRecording || maximumFadeOut === 0}
+                    onChange={(event) => handleAudioCleanupChange('fadeOutSeconds', Number(event.target.value))}
+                    className="min-w-0 flex-1 accent-emerald-400"
+                  />
+                  <span className="w-10 text-right tabular-nums">{Math.min(audioCleanup.fadeOutSeconds, maximumFadeOut).toFixed(2)}s</span>
+                </label>
+              </fieldset>
               <fieldset className="space-y-2 rounded-md border border-white/10 p-2.5">
                 <legend className="px-1 text-[11px] font-medium text-white/75">Background soundtrack</legend>
                 <label className="flex items-center gap-2 text-[11px] text-white/70">

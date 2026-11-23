@@ -19,14 +19,17 @@ export function useLiveChatMessages(showId: string | undefined) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (!showId) return;
-    
-    let channel: any;
+    if (!showId) {
+      setMessages([]);
+      setIsLoading(false);
+      return;
+    }
+
+    let active = true;
+    let channel: ReturnType<typeof supabase.channel> | undefined;
     setIsLoading(true);
     
     const fetchMessages = async () => {
-      console.log('useLiveChatMessages: Fetching messages for show:', showId);
-      
       try {
         const { data, error } = await supabase
           .from('live_chat')
@@ -36,15 +39,15 @@ export function useLiveChatMessages(showId: string | undefined) {
           .limit(100);
 
         if (error) {
-          console.error('useLiveChatMessages: Error fetching messages:', error);
+          throw error;
         } else {
-          console.log('useLiveChatMessages: Fetched messages:', data);
-          setMessages(data || []);
+          if (active) setMessages(data || []);
         }
       } catch (err) {
-        console.error('useLiveChatMessages: Error in fetchMessages:', err);
+        if (active) console.error('useLiveChatMessages: Error in fetchMessages:', err);
+      } finally {
+        if (active) setIsLoading(false);
       }
-      setIsLoading(false);
     };
 
     fetchMessages();
@@ -52,15 +55,19 @@ export function useLiveChatMessages(showId: string | undefined) {
     // Subscribe to real-time changes
     try {
       channel = supabase
-        .channel(`live_chat_${showId}`)
+        .channel(`live_chat_messages_${showId}`)
         .on('postgres_changes', {
           event: 'INSERT',
           schema: 'public',
           table: 'live_chat',
           filter: `show_id=eq.${showId}`,
         }, (payload) => {
-          console.log('useLiveChatMessages: New message received:', payload.new);
-          setMessages((prev) => [...prev.slice(-99), payload.new as ChatMessage]);
+          if (!active) return;
+          setMessages((prev) => {
+            const incoming = payload.new as ChatMessage;
+            if (prev.some((message) => message.id === incoming.id)) return prev;
+            return [...prev.slice(-99), incoming];
+          });
         })
         .subscribe();
     } catch (err) {
@@ -68,10 +75,10 @@ export function useLiveChatMessages(showId: string | undefined) {
     }
 
     return () => {
+      active = false;
       try {
         if (channel) {
-          // Remove only this subscription channel to avoid cancelling other listeners
-          supabase.removeChannel(channel);
+          void supabase.removeChannel(channel);
         }
       } catch (err) {
         console.error('useLiveChatMessages: Error removing channel:', err);

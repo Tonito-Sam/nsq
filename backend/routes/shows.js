@@ -23,6 +23,25 @@ const sortMap = {
   shortest: 'duration.asc',
 };
 
+async function fetchPodcastBrandingMap(SUPABASE_URL, SERVICE_ROLE, showIds) {
+  if (!showIds.length) return {};
+  const ids = showIds.map(id => encodeURIComponent(id)).join(',');
+  const url = `${SUPABASE_URL}/rest/v1/studio_podcast_branding?show_id=in.(${ids})&select=show_id,cover_url,logo_url`;
+  const response = await fetchFn(url, {
+    method: 'GET',
+    headers: { apikey: SERVICE_ROLE, Authorization: `Bearer ${SERVICE_ROLE}` },
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`podcast branding read failed with status ${response.status}: ${text}`);
+  }
+  const branding = JSON.parse(text || '[]');
+  return branding.reduce((map, item) => {
+    map[item.show_id] = item;
+    return map;
+  }, {});
+}
+
 // GET /api/shows/past/all?page=&limit=&sort=&filter=&search=
 router.get('/past/all', async (req, res) => {
   try {
@@ -91,6 +110,7 @@ router.get('/past/all', async (req, res) => {
     // Collect show ids to fetch show metadata
     const showIds = Array.from(new Set(episodes.map(e => e.show_id).filter(Boolean)));
     let showsMap = {};
+    let podcastBrandingMap = {};
     if (showIds.length > 0) {
       const ids = showIds.map(id => encodeURIComponent(id)).join(',');
       // Include video_url so we can fall back to the show's video when episode has none
@@ -104,31 +124,40 @@ router.get('/past/all', async (req, res) => {
         const shows = JSON.parse(stext || '[]');
         showsMap = shows.reduce((m, s) => { m[s.id] = s; return m; }, {});
       }
+      podcastBrandingMap = await fetchPodcastBrandingMap(SUPABASE_URL, SERVICE_ROLE, showIds);
     }
 
     // Map episodes to frontend shape and attach show metadata
-    const mapped = episodes.map(ep => ({
-      id: ep.id,
-      show_id: ep.show_id,
-      show_title: showsMap[ep.show_id]?.title || null,
-      show_thumbnail: showsMap[ep.show_id]?.thumbnail_url || null,
-      title: ep.title || ep.name || '',
-      description: ep.description || null,
-      duration: ep.duration || null,
-      thumbnail_url: ep.thumbnail_url || ep.cover || null,
-      // Prefer episode.video_url, then episode.source_url, then fall back to the show's video_url
-      video_url: ep.video_url || ep.source_url || showsMap[ep.show_id]?.video_url || null,
-      views: ep.views || 0,
-      scheduled_time: ep.scheduled_time || null,
-      air_time: ep.air_time || null,
-      published_at: ep.published_at || ep.created_at || null,
-      created_at: ep.created_at || new Date().toISOString(),
-      is_live: !!ep.is_live,
-      is_active: !!ep.is_active,
-      tags: ep.tags || null,
-      category: ep.category || null,
-      show_category: showsMap[ep.show_id]?.category || null,
-    }));
+    const mapped = episodes.map(ep => {
+      const podcastBranding = podcastBrandingMap[ep.show_id];
+      return {
+        id: ep.id,
+        show_id: ep.show_id,
+        show_title: showsMap[ep.show_id]?.title || null,
+        show_thumbnail: showsMap[ep.show_id]?.thumbnail_url || null,
+        title: ep.title || ep.name || '',
+        description: ep.description || null,
+        duration: ep.duration || null,
+        thumbnail_url: podcastBranding
+          ? podcastBranding.cover_url || null
+          : ep.thumbnail_url || ep.cover || null,
+        podcast_cover_url: podcastBranding?.cover_url || null,
+        podcast_logo_url: podcastBranding?.logo_url || null,
+        is_podcast: Boolean(podcastBranding),
+        // Prefer episode.video_url, then episode.source_url, then fall back to the show's video_url
+        video_url: ep.video_url || ep.source_url || showsMap[ep.show_id]?.video_url || null,
+        views: ep.views || 0,
+        scheduled_time: ep.scheduled_time || null,
+        air_time: ep.air_time || null,
+        published_at: ep.published_at || ep.created_at || null,
+        created_at: ep.created_at || new Date().toISOString(),
+        is_live: !!ep.is_live,
+        is_active: !!ep.is_active,
+        tags: ep.tags || null,
+        category: ep.category || null,
+        show_category: showsMap[ep.show_id]?.category || null,
+      };
+    });
 
     // Simple hasMore estimate: if we returned exactly limit items, assume there may be more
     const hasMore = mapped.length === limit;
@@ -185,28 +214,37 @@ router.get('/:showId/episodes', async (req, res) => {
       showMeta = arr[0] || null;
     }
 
-    const mapped = episodes.map(ep => ({
-      id: ep.id,
-      show_id: ep.show_id,
-      show_title: showMeta?.title || null,
-      show_thumbnail: showMeta?.thumbnail_url || null,
-      title: ep.title || ep.name || '',
-      description: ep.description || null,
-      duration: ep.duration || null,
-      thumbnail_url: ep.thumbnail_url || ep.cover || null,
-      // Use episode video_url first, then source_url, then show's video_url
-      video_url: ep.video_url || ep.source_url || showMeta?.video_url || null,
-      views: ep.views || 0,
-      scheduled_time: ep.scheduled_time || null,
-      air_time: ep.air_time || null,
-      published_at: ep.published_at || ep.created_at || null,
-      created_at: ep.created_at || new Date().toISOString(),
-      is_live: !!ep.is_live,
-      is_active: !!ep.is_active,
-      tags: ep.tags || null,
-      category: ep.category || null,
-      show_category: showMeta?.category || null,
-    }));
+    const podcastBrandingMap = await fetchPodcastBrandingMap(SUPABASE_URL, SERVICE_ROLE, [showId]);
+    const mapped = episodes.map(ep => {
+      const podcastBranding = podcastBrandingMap[ep.show_id];
+      return {
+        id: ep.id,
+        show_id: ep.show_id,
+        show_title: showMeta?.title || null,
+        show_thumbnail: showMeta?.thumbnail_url || null,
+        title: ep.title || ep.name || '',
+        description: ep.description || null,
+        duration: ep.duration || null,
+        thumbnail_url: podcastBranding
+          ? podcastBranding.cover_url || null
+          : ep.thumbnail_url || ep.cover || null,
+        podcast_cover_url: podcastBranding?.cover_url || null,
+        podcast_logo_url: podcastBranding?.logo_url || null,
+        is_podcast: Boolean(podcastBranding),
+        // Use episode video_url first, then source_url, then show's video_url
+        video_url: ep.video_url || ep.source_url || showMeta?.video_url || null,
+        views: ep.views || 0,
+        scheduled_time: ep.scheduled_time || null,
+        air_time: ep.air_time || null,
+        published_at: ep.published_at || ep.created_at || null,
+        created_at: ep.created_at || new Date().toISOString(),
+        is_live: !!ep.is_live,
+        is_active: !!ep.is_active,
+        tags: ep.tags || null,
+        category: ep.category || null,
+        show_category: showMeta?.category || null,
+      };
+    });
 
     const hasMore = mapped.length === limit;
     return res.json({ episodes: mapped, hasMore });

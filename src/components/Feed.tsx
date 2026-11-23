@@ -14,7 +14,7 @@
  * See lines ~750-850 for the infinite scroll implementation.
  */
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import apiUrl from '@/lib/api';
 import { useInfiniteQuery, useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
@@ -32,6 +32,14 @@ import { Skeleton } from '@/components/ui/skeleton';
 import FeedSkeleton from '@/components/skeletons/FeedSkeleton';
 import { groupPlatformCelebrations } from '@/lib/platformCelebrationGroups';
 import type { PlatformCelebrationSlide, PlatformSpecialDayRelation } from '@/lib/platformCelebrationGroups';
+import {
+  getActiveLinearTvOccurrence,
+  getLinearTvPlaylistPosition,
+  getMostRecentLinearTvOccurrence,
+  getNextLinearTvOccurrence,
+  TV_SCHEDULE_TIME_ZONE,
+} from '@/utils/linearTvSchedule';
+import { getVideoDurationSeconds } from '@/utils/videoDuration';
 
 interface Post {
   id: string;
@@ -165,6 +173,13 @@ const Feed: React.FC = () => {
   const [currentShowIndex, setCurrentShowIndex] = useState(0);
   const [scheduleTransition, setScheduleTransition] = useState(false);
   const [nextProgramIndex, setNextProgramIndex] = useState<number | null>(null);
+  const [playbackStartOffsetSeconds, setPlaybackStartOffsetSeconds] = useState(0);
+  const [scheduleSyncWarning, setScheduleSyncWarning] = useState('');
+  const [episodeDurationOverrides, setEpisodeDurationOverrides] = useState<Record<string, number>>({});
+  const [episodeDurationProbeResults, setEpisodeDurationProbeResults] = useState<
+    Record<string, 'loading' | 'failed'>
+  >({});
+  const activeScheduleOccurrenceRef = useRef<string | null>(null);
   const [showCommentsOverlay, setShowCommentsOverlay] = useState(false);
   const [showReelsOverlay, setShowReelsOverlay] = useState(false);
   const [selectedReel, setSelectedReel] = useState<Reel | null>(null);
@@ -688,7 +703,7 @@ const Feed: React.FC = () => {
             description: episode.description || show.description,
             video_url: episode.video_url,
             thumbnail_url: episode.thumbnail_url || show.thumbnail_url,
-            duration: episode.duration || show.duration,
+            duration: Number(episode.duration) || 0,
             category: show.category,
             time_slot_start: show.time_slot_start,
             time_slot_end: show.time_slot_end,
@@ -706,6 +721,7 @@ const Feed: React.FC = () => {
         return videoUrl ? [{
           ...show,
           video_url: videoUrl,
+          duration: Number(show.duration) > 0 ? Number(show.duration) * 60 : 0,
           show_id: show.id,
           show_title: show.title,
           program_scheduled_time: show.scheduled_time,
@@ -717,73 +733,173 @@ const Feed: React.FC = () => {
     gcTime: 10 * 60 * 1000,
   });
 
+  const tvPlaylist = useMemo(
+    () => studioShows.map((episode) => ({
+      ...episode,
+      duration: episodeDurationOverrides[String(episode.id)] || Number(episode.duration) || 0,
+    })),
+    [studioShows, episodeDurationOverrides],
+  );
+
   useEffect(() => {
     if (!studioShows.length) {
       setScheduleTransition(false);
       setNextProgramIndex(null);
+      setScheduleSyncWarning('');
+      setPlaybackStartOffsetSeconds(0);
+      activeScheduleOccurrenceRef.current = null;
       return;
     }
 
     const selectScheduledProgram = () => {
       const now = new Date();
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      const today = now.toDateString();
-      const dayName = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
-      const parseDays = (value: unknown): string[] => {
-        if (Array.isArray(value)) {
-          return value.map((day) => String(day).trim().toLowerCase()).filter(Boolean);
-        }
-        if (typeof value !== 'string' || !value.trim()) return [];
-        try {
-          const parsed = JSON.parse(value);
-          if (Array.isArray(parsed)) {
-            return parsed.map((day) => String(day).trim().toLowerCase()).filter(Boolean);
-          }
-        } catch {}
-        return value.split(',').map((day) => day.trim().toLowerCase()).filter(Boolean);
-      };
-      const programs = studioShows.flatMap((program: any, index: number) => {
-        const days = parseDays(program.approved_days?.length ? program.approved_days : program.days_of_week);
-        const pattern = String(program.schedule_pattern || '').toLowerCase();
-        const startValue = program.time_slot_start || program.program_scheduled_time;
-        const endValue = program.time_slot_end || program.program_end_time;
-        const parseMinutes = (value: string) => {
-          const timeMatch = value.match(/^(\d{1,2}):(\d{2})/);
-          if (timeMatch) return Number(timeMatch[1]) * 60 + Number(timeMatch[2]);
-          const date = new Date(value);
-          return Number.isNaN(date.getTime()) ? null : date.getHours() * 60 + date.getMinutes();
-        };
-        const start = typeof startValue === 'string' ? parseMinutes(startValue) : null;
-        const end = typeof endValue === 'string' ? parseMinutes(endValue) : null;
-        if (start === null || end === null) return [];
-
-        const recurring = pattern === 'daily' || days.includes(dayName);
-        const scheduledDate = program.program_scheduled_time
-          ? new Date(program.program_scheduled_time)
-          : null;
-        const oneOff = !pattern && days.length === 0 && scheduledDate &&
-          !Number.isNaN(scheduledDate.getTime()) && scheduledDate.toDateString() === today;
-        if (!recurring && !oneOff) return [];
-
-        const normalizedEnd = end <= start ? end + 24 * 60 : end;
-        const normalizedNow = currentMinutes < start ? currentMinutes + 24 * 60 : currentMinutes;
-        return [{ index, start, end: normalizedEnd, active: normalizedNow >= start && normalizedNow < normalizedEnd }];
+      const uniquePrograms = new Map<string, (typeof studioShows)[number]>();
+      studioShows.forEach((episode) => {
+        const programId = String(episode.show_id || episode.id);
+        if (!uniquePrograms.has(programId)) uniquePrograms.set(programId, episode);
       });
+      const schedules = Array.from(uniquePrograms.entries()).map(([id, program]) => ({
+        id,
+        schedulePattern: program.schedule_pattern,
+        daysOfWeek: program.approved_days?.length ? program.approved_days : program.days_of_week,
+        timeSlotStart: program.time_slot_start || program.program_scheduled_time,
+        timeSlotEnd: program.time_slot_end || program.program_end_time,
+        scheduledTime: program.program_scheduled_time,
+        endTime: program.program_end_time,
+      }));
+      const activeOccurrence = getActiveLinearTvOccurrence(schedules, now, TV_SCHEDULE_TIME_ZONE);
+      const playbackOccurrence = activeOccurrence
+        || getMostRecentLinearTvOccurrence(schedules, now, TV_SCHEDULE_TIME_ZONE);
+      const upcomingOccurrence = getNextLinearTvOccurrence(schedules, now, TV_SCHEDULE_TIME_ZONE);
+      const upcomingIndex = upcomingOccurrence
+        ? studioShows.findIndex((episode) => String(episode.show_id || episode.id) === upcomingOccurrence.schedule.id)
+        : -1;
+      setNextProgramIndex(upcomingIndex >= 0 ? upcomingIndex : null);
 
-      const currentProgram = programs.find((program) => program.active);
-      const nextProgram = programs
-        .filter((program) => program.start > currentMinutes)
-        .sort((first, second) => first.start - second.start)[0];
-      const nextIndex = currentProgram?.index ?? nextProgram?.index ?? 0;
-      setNextProgramIndex(currentProgram ? null : nextProgram?.index ?? null);
-      setCurrentShowIndex((currentIndex) => currentIndex === nextIndex ? currentIndex : nextIndex);
-      setScheduleTransition(!currentProgram);
+      if (!playbackOccurrence) {
+        activeScheduleOccurrenceRef.current = null;
+        setScheduleSyncWarning('');
+        setPlaybackStartOffsetSeconds(0);
+        if (upcomingIndex >= 0) setCurrentShowIndex(upcomingIndex);
+        setScheduleTransition(true);
+        return;
+      }
+
+      const programEpisodes = studioShows.filter(
+        (episode) => String(episode.show_id || episode.id) === playbackOccurrence.schedule.id,
+      );
+      if (!programEpisodes.length) {
+        activeScheduleOccurrenceRef.current = null;
+        setScheduleTransition(true);
+        setScheduleSyncWarning('This scheduled show has no playable episodes yet.');
+        return;
+      }
+
+      const activeProgramIndex = studioShows.findIndex(
+        (episode) => String(episode.show_id || episode.id) === playbackOccurrence.schedule.id,
+      );
+      const missingDurations = programEpisodes.filter((episode) => {
+        const episodeId = String(episode.id);
+        const videoUrl = typeof episode.video_url === 'string' ? episode.video_url : '';
+        const usesExternalPlayer = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be|vimeo\.com)\//i.test(videoUrl);
+        return Boolean(videoUrl)
+          && episode.is_live !== true
+          && !usesExternalPlayer
+          && !episodeDurationOverrides[episodeId]
+          && !episodeDurationProbeResults[episodeId];
+      });
+      if (missingDurations.length) {
+        if (activeProgramIndex >= 0) setNextProgramIndex(activeProgramIndex);
+        setScheduleTransition(true);
+        setScheduleSyncWarning('Preparing this playlist for schedule-synced playback…');
+        setEpisodeDurationProbeResults((current) => ({
+          ...current,
+          ...Object.fromEntries(missingDurations.map((episode): [string, 'loading'] => [
+            String(episode.id),
+            'loading',
+          ])),
+        }));
+        void Promise.all(missingDurations.map(async (episode) => {
+          const videoUrl = String(episode.video_url || '');
+          try {
+            const duration = await getVideoDurationSeconds(videoUrl);
+            return { episodeId: String(episode.id), duration, error: null };
+          } catch (error) {
+            console.error('[Feed] Could not read a scheduled episode duration:', error);
+            return {
+              episodeId: String(episode.id),
+              duration: 0,
+              error: error instanceof Error ? error.message : 'Could not read the episode duration.',
+            };
+          }
+        })).then((results) => {
+          const resolvedDurations: Record<string, number> = {};
+          const failedDurations: Record<string, 'failed'> = {};
+          results.forEach((result) => {
+            if (result.duration > 0) resolvedDurations[result.episodeId] = result.duration;
+            else failedDurations[result.episodeId] = 'failed';
+          });
+          if (Object.keys(resolvedDurations).length) {
+            setEpisodeDurationOverrides((current) => ({ ...current, ...resolvedDurations }));
+          }
+          if (Object.keys(failedDurations).length) {
+            setEpisodeDurationProbeResults((current) => ({ ...current, ...failedDurations }));
+          } else {
+            setEpisodeDurationProbeResults((current) => {
+              const next = { ...current };
+              results.forEach(({ episodeId }) => delete next[episodeId]);
+              return next;
+            });
+          }
+        });
+        return;
+      }
+
+      const unresolvedDurations = programEpisodes.some((episode) => {
+        const episodeId = String(episode.id);
+        return episodeDurationProbeResults[episodeId] === 'loading';
+      });
+      if (unresolvedDurations) {
+        if (activeProgramIndex >= 0) setNextProgramIndex(activeProgramIndex);
+        setScheduleTransition(true);
+        setScheduleSyncWarning('Preparing this playlist for schedule-synced playback…');
+        return;
+      }
+
+      if (activeScheduleOccurrenceRef.current !== playbackOccurrence.occurrenceKey) {
+        const isLiveProgram = programEpisodes.some((episode) => episode.is_live === true);
+        const position = isLiveProgram
+          ? { episodeIndex: 0, offsetSeconds: 0 }
+          : getLinearTvPlaylistPosition(
+            programEpisodes.map((episode) =>
+              episodeDurationOverrides[String(episode.id)] || Number(episode.duration) || 0
+            ),
+            playbackOccurrence.elapsedSeconds,
+          );
+        const hasUnverifiedDuration = programEpisodes.some(
+          (episode) => episodeDurationProbeResults[String(episode.id)] === 'failed',
+        );
+        const selectedEpisode = programEpisodes[position?.episodeIndex ?? 0];
+        const selectedIndex = studioShows.indexOf(selectedEpisode);
+        activeScheduleOccurrenceRef.current = playbackOccurrence.occurrenceKey;
+        setCurrentShowIndex(selectedIndex);
+        setPlaybackStartOffsetSeconds(position?.offsetSeconds || 0);
+        setScheduleSyncWarning(position
+          ? isLiveProgram
+            ? ''
+            : hasUnverifiedDuration
+              ? 'Some episode durations could not be verified; schedule alignment may be approximate.'
+              : ''
+          : 'Episode lengths are unknown, so playback starts at the first episode and advances through the playlist as each one ends.');
+      }
+
+      setScheduleTransition(false);
     };
 
     selectScheduledProgram();
-    const intervalId = window.setInterval(selectScheduledProgram, 30_000);
+    const intervalId = window.setInterval(selectScheduledProgram, 1000);
     return () => window.clearInterval(intervalId);
-  }, [studioShows]);
+  }, [studioShows, episodeDurationOverrides, episodeDurationProbeResults]);
 
   // Get all posts from pages
   const loadedPosts: Post[] = (postsData as any)?.pages?.flatMap((page: any) => page.posts) || [];
@@ -1410,9 +1526,10 @@ const Feed: React.FC = () => {
     setShowCommentsOverlay(prev => !prev);
   };
 
-  const handleCurrentShowChange = (index: number) => {
+  const handleCurrentShowChange = useCallback((index: number) => {
     setCurrentShowIndex(index);
-  };
+    setPlaybackStartOffsetSeconds(0);
+  }, []);
 
   // Loading state
   const renderVideoContainerSkeleton = () => (
@@ -1533,11 +1650,14 @@ const Feed: React.FC = () => {
 
       <div className="relative">
         <VideoContainer 
-          shows={studioShows} 
-          selectedShowId={studioShows[currentShowIndex]?.id}
+          shows={tvPlaylist}
+          selectedShowId={tvPlaylist[currentShowIndex]?.id}
           currentShowIndex={currentShowIndex}
           scheduleTransition={scheduleTransition}
-          nextProgram={nextProgramIndex === null ? undefined : studioShows[nextProgramIndex]}
+          scheduleDrivenPlayback
+          playbackStartOffsetSeconds={playbackStartOffsetSeconds}
+          scheduleSyncWarning={scheduleSyncWarning}
+          nextProgram={nextProgramIndex === null ? undefined : tvPlaylist[nextProgramIndex]}
           onCurrentShowChange={handleCurrentShowChange}
           onCommentClick={handleCommentClick}
         />
@@ -1562,7 +1682,11 @@ const Feed: React.FC = () => {
         `}
         style={{ height: '70vh' }}
       >
-        <LiveChat />
+        <LiveChat
+          showId={tvPlaylist[currentShowIndex]?.show_id || tvPlaylist[currentShowIndex]?.id}
+          showTitle={tvPlaylist[currentShowIndex]?.show_title || tvPlaylist[currentShowIndex]?.title}
+          showDescription={tvPlaylist[currentShowIndex]?.description}
+        />
       </div>
 
       {reelsLoading && (

@@ -14,12 +14,13 @@ cd backend
 npm install
 ```
 
-- Run locally:
+- Run locally with the main backend:
 
 ```powershell
-# Run proxy on port 3001
-node ai-photo-studio-proxy.js
+npm run dev
 ```
+
+The main backend mounts the proxy at `/api/ai-photo-studio` on its configured port. The proxy can still be run as a standalone service with `node ai-photo-studio-proxy.js`; set `PORT` if it would otherwise conflict with the main backend.
 
 Environment variables
 

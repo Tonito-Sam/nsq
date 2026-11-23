@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react';
-import { Check, ImagePlus, LayoutDashboard, Loader2, Palette, Search, Save, Send, Sparkles, Trash2, Tv, Upload, UserPlus, Users, Video, type LucideIcon } from 'lucide-react';
+import { Check, Eye, EyeOff, ImagePlus, LayoutDashboard, Loader2, Palette, Search, Save, Send, Sparkles, Trash2, Tv, Upload, UserPlus, Users, Video, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -46,18 +46,27 @@ interface ShowEpisode {
   video_url: string | null;
   thumbnail_url: string | null;
   created_at: string;
+  is_active: boolean;
 }
 
 type Section = 'overview' | 'episodes' | 'branding' | 'managers';
 type ArtworkField = 'thumbnail_url' | 'logo_url' | 'banner_url';
 
-const readVideoDimensions = (file: File) => new Promise<{ width: number; height: number }>((resolve, reject) => {
+const readVideoMetadata = (file: File) => new Promise<{ width: number; height: number; durationSeconds: number }>((resolve, reject) => {
   const url = URL.createObjectURL(file);
   const video = document.createElement('video');
   video.preload = 'metadata';
   video.onloadedmetadata = () => {
     URL.revokeObjectURL(url);
-    resolve({ width: video.videoWidth, height: video.videoHeight });
+    if (!Number.isFinite(video.duration) || video.duration < 1 || video.duration > 21600) {
+      reject(new Error('Episode duration must be between 1 second and 6 hours.'));
+      return;
+    }
+    resolve({
+      width: video.videoWidth,
+      height: video.videoHeight,
+      durationSeconds: Math.round(video.duration),
+    });
   };
   video.onerror = () => {
     URL.revokeObjectURL(url);
@@ -274,7 +283,7 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
 
   const refreshEpisodes = async () => {
     const { data, error } = await (supabase.from('studio_episodes') as any)
-      .select('id, title, video_url, thumbnail_url, created_at')
+      .select('id, title, video_url, thumbnail_url, created_at, is_active')
       .eq('show_id', showId)
       .not('video_url', 'like', 'podcast-private://%')
       .order('created_at', { ascending: false });
@@ -293,7 +302,7 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
           .maybeSingle(),
         supabase.rpc('get_studio_show_managers' as any, { p_show_id: showId }),
         (supabase.from('studio_episodes') as any)
-          .select('id, title, video_url, thumbnail_url, created_at')
+          .select('id, title, video_url, thumbnail_url, created_at, is_active')
           .eq('show_id', showId)
           .not('video_url', 'like', 'podcast-private://%')
           .order('created_at', { ascending: false }),
@@ -441,8 +450,8 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
     if (!episodeVideo || uploading) return;
     setUploading(true);
     try {
-      const dimensions = await readVideoDimensions(episodeVideo);
-      if (dimensions.width <= dimensions.height) {
+      const metadata = await readVideoMetadata(episodeVideo);
+      if (metadata.width <= metadata.height) {
         throw new Error('TV episode videos must be landscape. Choose a video recorded or exported in landscape orientation.');
       }
       const videoUrl = await uploadAsset(episodeVideo, 'episodes');
@@ -452,6 +461,7 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
         p_title: episodeTitle.trim(),
         p_description: episodeDescription.trim(),
         p_video_url: videoUrl,
+        p_duration_seconds: metadata.durationSeconds,
         p_thumbnail_url: thumbnailUrl,
       });
       if (error) throw error;
@@ -497,14 +507,20 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
     }
   };
 
-  const removeEpisode = async (episodeId: string) => {
-    const { error } = await supabase.rpc('delete_studio_show_episode' as any, { p_episode_id: episodeId });
-    if (error) toast({ title: 'Could not remove episode', description: error.message, variant: 'destructive' });
-    else {
-      await refreshEpisodes();
-      setEpisodeListVersion((value) => value + 1);
-      toast({ title: 'Episode removed' });
+  const setEpisodePublished = async (episode: ShowEpisode) => {
+    const isActive = !episode.is_active;
+    if (!isActive && !window.confirm(`Unpublish "${episode.title}"? It will be hidden from viewers but not deleted.`)) return;
+    const { error } = await supabase.rpc('set_studio_show_episode_active', {
+      p_episode_id: episode.id,
+      p_is_active: isActive,
+    });
+    if (error) {
+      toast({ title: `Could not ${isActive ? 'publish' : 'unpublish'} episode`, description: error.message, variant: 'destructive' });
+      return;
     }
+    await refreshEpisodes();
+    setEpisodeListVersion((value) => value + 1);
+    toast({ title: isActive ? 'Episode published' : 'Episode unpublished' });
   };
 
   const updateArtworkFile = (field: ArtworkField, file: File) => {
@@ -517,8 +533,8 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
 
   const validateEpisodeVideo = async (file: File) => {
     try {
-      const dimensions = await readVideoDimensions(file);
-      if (dimensions.width <= dimensions.height) {
+      const metadata = await readVideoMetadata(file);
+      if (metadata.width <= metadata.height) {
         toast({ title: 'Landscape video required', description: 'TV episodes must be landscape. Choose a video recorded or exported in landscape orientation.', variant: 'destructive' });
         return;
       }
@@ -555,7 +571,7 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {([
-              { label: 'Episodes', value: episodes.length, note: 'Published uploads', icon: Video, tone: 'blue' },
+              { label: 'Episodes', value: episodes.filter((episode) => episode.is_active).length, note: 'Published uploads', icon: Video, tone: 'blue' },
               { label: 'Show team', value: managers.length + 1, note: 'Owner and managers', icon: Users, tone: 'emerald' },
               { label: 'Status', value: show.publication_status === 'pending_review' ? 'In review' : show.publication_status === 'published' ? 'Published' : show.publication_status === 'changes_requested' ? 'Changes needed' : 'Draft', note: 'NexSq TV publishing', icon: Check, tone: 'purple' },
               { label: 'Category', value: show.category || 'Uncategorized', note: 'Show genre', icon: Palette, tone: 'amber' },
@@ -647,7 +663,7 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
           </Card>
           <Card className="overflow-hidden rounded-3xl border-border/60 bg-card shadow-sm">
             <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-border/50">
-              <div><CardTitle className="text-sm font-bold">Your episodes</CardTitle><p className="mt-1 text-xs text-muted-foreground">Manage the videos published under this show.</p></div>
+              <div><CardTitle className="text-sm font-bold">Your episodes</CardTitle><p className="mt-1 text-xs text-muted-foreground">Publish or unpublish videos without deleting their files.</p></div>
               <span className="rounded-full bg-blue-500/10 px-3 py-1 text-xs font-bold tabular-nums text-blue-700 ring-1 ring-blue-500/20 dark:text-blue-300">{episodes.length} {episodes.length === 1 ? 'episode' : 'episodes'}</span>
             </CardHeader>
             <CardContent className="space-y-3 p-4 sm:p-5">
@@ -663,10 +679,26 @@ const StudioShowManagement = ({ showId, isOwner, onShowUpdated }: StudioShowMana
                     {episode.thumbnail_url ? <img src={episode.thumbnail_url} alt="" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" /> : <span className="flex h-full w-full items-center justify-center text-blue-600 dark:text-blue-300"><Video className="h-6 w-6" /></span>}
                     <span className="absolute bottom-1 left-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[9px] font-bold text-white">EP {String(episodes.length - index).padStart(2, '0')}</span>
                   </div>
-                  <div className="min-w-0 flex-1 py-1"><h3 className="truncate text-sm font-semibold">{episode.title}</h3><p className="mt-1 text-xs text-muted-foreground">Added {new Date(episode.created_at).toLocaleDateString()}</p></div>
+                  <div className="min-w-0 flex-1 py-1">
+                    <h3 className="truncate text-sm font-semibold">{episode.title}</h3>
+                    <p className="mt-1 text-xs text-muted-foreground">Added {new Date(episode.created_at).toLocaleDateString()}</p>
+                    <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${episode.is_active ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'}`}>
+                      {episode.is_active ? 'Published' : 'Unpublished'}
+                    </span>
+                  </div>
                   <div className="ml-auto flex items-center gap-1">
                     {episode.video_url && <a className="inline-flex h-9 items-center gap-2 rounded-xl px-3 text-xs font-semibold text-blue-700 transition-colors hover:bg-blue-500/10 dark:text-blue-300" href={episode.video_url} target="_blank" rel="noreferrer"><Video className="h-3.5 w-3.5" />Preview</a>}
-                    <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${episode.title}`} onClick={() => void removeEpisode(episode.id)} className="h-9 w-9 rounded-xl text-muted-foreground hover:bg-red-500/10 hover:text-red-600"><Trash2 className="h-4 w-4" /></Button>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`${episode.is_active ? 'Unpublish' : 'Publish'} ${episode.title}`}
+                      title={`${episode.is_active ? 'Unpublish' : 'Publish'} episode`}
+                      onClick={() => void setEpisodePublished(episode)}
+                      className={`h-9 w-9 rounded-xl ${episode.is_active ? 'text-muted-foreground hover:bg-amber-500/10 hover:text-amber-700' : 'text-emerald-700 hover:bg-emerald-500/10 dark:text-emerald-300'}`}
+                    >
+                      {episode.is_active ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
                   </div>
                 </article>
               ))}

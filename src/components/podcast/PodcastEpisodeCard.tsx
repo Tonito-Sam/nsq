@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
-import { CalendarDays, Eye, Mic2, Play } from 'lucide-react';
+import { CalendarDays, Eye, Mic2, Play, Share2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
 
 type PodcastEpisodeCardData = {
   id: string;
@@ -13,15 +14,18 @@ type PodcastEpisodeCardData = {
   created_at: string;
   scheduled_time: string | null;
   views: number | null;
+  shares: number | null;
 };
 
 export function PodcastEpisodeCard({
   episode,
+  showId,
   podcastName,
   channelLogoUrl,
   trackViews = true,
 }: {
   episode: PodcastEpisodeCardData;
+  showId: string;
   podcastName: string;
   channelLogoUrl: string | null;
   trackViews?: boolean;
@@ -32,6 +36,8 @@ export function PodcastEpisodeCard({
   const [previewReady, setPreviewReady] = useState(false);
   const [playbackError, setPlaybackError] = useState('');
   const [views, setViews] = useState(episode.views || 0);
+  const [shares, setShares] = useState(episode.shares || 0);
+  const { toast } = useToast();
   const viewCountedRef = useRef(false);
   const viewCountInFlightRef = useRef(false);
   const episodeTopic = episode.topic?.trim();
@@ -72,8 +78,54 @@ export function PodcastEpisodeCard({
     });
   };
 
+  const shareEpisode = async () => {
+    const url = new URL(`/podcast/${encodeURIComponent(showId)}`, window.location.origin);
+    url.searchParams.set('episode', episode.id);
+    const shareUrl = url.toString();
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: episode.title,
+          text: `Listen to ${episode.title} on ${podcastName}`,
+          url: shareUrl,
+        });
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+        toast({ title: 'Episode link copied', description: 'Share it with anyone you want to invite.' });
+      } else {
+        throw new Error('Sharing is not supported in this browser.');
+      }
+    } catch (shareError) {
+      if (shareError instanceof Error && shareError.name === 'AbortError') return;
+      console.error('Could not share podcast episode:', shareError);
+      toast({
+        title: 'Could not share episode',
+        description: shareError instanceof Error ? shareError.message : 'Please try again.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase.rpc(
+        'increment_studio_episode_shares',
+        { p_episode_id: episode.id },
+      );
+      if (error) throw error;
+      setShares(Number(data ?? shares + 1));
+    } catch (shareCountError) {
+      console.error('Could not record podcast episode share:', shareCountError);
+      toast({
+        title: 'Link shared, but count could not be updated',
+        description: shareCountError instanceof Error ? shareCountError.message : 'Please try again.',
+        variant: 'destructive',
+      });
+    }
+  };
+
   return (
-    <article className="overflow-hidden rounded-xl border bg-card">
+    <article id={`podcast-episode-${episode.id}`} className="scroll-mt-6 overflow-hidden rounded-xl border bg-card">
       <div className="group relative aspect-video overflow-hidden bg-gradient-to-br from-emerald-950 via-slate-950 to-violet-950">
         <video
           ref={videoRef}
@@ -184,6 +236,20 @@ export function PodcastEpisodeCard({
             {Number(views).toLocaleString()} views
           </span>
         </p>
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => void shareEpisode()}
+            className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium text-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={`Share ${episode.title}`}
+          >
+            <Share2 className="h-3.5 w-3.5" />
+            Share
+          </button>
+          <span className="text-xs text-muted-foreground" aria-label={`${shares} shares`}>
+            {Number(shares).toLocaleString()} shares
+          </span>
+        </div>
       </div>
     </article>
   );

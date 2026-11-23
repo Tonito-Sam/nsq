@@ -5,10 +5,12 @@ import { Layout } from '@/components/Layout';
 import VODLibrary, { VODEpisode } from '@/components/VODLibrary';
 import { LiveChat } from '@/components/LiveChat';
 import { getWatchHistory, recordWatchHistory, WatchHistoryItem } from '@/lib/watchHistory';
+import { getVodEpisodeArtwork } from '@/utils/vodEpisodeArtwork';
 
 type CatchUpMedia = {
   id: string;
   show_id?: string;
+  show_title?: string;
   title: string;
   description?: string;
   video_url?: string;
@@ -38,10 +40,11 @@ const CatchUp = () => {
     setSelectedMedia({
       id: episode.id,
       show_id: episode.show_id,
+      show_title: episode.show_title,
       title: episode.title,
       description: episode.description,
       video_url: episode.video_url,
-      thumbnail_url: episode.thumbnail_url || episode.show_thumbnail,
+      thumbnail_url: getVodEpisodeArtwork(episode) || undefined,
       duration: episode.duration,
       category: episode.show_category || episode.category,
     });
@@ -51,10 +54,11 @@ const CatchUp = () => {
     setSelectedMedia((current) => current || {
       id: episode.id,
       show_id: episode.show_id,
+      show_title: episode.show_title,
       title: episode.title,
       description: episode.description,
       video_url: episode.video_url,
-      thumbnail_url: episode.thumbnail_url || episode.show_thumbnail,
+      thumbnail_url: getVodEpisodeArtwork(episode) || undefined,
       duration: episode.duration,
       category: episode.show_category || episode.category,
     });
@@ -176,7 +180,7 @@ const CatchUp = () => {
               <LiveChat
                 key={selectedMedia?.show_id || 'general-chat'}
                 showId={selectedMedia?.show_id}
-                showTitle={selectedMedia?.title}
+                showTitle={selectedMedia?.show_title || selectedMedia?.title}
                 showDescription={selectedMedia?.description}
               />
             </aside>

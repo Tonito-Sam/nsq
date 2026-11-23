@@ -80,6 +80,8 @@ type PodcastEpisode = {
   created_at: string;
   scheduled_time: string | null;
   views: number | null;
+  shares: number | null;
+  is_active: boolean;
 };
 
 type PodcastRevenueOrder = {
@@ -342,6 +344,7 @@ export default function CreatorPodcastStudio({
   const [applicationStatus, setApplicationStatus] = useState<'none' | 'pending' | 'approved'>('none');
   const [drafts, setDrafts] = useState<PodcastDraft[]>([]);
   const [publishedEpisodes, setPublishedEpisodes] = useState<PodcastEpisode[]>([]);
+  const [updatingPublishedEpisodeId, setUpdatingPublishedEpisodeId] = useState<string | null>(null);
   const [podcastRevenueOrders, setPodcastRevenueOrders] = useState<PodcastRevenueOrder[]>([]);
   const [podcastRevenueSummary, setPodcastRevenueSummary] = useState<PodcastRevenueSummary | null>(null);
   const [loadingPodcastRevenue, setLoadingPodcastRevenue] = useState(false);
@@ -920,7 +923,7 @@ export default function CreatorPodcastStudio({
     }
 
     let episodesQuery = supabase.from('studio_episodes')
-      .select('id, show_id, title, topic, host_names, description, video_url, thumbnail_url, duration, created_at, scheduled_time, views')
+      .select('id, show_id, title, topic, host_names, description, video_url, thumbnail_url, duration, created_at, scheduled_time, views, shares, is_active')
       .in('id', episodeIds)
       .order('created_at', { ascending: false });
     if (podcastShowId) episodesQuery = episodesQuery.eq('show_id', podcastShowId);
@@ -931,6 +934,42 @@ export default function CreatorPodcastStudio({
       video_url: await resolvePodcastVideoUrl(episode.video_url),
     }))));
   }, [podcastShowId, user?.id]);
+
+  const setPublishedEpisodeActive = async (episode: PodcastEpisode) => {
+    const isActive = !episode.is_active;
+    if (!isActive && !window.confirm(`Unpublish "${episode.title}"? It will be hidden from listeners but not deleted.`)) return;
+    setUpdatingPublishedEpisodeId(episode.id);
+    try {
+      const { error } = await supabase.rpc('set_studio_show_episode_active', {
+        p_episode_id: episode.id,
+        p_is_active: isActive,
+      });
+      if (error) throw error;
+
+      toast({
+        title: isActive ? 'Podcast episode published' : 'Podcast episode unpublished',
+        description: isActive ? 'Listeners can access this episode again.' : 'The episode file was preserved.',
+      });
+      try {
+        await loadDrafts();
+      } catch (refreshError) {
+        console.error('Episode publication changed but the Podcast list could not refresh:', refreshError);
+        toast({
+          title: 'Episode updated, but the list could not refresh',
+          description: getPodcastErrorMessage(refreshError, 'Refresh the page to see the latest status.'),
+          variant: 'destructive',
+        });
+      }
+    } catch (updateError) {
+      toast({
+        title: `Could not ${isActive ? 'publish' : 'unpublish'} Podcast episode`,
+        description: getPodcastErrorMessage(updateError, 'Please try again.'),
+        variant: 'destructive',
+      });
+    } finally {
+      setUpdatingPublishedEpisodeId(null);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -2432,7 +2471,7 @@ export default function CreatorPodcastStudio({
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 id="podcast-episodes-heading" className="text-lg font-semibold">Podcast episodes</h2>
-              <p className="text-sm text-muted-foreground">Published and scheduled episodes for this show.</p>
+              <p className="text-sm text-muted-foreground">Manage which podcast episodes are published to listeners.</p>
             </div>
             {publishedEpisodes.length > 0 && (
               <span className="shrink-0 rounded-full bg-muted px-3 py-1 text-xs font-medium">
@@ -2443,13 +2482,32 @@ export default function CreatorPodcastStudio({
           {publishedEpisodes.length ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {publishedEpisodes.map((episode) => (
-                <PodcastEpisodeCard
-                  key={episode.id}
-                  episode={episode}
-                  podcastName={show.podcastName?.trim() || show.title}
-                  channelLogoUrl={show.podcastLogoUrl}
-                  trackViews={false}
-                />
+                <div key={episode.id} className="space-y-2">
+                  <PodcastEpisodeCard
+                    episode={episode}
+                    showId={show.id}
+                    podcastName={show.podcastName?.trim() || show.title}
+                    channelLogoUrl={show.podcastLogoUrl}
+                    trackViews={false}
+                  />
+                  <div className="flex items-center justify-between gap-3 rounded-xl border bg-card px-3 py-2">
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${episode.is_active ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'}`}>
+                      {episode.is_active ? 'Published' : 'Unpublished'}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={episode.is_active ? 'outline' : 'default'}
+                      disabled={updatingPublishedEpisodeId !== null}
+                      onClick={() => void setPublishedEpisodeActive(episode)}
+                    >
+                      {updatingPublishedEpisodeId === episode.id
+                        ? <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        : null}
+                      {episode.is_active ? 'Unpublish' : 'Publish'}
+                    </Button>
+                  </div>
+                </div>
               ))}
             </div>
           ) : (

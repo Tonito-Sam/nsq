@@ -231,6 +231,14 @@ try {
 }
 
 try {
+  const aiPhotoStudio = require('./ai-photo-studio-proxy');
+  app.use('/api/ai-photo-studio', aiPhotoStudio);
+  console.log('✅ Mounted /api/ai-photo-studio');
+} catch (e) {
+  console.warn('⚠️ AI Photo Studio route not available:', e?.message || e);
+}
+
+try {
   const studioSettings = require('./routes/studio-settings');
   app.use('/api/studio-settings', studioSettings);
   console.log('✅ Mounted /api/studio-settings');

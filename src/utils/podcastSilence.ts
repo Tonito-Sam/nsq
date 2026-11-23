@@ -1,5 +1,40 @@
 export type TimeRange = { start: number; end: number };
 
+export function getTrimmedTimeRange(
+  duration: number,
+  trimStartSeconds: number,
+  trimEndSeconds: number,
+): TimeRange {
+  if (
+    !Number.isFinite(duration)
+    || duration <= 0
+    || !Number.isFinite(trimStartSeconds)
+    || trimStartSeconds < 0
+    || !Number.isFinite(trimEndSeconds)
+    || trimEndSeconds < 0
+  ) {
+    throw new Error('Enter valid start and end trim values.');
+  }
+
+  const range = {
+    start: trimStartSeconds,
+    end: duration - trimEndSeconds,
+  };
+  if (range.start >= range.end - 0.1) {
+    throw new Error('The trim removes the entire recording. Leave at least a fraction of a second.');
+  }
+  return range;
+}
+
+export function clipTimeRangesToRange(ranges: TimeRange[], clipRange: TimeRange): TimeRange[] {
+  return ranges
+    .map((range) => ({
+      start: Math.max(range.start, clipRange.start),
+      end: Math.min(range.end, clipRange.end),
+    }))
+    .filter((range) => range.end - range.start >= 0.04);
+}
+
 export function parseMediaDuration(logs: string[]): number | null {
   const durationMatch = logs.join('\n').match(/Duration:\s*(\d{2}):(\d{2}):(\d+(?:\.\d+)?)/);
   if (!durationMatch) return null;

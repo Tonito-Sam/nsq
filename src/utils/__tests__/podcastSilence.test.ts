@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { getRetainedAudioRanges, parseMediaDuration, parseSilenceRanges } from '../podcastSilence';
+import {
+  clipTimeRangesToRange,
+  getRetainedAudioRanges,
+  getTrimmedTimeRange,
+  parseMediaDuration,
+  parseSilenceRanges,
+} from '../podcastSilence';
 
 describe('parseMediaDuration', () => {
   it('reads the duration reported by FFmpeg', () => {
@@ -45,5 +51,25 @@ describe('getRetainedAudioRanges', () => {
   it('leaves the recording unchanged when no silence reaches the threshold', () => {
     expect(getRetainedAudioRanges(4, [{ start: 1, end: 1.5 }], 1))
       .toEqual([{ start: 0, end: 4 }]);
+  });
+});
+
+describe('recording trim ranges', () => {
+  it('converts trim-from-start and trim-from-end values to a kept interval', () => {
+    expect(getTrimmedTimeRange(30, 2.5, 4)).toEqual({ start: 2.5, end: 26 });
+  });
+
+  it('clips silence-removal ranges to the selected trim interval', () => {
+    expect(clipTimeRangesToRange([
+      { start: 0, end: 4 },
+      { start: 4.5, end: 10 },
+    ], { start: 2, end: 8 })).toEqual([
+      { start: 2, end: 4 },
+      { start: 4.5, end: 8 },
+    ]);
+  });
+
+  it('rejects a trim that would leave no usable recording', () => {
+    expect(() => getTrimmedTimeRange(10, 5, 5)).toThrow('removes the entire recording');
   });
 });

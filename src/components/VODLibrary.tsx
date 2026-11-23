@@ -7,6 +7,7 @@ import apiUrl from '@/lib/api';
 import { supabase } from '@/integrations/supabase/client';
 import { SHOW_CATEGORIES } from '@/config/showCategories';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { getVodEpisodeArtwork } from '@/utils/vodEpisodeArtwork';
 
 // Enhanced VODEpisode type with view tracking
 export interface VODEpisode {
@@ -15,6 +16,9 @@ export interface VODEpisode {
   show_title?: string;
   show_thumbnail?: string;
   show_category?: string;
+  is_podcast?: boolean;
+  podcast_cover_url?: string;
+  podcast_logo_url?: string;
   title: string;
   description?: string;
   duration?: number;
@@ -40,6 +44,7 @@ type ViewMode = 'grid' | 'list' | 'by-show' | 'by-category';
 interface VODLibraryProps {
   showId?: string;
   onEpisodeSelect?: (episode: VODEpisode) => void;
+  onShowSelect?: (showId: string) => void;
   onInitialEpisode?: (episode: VODEpisode) => void;
   playingEpisodeId?: string;
   showAllPastShows?: boolean;
@@ -50,6 +55,7 @@ interface VODLibraryProps {
 const VODLibrary: React.FC<VODLibraryProps> = ({
   showId,
   onEpisodeSelect,
+  onShowSelect,
   onInitialEpisode,
   playingEpisodeId,
   showAllPastShows = false,
@@ -729,29 +735,41 @@ const VODLibrary: React.FC<VODLibraryProps> = ({
                   return (
                     <div key={showId} className="space-y-4">
                       {/* Show Header */}
-                      <div className="flex items-center space-x-3">
-                        {show.thumbnail_url ? (
-                          <img
-                            src={show.thumbnail_url}
-                            alt={show.title}
-                            className="w-12 h-12 rounded-lg object-cover"
-                          />
-                        ) : (
-                          <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-purple-900 to-pink-900 flex items-center justify-center">
-                            <Tv className="h-6 w-6 text-white/70" />
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center space-x-3">
+                          {show.thumbnail_url ? (
+                            <img
+                              src={show.thumbnail_url}
+                              alt={show.title}
+                              className="w-12 h-12 rounded-lg object-cover"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-purple-900 to-pink-900 flex items-center justify-center">
+                              <Tv className="h-6 w-6 text-white/70" />
+                            </div>
+                          )}
+                          <div>
+                            <h4 className="font-semibold text-foreground text-lg">{show.title}</h4>
+                            <p className="text-sm text-muted-foreground">
+                              {showEpisodes.length} episode{showEpisodes.length !== 1 ? 's' : ''} • {formatViewCount(showTotalViews)} views
+                              {show.category && (
+                                <span className="ml-2 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
+                                  {show.category}
+                                </span>
+                              )}
+                            </p>
                           </div>
-                        )}
-                        <div>
-                          <h4 className="font-semibold text-foreground text-lg">{show.title}</h4>
-                          <p className="text-sm text-muted-foreground">
-                            {showEpisodes.length} episode{showEpisodes.length !== 1 ? 's' : ''} • {formatViewCount(showTotalViews)} views
-                            {show.category && (
-                              <span className="ml-2 rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
-                                {show.category}
-                              </span>
-                            )}
-                          </p>
                         </div>
+                        {onShowSelect && showId !== 'other' && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => onShowSelect(showId)}
+                          >
+                            Play all episodes
+                          </Button>
+                        )}
                       </div>
 
                       {/* Episodes Grid */}
@@ -880,6 +898,7 @@ const EpisodeCard: React.FC<{
   showAllPastShows?: boolean;
   userHasViewed?: boolean;
 }> = ({ episode, playingEpisodeId, onEpisodeSelect, showAllPastShows, userHasViewed }) => {
+  const artworkUrl = getVodEpisodeArtwork(episode);
   const getEpisodeDate = (ep: VODEpisode): Date | null => {
     const dateStr = ep.scheduled_time || ep.air_time || ep.published_at || ep.created_at;
     if (!dateStr) return null;
@@ -952,10 +971,10 @@ const EpisodeCard: React.FC<{
     >
       {/* Thumbnail Container */}
       <div className="relative aspect-video overflow-hidden rounded-t-lg bg-gradient-to-br from-gray-900 to-black">
-        {(episode.thumbnail_url || episode.show_thumbnail) ? (
+        {artworkUrl ? (
           <>
             <img
-              src={episode.thumbnail_url || episode.show_thumbnail || '/placeholder.svg'}
+              src={artworkUrl}
               alt={episode.title}
               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
               loading="lazy"
@@ -966,6 +985,15 @@ const EpisodeCard: React.FC<{
           <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-purple-900/50 to-pink-900/50">
             <Play className="h-16 w-16 text-white/30" />
           </div>
+        )}
+
+        {episode.is_podcast && episode.podcast_logo_url && (
+          <img
+            src={episode.podcast_logo_url}
+            alt={`${episode.show_title || 'Podcast'} logo`}
+            className="absolute bottom-3 right-3 h-10 w-10 rounded-md border border-white/30 bg-white/90 p-1 object-contain shadow-lg"
+            loading="lazy"
+          />
         )}
         
         {/* Play Button Overlay */}

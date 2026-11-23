@@ -130,8 +130,9 @@ export const LiveChat: React.FC<LiveChatProps> = ({
 
   const { currentShow, viewerCount, likeCount, setLikeCount } = useShowContext();
   const { user } = useAuth();
-  const chatShowId = showIdOverride || currentShow?.id || 'default-show';
-  const isCurrentShow = !showIdOverride || showIdOverride === currentShow?.id;
+  const currentShowId = currentShow?.show_id || currentShow?.id;
+  const chatShowId = showIdOverride || currentShowId || 'default-show';
+  const isCurrentShow = !showIdOverride || showIdOverride === currentShowId;
   const chatShowTitle =
     showTitle || (isCurrentShow ? currentShow?.title : undefined) || 'General Chat';
   const chatShowDescription =
@@ -144,6 +145,8 @@ export const LiveChat: React.FC<LiveChatProps> = ({
   const [pickerPos, setPickerPos] = useState<{ left: number; top: number } | null>(null);
   const [userLikedShow, setUserLikedShow] = useState(false);
   const [replyDraft, setReplyDraft] = useState('');
+  const chatShowIdRef = useRef(chatShowId);
+  chatShowIdRef.current = chatShowId;
 
   // ─── Keep video playing when chat mounts / modal toggles ─────────────────
   useEffect(() => {
@@ -244,7 +247,8 @@ export const LiveChat: React.FC<LiveChatProps> = ({
 
   // ─── Fetch messages with replies ─────────────────────────────────────────
   const fetchMessages = async () => {
-    if (chatShowId === 'default-show') {
+    const requestedShowId = chatShowId;
+    if (requestedShowId === 'default-show') {
       setMessages([]);
       setIsLoading(false);
       return;
@@ -254,7 +258,7 @@ export const LiveChat: React.FC<LiveChatProps> = ({
       const { data: parentMessages, error } = await supabase
         .from('live_chat')
         .select('*')
-        .eq('show_id', chatShowId)
+        .eq('show_id', requestedShowId)
         .is('reply_to', null)
         .order('created_at', { ascending: false })
         .limit(50);
@@ -266,6 +270,7 @@ export const LiveChat: React.FC<LiveChatProps> = ({
           const { data: replies } = await supabase
             .from('live_chat')
             .select('*')
+            .eq('show_id', requestedShowId)
             .eq('reply_to', msg.id)
             .order('created_at', { ascending: true })
             .limit(10);
@@ -278,18 +283,22 @@ export const LiveChat: React.FC<LiveChatProps> = ({
           };
         }),
       );
-      setMessages(await enrichMessagesWithProfiles(messagesWithReplies as ChatMessage[]));
+      const enrichedMessages = await enrichMessagesWithProfiles(messagesWithReplies as ChatMessage[]);
+      if (chatShowIdRef.current !== requestedShowId) return;
+      setMessages(enrichedMessages);
     } catch (err) {
-      console.error('Error fetching messages:', err);
-      toast({ title: 'Error', description: 'Failed to load messages', variant: 'destructive' });
+      if (chatShowIdRef.current === requestedShowId) {
+        console.error('Error fetching messages:', err);
+        toast({ title: 'Error', description: 'Failed to load messages', variant: 'destructive' });
+      }
     }
-    setIsLoading(false);
+    if (chatShowIdRef.current === requestedShowId) setIsLoading(false);
   };
 
   const subscribeToLiveChat = () => {
     if (chatShowId === 'default-show') return;
-    supabase
-      .channel(`live_chat_${chatShowId}`)
+    return supabase
+      .channel(`live_chat_panel_${chatShowId}`)
       .on(
         'postgres_changes',
         {
@@ -307,9 +316,9 @@ export const LiveChat: React.FC<LiveChatProps> = ({
 
   useEffect(() => {
     fetchMessages();
-    subscribeToLiveChat();
+    const channel = subscribeToLiveChat();
     return () => {
-      supabase.removeAllChannels();
+      if (channel) void supabase.removeChannel(channel);
     };
   }, [chatShowId]);
 

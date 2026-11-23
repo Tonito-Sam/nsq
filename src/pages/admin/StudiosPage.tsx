@@ -11,6 +11,12 @@ import EpisodeDragDropList from '../../components/EpisodeDragDropList';
 import { Input } from '../../components/ui/input';
 import type { ProgramSchedule } from '../../components/ScheduleGridView';
 import generateEpisodesForShow from '../../lib/scheduleGenerator';
+import { getVideoDurationSeconds } from '../../utils/videoDuration';
+import {
+  getActiveLinearTvOccurrence,
+  getLinearTvPlaylistPosition,
+  TV_SCHEDULE_TIME_ZONE,
+} from '../../utils/linearTvSchedule';
 import { getCategoryColor } from '../../lib/scheduleUtils';
 import DailyPodcastNewsroom from '@/components/DailyPodcastNewsroom';
 import { CreatorShowPublicationReview, ShowApplicationReview } from '@/components/studio/ShowApplicationReview';
@@ -192,11 +198,12 @@ const formatDuration = (startMin: number, endMin: number): string => {
 };
 
 const getCurrentTimeHHMM = (): string => {
-  const now = new Date();
-  return `${now.getHours().toString().padStart(2, '0')}:${now
-    .getMinutes()
-    .toString()
-    .padStart(2, '0')}`;
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: TV_SCHEDULE_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date());
 };
 
 const getNowPosition = (startMin = 0, endMin = 24 * 60): number => {
@@ -1386,30 +1393,44 @@ const StudiosPage = () => {
         .select('*')
         .eq('is_active', true);
 
-      // Fetch the day's episodes so we can attach the currently-airing one
-      const dayStart = new Date(date);
-      dayStart.setHours(0, 0, 0, 0);
-      const dayEnd = new Date(date);
-      dayEnd.setHours(23, 59, 59, 999);
-
-      const { data: episodesData } = await supabase
-        .from('studio_episodes')
-        .select('id, show_id, title, description, thumbnail_url, scheduled_time, end_time')
-        .gte('scheduled_time', dayStart.toISOString())
-        .lte('scheduled_time', dayEnd.toISOString())
-        .order('scheduled_time', { ascending: true });
+      const showIds = (showsData || []).map((show: any) => show.id);
+      const { data: episodesData, error: episodesError } = showIds.length
+        ? await supabase
+          .from('studio_episodes')
+          .select('id, show_id, title, description, thumbnail_url, video_url, duration, scheduled_time, end_time, created_at')
+          .in('show_id', showIds)
+          .eq('is_active', true)
+          .not('video_url', 'is', null)
+          .order('scheduled_time', { ascending: true, nullsFirst: false })
+          .order('created_at', { ascending: true })
+        : { data: [], error: null };
+      if (episodesError) throw episodesError;
 
       const dayName = date.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+      const schedules = (showsData || []).map((show: any) => ({
+        id: String(show.id),
+        schedulePattern: show.schedule_pattern,
+        daysOfWeek: show.approved_days?.length ? show.approved_days : show.days_of_week,
+        timeSlotStart: show.time_slot_start || show.scheduled_time,
+        timeSlotEnd: show.time_slot_end || show.end_time,
+        scheduledTime: show.scheduled_time,
+        endTime: show.end_time,
+      }));
+      const activeOccurrence = date.toDateString() === new Date().toDateString()
+        ? getActiveLinearTvOccurrence(schedules, new Date(), TV_SCHEDULE_TIME_ZONE)
+        : null;
       const schedule: ExtendedProgramSchedule[] = [];
 
       (showsData || []).forEach((show: any) => {
-        const days = parseDays(show.days_of_week) || [];
+        const days = parseDays(show.approved_days) || parseDays(show.days_of_week) || [];
         const pattern = (show.schedule_pattern || '').toLowerCase();
         const start = show.time_slot_start ? show.time_slot_start : toHHMM(show.scheduled_time);
         const end = show.time_slot_end ? show.time_slot_end : toHHMM(show.end_time);
 
         const airsToday =
           pattern === 'daily' ||
+          (pattern === 'weekdays' && !['saturday', 'sunday'].includes(dayName)) ||
+          (pattern === 'weekly' && days.length === 0) ||
           days.includes(dayName) ||
           (!pattern &&
             !show.days_of_week &&
@@ -1418,19 +1439,15 @@ const StudiosPage = () => {
 
         if (airsToday) {
           const showEpisodes = (episodesData || []).filter(
-            (ep: any) => String(ep.show_id) === String(show.id),
+            (ep: any) => String(ep.show_id) === String(show.id) && Boolean(ep.video_url),
           );
-          const currentEpisode =
-            showEpisodes.find((ep: any) => {
-              if (!ep.scheduled_time) return false;
-              const epStart = new Date(ep.scheduled_time);
-              const epStartMin = epStart.getHours() * 60 + epStart.getMinutes();
-              const slotStartMin = timeToMinutes(start);
-              const slotEndMin = timeToMinutes(end);
-              return epStartMin >= slotStartMin && epStartMin < slotEndMin;
-            }) ||
-            showEpisodes[0] ||
-            null;
+          const position = activeOccurrence?.schedule.id === String(show.id)
+            ? getLinearTvPlaylistPosition(
+              showEpisodes.map((episode: any) => Number(episode.duration) || 0),
+              activeOccurrence.elapsedSeconds,
+            )
+            : null;
+          const currentEpisode = showEpisodes[position?.episodeIndex ?? 0] || null;
 
           schedule.push({
             id: show.id,
@@ -1460,8 +1477,7 @@ const StudiosPage = () => {
   };
 
   const updateNowPlaying = () => {
-    const now = new Date();
-    const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    const currentTime = getCurrentTimeHHMM();
     const playing =
       currentSchedule.find((p) => p.time_slot_start <= currentTime && p.time_slot_end > currentTime) ||
       null;
@@ -1884,40 +1900,65 @@ const StudiosPage = () => {
     );
   };
 
-  const handleDeleteEpisode = async (id: string | number) => {
-    if (!window.confirm('Delete this episode?')) return;
+  const handleSetEpisodeActive = async (episode: any) => {
+    const isActive = !episode.is_active;
+    if (!isActive && !window.confirm(`Unpublish "${episode.title}"? It will be hidden from viewers but not deleted.`)) return;
     try {
-      const { error } = await supabase.from('studio_episodes').delete().eq('id', id);
+      const { error } = await supabase.rpc('set_studio_show_episode_active', {
+        p_episode_id: episode.id,
+        p_is_active: isActive,
+      });
       if (error) throw error;
-      toast({ title: 'Success', description: 'Episode deleted successfully' });
+      toast({ title: 'Success', description: `Episode ${isActive ? 'published' : 'unpublished'} successfully` });
       if (currentEpisodeShowId) fetchEpisodes(currentEpisodeShowId);
       fetchCalendarEpisodes();
     } catch (err: any) {
       toast({
         title: 'Error',
-        description: err.message || 'Failed to delete episode',
+        description: err.message || `Failed to ${isActive ? 'publish' : 'unpublish'} episode`,
         variant: 'destructive',
       });
     }
   };
 
-  const handleBulkDelete = async () => {
+  const handleBulkUnpublish = async () => {
     if (selectedEpisodeIds.length === 0) return;
-    if (!window.confirm(`Delete ${selectedEpisodeIds.length} selected episodes?`)) return;
+    const activeIds = episodes
+      .filter((episode) => selectedEpisodeIds.includes(episode.id) && episode.is_active)
+      .map((episode) => episode.id);
+    if (activeIds.length === 0) {
+      toast({ title: 'No published episodes selected', description: 'Select at least one published episode to unpublish.' });
+      return;
+    }
+    if (!window.confirm(`Unpublish ${activeIds.length} selected episode(s)? Their files will not be deleted.`)) return;
     try {
-      const { error } = await supabase.from('studio_episodes').delete().in('id', selectedEpisodeIds);
-      if (error) throw error;
-      toast({
-        title: 'Success',
-        description: `${selectedEpisodeIds.length} episode(s) deleted successfully`,
-      });
+      const results = await Promise.all(activeIds.map((id) =>
+        supabase.rpc('set_studio_show_episode_active', {
+          p_episode_id: id,
+          p_is_active: false,
+        }),
+      ));
+      const failures = results.filter((result) => result.error);
       setSelectedEpisodeIds([]);
       if (currentEpisodeShowId) fetchEpisodes(currentEpisodeShowId);
       fetchCalendarEpisodes();
+      if (failures.length) {
+        const failureMessage = failures[0].error?.message || 'Unknown error';
+        toast({
+          title: 'Some episodes could not be unpublished',
+          description: `${activeIds.length - failures.length} unpublished; ${failures.length} failed. ${failureMessage}`,
+          variant: 'destructive',
+        });
+        return;
+      }
+      toast({
+        title: 'Success',
+        description: `${activeIds.length} episode(s) unpublished. Their files were preserved.`,
+      });
     } catch (err: any) {
       toast({
         title: 'Error',
-        description: err.message || 'Failed to delete episodes',
+        description: err.message || 'Failed to unpublish episodes',
         variant: 'destructive',
       });
     }
@@ -1943,6 +1984,7 @@ const StudiosPage = () => {
       ...ep,
       title: ep?.title || '',
       description: ep?.description || '',
+      duration: ep?.duration ? String(Number(ep.duration) / 60) : '',
       video_url: videoUrl,
       video_file: null,
       video_type: videoUrl ? 'url' : 'upload',
@@ -2051,10 +2093,22 @@ const StudiosPage = () => {
     }
     if (!validateEpisodeForm()) return;
     try {
+      const durationMinutes = Number(newEpisodeForm.duration);
+      let durationSeconds = Number.isFinite(durationMinutes) && durationMinutes > 0
+        ? Math.round(durationMinutes * 60)
+        : 0;
+      if (newEpisodeForm.video_type === 'upload' && newEpisodeForm.video_file) {
+        durationSeconds = Math.round(await getVideoDurationSeconds(newEpisodeForm.video_file));
+      } else if (durationSeconds <= 0 && newEpisodeForm.video_url) {
+        durationSeconds = Math.round(await getVideoDurationSeconds(newEpisodeForm.video_url));
+      }
+      if (durationSeconds < 1 || durationSeconds > 21600) {
+        throw new Error('Enter or verify an episode duration from 1 second to 6 hours.');
+      }
       const payload: any = {
         title: newEpisodeForm.title,
         description: newEpisodeForm.description || '',
-        duration: newEpisodeForm.duration || '0',
+        duration: durationSeconds,
         scheduled_time: newEpisodeForm.scheduled_time || null,
         end_time: newEpisodeForm.end_time || null,
         is_active: newEpisodeForm.is_active !== undefined ? newEpisodeForm.is_active : true,
@@ -2762,11 +2816,11 @@ const StudiosPage = () => {
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={selectedEpisodeIds.length === 0}
-                        onClick={handleBulkDelete}
-                        className="h-9 rounded-xl text-red-600 border-red-500/30 hover:bg-red-500/10 hover:text-red-600 font-semibold"
+                        disabled={!episodes.some((episode) => selectedEpisodeIds.includes(episode.id) && episode.is_active)}
+                        onClick={handleBulkUnpublish}
+                        className="h-9 rounded-xl border-amber-500/30 font-semibold text-amber-700 hover:bg-amber-500/10 hover:text-amber-700"
                       >
-                        Delete ({selectedEpisodeIds.length})
+                        Unpublish selected
                       </Button>
                       <span className="text-xs text-muted-foreground ml-auto tabular-nums">
                         {episodes.length + (hasStandaloneShowEpisode ? 1 : 0)} total episodes
@@ -2779,7 +2833,7 @@ const StudiosPage = () => {
                       selectedIds={selectedEpisodeIds}
                       onReorder={() => {}}
                       onEdit={handleEditEpisode}
-                      onDelete={handleDeleteEpisode}
+                      onToggleActive={handleSetEpisodeActive}
                       onSelect={handleSelectEpisode}
                       onPreview={(episode) => {
                         if (episode.video_url) setPreviewVideo({ title: episode.title, url: episode.video_url });

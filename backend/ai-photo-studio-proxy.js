@@ -17,6 +17,7 @@ const cors = require('cors');
 const UPLOAD_FIELD = 'image';
 const upload = multer({ storage: multer.memoryStorage() });
 const app = express();
+const router = express.Router();
 
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
@@ -52,12 +53,12 @@ async function uploadToReplicate(base64) {
 // ---------------------------------------------------------------
 // Health check
 // ---------------------------------------------------------------
-app.get('/api/ai-photo-studio/health', (req, res) => res.json({ ok: true }));
+router.get('/health', (req, res) => res.json({ ok: true }));
 
 // ---------------------------------------------------------------
 // MAIN ENDPOINT
 // ---------------------------------------------------------------
-app.post('/api/ai-photo-studio', upload.single(UPLOAD_FIELD), async (req, res) => {
+router.post('/', upload.single(UPLOAD_FIELD), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Missing image file' });
 
@@ -226,5 +227,11 @@ app.post('/api/ai-photo-studio', upload.single(UPLOAD_FIELD), async (req, res) =
   }
 });
 
-const port = process.env.PORT || 3001;
-app.listen(port, () => console.log(`AI Photo Studio Proxy running → http://localhost:${port}`));
+app.use('/api/ai-photo-studio', router);
+
+if (require.main === module) {
+  const port = process.env.PORT || 3001;
+  app.listen(port, () => console.log(`AI Photo Studio Proxy running → http://localhost:${port}`));
+}
+
+module.exports = router;

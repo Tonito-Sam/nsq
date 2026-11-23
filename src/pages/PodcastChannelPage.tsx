@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { LockKeyhole, Mic2, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -31,6 +31,7 @@ type PodcastEpisode = {
   created_at: string;
   scheduled_time: string | null;
   views: number | null;
+  shares: number | null;
 };
 
 const PRIVATE_VIDEO_PREFIX = 'podcast-private://';
@@ -47,6 +48,8 @@ const resolveEpisodeUrl = async (videoUrl: string) => {
 
 export default function PodcastChannelPage() {
   const { showId } = useParams<{ showId: string }>();
+  const [searchParams] = useSearchParams();
+  const requestedEpisodeId = searchParams.get('episode');
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
@@ -139,7 +142,7 @@ export default function PodcastChannelPage() {
 
       const { data: episodeRows, error: episodesError } = await supabase
         .from('studio_episodes')
-        .select('id, title, topic, host_names, description, video_url, thumbnail_url, created_at, scheduled_time, views')
+        .select('id, title, topic, host_names, description, video_url, thumbnail_url, created_at, scheduled_time, views, shares')
         .eq('show_id', showId)
         .eq('is_active', true)
         .order('created_at', { ascending: false });
@@ -150,7 +153,15 @@ export default function PodcastChannelPage() {
       }))));
     } catch (loadError) {
       console.error('Could not load Podcast channel:', loadError);
-      setError(loadError instanceof Error ? loadError.message : 'Could not load this Podcast channel.');
+      const message = loadError instanceof Error
+        ? loadError.message
+        : typeof loadError === 'object'
+          && loadError !== null
+          && 'message' in loadError
+          && typeof loadError.message === 'string'
+          ? loadError.message
+          : 'Could not load this Podcast channel.';
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -212,6 +223,12 @@ export default function PodcastChannelPage() {
   const podcastName = channel?.podcast_name?.trim() || 'Podcast channel';
   const hasEpisodeAccess = subscribed || isChannelManager;
   const requiresSubscription = !hasEpisodeAccess;
+
+  useEffect(() => {
+    if (loading || !hasEpisodeAccess || !requestedEpisodeId || !episodes.length) return;
+    document.getElementById(`podcast-episode-${requestedEpisodeId}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [episodes.length, hasEpisodeAccess, loading, requestedEpisodeId]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -305,6 +322,7 @@ export default function PodcastChannelPage() {
                       <PodcastEpisodeCard
                         key={episode.id}
                         episode={episode}
+                        showId={channel.id}
                         podcastName={podcastName}
                         channelLogoUrl={channel.logo_url}
                       />

@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, ReactNode } from 'react';
 
 interface StudioShow {
   id: string;
+  show_id?: string;
   title: string;
   description?: string;
   video_url?: string;
