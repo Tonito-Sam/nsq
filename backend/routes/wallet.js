@@ -2,6 +2,11 @@ const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
 const requireAdmin = require('../utils/requireAdmin.cjs');
+const { getExchangeRates } = require('../utils/exchangeRates');
+const {
+  getPaystackCurrencies,
+  calculateWalletTopupQuote,
+} = require('../utils/walletTopupCurrency');
 
 const router = express.Router();
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
@@ -136,26 +141,48 @@ router.post('/promo-transfers', asyncRoute(async (req, res) => {
 
 router.post('/topups/intent', asyncRoute(async (req, res) => {
   const { user } = await authenticate(req);
-  await requireVerifiedWallet(user.id);
 
   const amountLocal = Number(req.body?.amount_local);
   const currency = String(req.body?.currency || '').toUpperCase();
   const gateway = String(req.body?.gateway || '').toLowerCase();
+  const chargeCurrency = String(req.body?.charge_currency || currency).toUpperCase();
   if (!Number.isFinite(amountLocal) || amountLocal <= 0 || amountLocal > Number(process.env.WALLET_TOPUP_MAX_LOCAL || 5000)) {
     return res.status(400).json({ error: 'Top-up amount is outside the allowed range' });
   }
   if (!/^[A-Z]{3}$/.test(currency) || !['paystack', 'flutterwave'].includes(gateway)) {
     return res.status(400).json({ error: 'Unsupported wallet top-up currency or gateway' });
   }
+  if (gateway === 'paystack' && !getPaystackCurrencies().includes(chargeCurrency)) {
+    return res.status(400).json({
+      error: `Paystack does not support ${chargeCurrency} for this account. Choose one of: ${getPaystackCurrencies().join(', ')}`,
+    });
+  }
+  if (gateway === 'flutterwave' && chargeCurrency !== currency) {
+    return res.status(400).json({ error: 'Flutterwave top-ups must use your selected wallet currency' });
+  }
+  if (gateway === 'flutterwave' && !['NGN', 'USD', 'GBP', 'EUR', 'KES', 'GHS', 'UGX', 'TZS'].includes(currency)) {
+    return res.status(400).json({ error: `Flutterwave does not support ${currency} for wallet top-ups` });
+  }
 
-  const rateResponse = await axios.get('https://api.exchangerate.host/latest', {
-    params: { base: currency, symbols: 'USD' },
-    timeout: 10000,
+  let rateData;
+  try {
+    rateData = await getExchangeRates('USD');
+    if (rateData.source === 'cache-stale') {
+      throw new Error('The cached exchange rate is stale');
+    }
+  } catch (error) {
+    console.error('Wallet top-up exchange-rate lookup failed:', error.message);
+    const rateError = new Error('Exchange rates are temporarily unavailable. Please try again later.');
+    rateError.status = 503;
+    throw rateError;
+  }
+  const quote = calculateWalletTopupQuote({
+    amount: amountLocal,
+    currency,
+    chargeCurrency: gateway === 'paystack' ? chargeCurrency : currency,
+    rates: rateData.rates,
   });
-  const fxRate = Number(rateResponse.data?.rates?.USD);
-  if (!Number.isFinite(fxRate) || fxRate <= 0) throw new Error('Could not get a current server exchange rate');
-
-  const amountUsd = Number((amountLocal * fxRate).toFixed(2));
+  const amountUsd = quote.amount_usd;
   if (amountUsd <= 0 || amountUsd > Number(process.env.WALLET_TOPUP_MAX_USD || 5000)) {
     return res.status(400).json({ error: 'Top-up amount is outside the allowed range' });
   }
@@ -165,17 +192,17 @@ router.post('/topups/intent', asyncRoute(async (req, res) => {
     reference,
     user_id: user.id,
     gateway,
-    amount_local: Number(amountLocal.toFixed(2)),
-    currency_local: currency,
+    amount_local: quote.amount_local,
+    currency_local: quote.currency,
     amount_usd: amountUsd,
-    fx_rate: fxRate,
+    fx_rate: quote.fx_rate,
     status: 'pending',
     expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
   }];
   await axios.post(`${SUPABASE_URL}/rest/v1/wallet_topup_intents`, intent, {
     headers: headers({ Prefer: 'return=minimal' }),
   });
-  return res.json({ reference, amount_local: Number(amountLocal.toFixed(2)), currency, amount_usd: amountUsd, fx_rate: fxRate });
+  return res.json({ reference, ...quote });
 }));
 
 router.post('/stores/:storeId/payouts', asyncRoute(async (req, res) => {

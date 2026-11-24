@@ -194,7 +194,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
           {form.product_type === 'physical' && (
             <div className="space-y-3 rounded-md border p-3">
-              <div><Label>Packed parcel measurements</Label><p className="text-xs text-muted-foreground">Required for live South African courier pricing.</p></div>
+              <div><Label>Packed parcel measurements</Label><p className="text-xs text-muted-foreground">Required for live courier pricing and shipment booking.</p></div>
               <div className="grid grid-cols-2 gap-3">
                 {([
                   ['shipping_weight_kg', 'Weight (kg)', '0.01'],

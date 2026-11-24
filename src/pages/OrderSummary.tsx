@@ -18,12 +18,38 @@ interface PurchasedDownload {
   files: DownloadFile[];
 }
 
+interface OrderSummaryRecord {
+  id: string;
+  status: string;
+  payment_method: string;
+  payment_reference: string;
+  total_amount: number;
+  currency: string;
+  shipping_address: {
+    fullName?: string;
+    address?: string;
+    address2?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    postalCode?: string;
+    email?: string;
+    phone?: string;
+  } | string | null;
+  tracking_number?: string | null;
+  tracking_url?: string | null;
+  carrier?: string | null;
+  shipping_status?: string | null;
+  shipping_estimated_delivery?: string | null;
+  shipping_label_url?: string | null;
+}
+
 export default function OrderSummary() {
   const { orderId: pathOrderId } = useParams();
   const [searchParams] = useSearchParams();
   const orderId = pathOrderId || searchParams.get('order_id');
   const { user } = useAuth();
-  const [order, setOrder] = useState(null);
+  const [order, setOrder] = useState<OrderSummaryRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [products, setProducts] = useState<any[]>([]);
@@ -128,7 +154,13 @@ export default function OrderSummary() {
   minDelivery.setDate(today.getDate() + 3);
   const maxDelivery = new Date(today);
   maxDelivery.setDate(today.getDate() + 7);
-  const deliveryRange = `${minDelivery.toLocaleDateString()} - ${maxDelivery.toLocaleDateString()}`;
+  const savedDeliveryEstimate = order.shipping_estimated_delivery;
+  const parsedDeliveryEstimate = savedDeliveryEstimate ? Date.parse(savedDeliveryEstimate) : Number.NaN;
+  const deliveryRange = savedDeliveryEstimate
+    ? Number.isFinite(parsedDeliveryEstimate)
+      ? new Date(parsedDeliveryEstimate).toLocaleDateString()
+      : savedDeliveryEstimate
+    : `${minDelivery.toLocaleDateString()} - ${maxDelivery.toLocaleDateString()}`;
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-[#18181b] px-4">
@@ -183,13 +215,18 @@ export default function OrderSummary() {
                       <div>{shipping.email}</div>
                     </div>
                   ) : (
-                    <span>{order.shipping_address}</span>
+                    <span>{typeof shipping === 'string' ? shipping : ''}</span>
                   )}
                 </td>
               </tr>
               <tr>
                 <td className="font-semibold text-gray-600 dark:text-gray-300">Tracking Number:</td>
-                <td className="text-gray-800 dark:text-gray-100">{order.tracking_number || 'Not assigned yet'}</td>
+                <td className="text-gray-800 dark:text-gray-100">
+                  {order.tracking_number || 'Not assigned yet'}
+                  {typeof order.tracking_url === 'string' && order.tracking_url.startsWith('https://') && (
+                    <a className="ml-2 text-blue-600 underline" href={order.tracking_url} target="_blank" rel="noopener noreferrer">Track package</a>
+                  )}
+                </td>
               </tr>
               <tr>
                 <td className="font-semibold text-gray-600 dark:text-gray-300">Carrier:</td>
@@ -203,6 +240,12 @@ export default function OrderSummary() {
                 <td className="font-semibold text-gray-600 dark:text-gray-300">Estimated Delivery:</td>
                 <td className="text-gray-800 dark:text-gray-100">{deliveryRange}</td>
               </tr>
+              {order.shipping_label_url && typeof order.shipping_label_url === 'string' && order.shipping_label_url.startsWith('https://') && (
+                <tr>
+                  <td className="font-semibold text-gray-600 dark:text-gray-300">Shipping Label:</td>
+                  <td><a className="text-blue-600 underline" href={order.shipping_label_url} target="_blank" rel="noopener noreferrer">View label</a></td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

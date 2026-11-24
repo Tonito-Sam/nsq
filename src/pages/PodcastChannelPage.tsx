@@ -301,12 +301,24 @@ export default function PodcastChannelPage() {
                           ? `Subscribe for $${channel.subscription_price.toFixed(2)}`
                           : 'Subscribe for free'}
                     </Button>
+                    {user?.id && channel.subscription_mode === 'paid' && (
+                      <Button variant="outline" onClick={() => navigate('/wallet')} className="shrink-0">
+                        Add funds or send money
+                      </Button>
+                    )}
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-800 dark:text-emerald-200">
-                    {subscriptionExpiresAt
-                      ? <>Your subscription is active until {new Date(subscriptionExpiresAt).toLocaleDateString()}.</>
-                      : 'Your free subscription is active.'}
+                  <div className="flex flex-col gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-800 dark:text-emerald-200 sm:flex-row sm:items-center sm:justify-between">
+                    <span>
+                      {subscriptionExpiresAt
+                        ? <>Your subscription is active until {new Date(subscriptionExpiresAt).toLocaleDateString()}.</>
+                        : 'Your free subscription is active.'}
+                    </span>
+                    {user?.id && channel.subscription_mode === 'paid' && (
+                      <Button variant="outline" onClick={() => navigate('/wallet')} className="shrink-0">
+                        Add funds or send money
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>

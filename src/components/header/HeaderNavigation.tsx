@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Grid3X3, Plus, Video } from 'lucide-react';
+import { Plus, Video } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { NotificationDropdown } from '@/components/NotificationDropdown';
 import { CreatePostModal } from '@/components/CreatePostModal';
@@ -118,21 +118,7 @@ export const HeaderNavigation = () => {
           <Plus className="h-4 w-4" />
         </Button>
 
-        {/* Square Navigation - Desktop Only */}
-        <Button
-          variant={isActive('/square') ? "default" : "ghost"}
-          size="sm"
-          onClick={() => navigate('/square')}
-          className={`hidden md:flex ${
-            isActive('/square') 
-              ? 'bg-purple-600 hover:bg-purple-700 text-white' 
-              : 'text-gray-700 dark:text-gray-300 hover:text-purple-600 dark:hover:text-purple-400'
-          }`}
-        >
-          <Grid3X3 className="h-4 w-4" />
-        </Button>
-
-        {/* Studio Navigation (immediately after Square, desktop only) */}
+        {/* Studio Navigation - Desktop Only */}
         <Button
           variant={isActive('/studio') ? "default" : "ghost"}
           size="sm"

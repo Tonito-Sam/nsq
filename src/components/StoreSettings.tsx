@@ -21,6 +21,14 @@ interface Store {
   base_currency: string;
   country?: string;
   shipping_partner: string;
+  shipping_pickup_name?: string | null;
+  shipping_pickup_email?: string | null;
+  shipping_pickup_phone?: string | null;
+  shipping_pickup_address?: string | null;
+  shipping_pickup_suburb?: string | null;
+  shipping_pickup_city?: string | null;
+  shipping_pickup_province?: string | null;
+  shipping_pickup_postal_code?: string | null;
   owner_kyc_status?: string;
   owner_identity_country?: string | null;
   logo_url: string;
@@ -40,6 +48,9 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
     description: string;
     base_currency: string;
     shipping_partner: string;
+    shipping_pickup_name: string;
+    shipping_pickup_email: string;
+    shipping_pickup_phone: string;
     shipping_pickup_address: string;
     shipping_pickup_suburb: string;
     shipping_pickup_city: string;
@@ -63,6 +74,9 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
     description: store?.description || '',
     base_currency: store?.base_currency || getCurrencyByCountry(store?.country),
     shipping_partner: store?.shipping_partner || '',
+    shipping_pickup_name: store?.shipping_pickup_name || '',
+    shipping_pickup_email: store?.shipping_pickup_email || '',
+    shipping_pickup_phone: store?.shipping_pickup_phone || '',
     shipping_pickup_address: (store as any)?.shipping_pickup_address || '',
     shipping_pickup_suburb: (store as any)?.shipping_pickup_suburb || '',
     shipping_pickup_city: (store as any)?.shipping_pickup_city || '',
@@ -134,6 +148,9 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
           business_bank_branch: formData.business_branch_name || null,
           base_currency: formData.base_currency,
           shipping_partner: formData.shipping_partner,
+          shipping_pickup_name: formData.shipping_pickup_name.trim() || null,
+          shipping_pickup_email: formData.shipping_pickup_email.trim() || null,
+          shipping_pickup_phone: formData.shipping_pickup_phone.trim() || null,
           shipping_pickup_address: formData.shipping_pickup_address.trim() || null,
           shipping_pickup_suburb: formData.shipping_pickup_suburb.trim() || null,
           shipping_pickup_city: formData.shipping_pickup_city.trim() || null,
@@ -303,24 +320,33 @@ export const StoreSettings: React.FC<StoreSettingsProps> = ({ store, onStoreUpda
             </select>
           </div>
 
-          <div>
-            <Label htmlFor="shipping_partner">Shipping Partner</Label>
-            <Input
-              id="shipping_partner"
-              value={formData.shipping_partner}
-              onChange={(e) => handleInputChange('shipping_partner', e.target.value)}
-              placeholder="e.g., CourierGuy, PostNet"
-            />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">South African checkout currently uses live Courier Guy rates through ShipLogic.</p>
+          <div className="md:col-span-2 rounded-lg border p-4 dark:border-gray-700">
+            <h4 className="font-medium text-gray-900 dark:text-gray-100">Carrier routing</h4>
+            <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+              NexSq selects Courier Guy for South African domestic delivery and Terminal Africa for
+              routes to or from Nigeria. Carrier credentials are managed by the platform.
+            </p>
           </div>
 
-          {formData.business_country === 'ZA' && (
+          {['ZA', 'NG'].includes(formData.business_country) && (
             <div className="md:col-span-2 space-y-4 rounded-lg border border-emerald-200 bg-emerald-50/60 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
               <div>
                 <h4 className="font-semibold text-gray-900 dark:text-gray-100">Courier pickup address</h4>
-                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">This is where the courier collects paid orders. It is not shown to buyers.</p>
+                <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">This is where the courier collects paid orders. It is not shown to buyers. Contact details are required for shipments involving Nigeria.</p>
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <Label htmlFor="shipping_pickup_name">Pickup contact name</Label>
+                  <Input id="shipping_pickup_name" value={formData.shipping_pickup_name} onChange={event => handleInputChange('shipping_pickup_name', event.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="shipping_pickup_email">Pickup contact email</Label>
+                  <Input id="shipping_pickup_email" type="email" value={formData.shipping_pickup_email} onChange={event => handleInputChange('shipping_pickup_email', event.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="shipping_pickup_phone">Pickup contact phone</Label>
+                  <Input id="shipping_pickup_phone" type="tel" value={formData.shipping_pickup_phone} onChange={event => handleInputChange('shipping_pickup_phone', event.target.value)} />
+                </div>
                 <div className="md:col-span-2">
                   <Label htmlFor="shipping_pickup_address">Street address</Label>
                   <Input id="shipping_pickup_address" value={formData.shipping_pickup_address} onChange={event => handleInputChange('shipping_pickup_address', event.target.value)} placeholder="Street number and name" />

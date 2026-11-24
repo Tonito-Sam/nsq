@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { DollarSign, RefreshCw, Globe } from 'lucide-react';
+import { ArrowLeftRight, DollarSign, RefreshCw, Globe } from 'lucide-react';
 
 // Free exchange rate API (public fallback)
-const EXCHANGE_API_URL_BASE = 'https://api.exchangerate-api.com/v4/latest';
+const EXCHANGE_API_URL_BASE = 'https://open.er-api.com/v6/latest';
 // Backend base path (prefer this so server-side caching / proxy is used)
 import apiUrl from '@/lib/api';
 const BACKEND_API_PATH = (base = 'USD') => apiUrl(`/api/currency/rates?base=${encodeURIComponent(base)}`);
@@ -65,90 +65,38 @@ const CURRENCY_DATA: Record<string, { name: string; symbol: string; emoji: strin
   'STN': { name: 'Sao Tomean Dobra', symbol: 'Db', emoji: '🇸🇹', category: 'africa' }
 };
 
-// Fallback rates (updated approximate values)
-const getFallbackRates = (): Record<string, number> => ({
-  'USD': 1,
-  'EUR': 0.92,
-  'GBP': 0.79,
-  'JPY': 150.25,
-  'CNY': 7.28,
-  'AUD': 1.52,
-  'CAD': 1.35,
-  'CHF': 0.88,
-  'INR': 83.15,
-  'SGD': 1.35,
-  'HKD': 7.82,
-  'KRW': 1330.5,
-  'MXN': 17.25,
-  'BRL': 4.95,
-  'RUB': 91.75,
-  'TRY': 32.45,
-  'SAR': 3.75,
-  'AED': 3.67,
-  'ZAR': 18.65,
-  'NGN': 1450.5,
-  'EGP': 30.9,
-  'KES': 160.75,
-  'GHS': 12.45,
-  'ETB': 56.8,
-  'DZD': 134.5,
-  'MAD': 10.05,
-  'TZS': 2500.25,
-  'UGX': 3800.75,
-  'CDF': 2750.0,
-  'XOF': 600.5,
-  'XAF': 600.5,
-  'MZN': 63.85,
-  'MWK': 1700.25,
-  'ZMW': 26.45,
-  'RWF': 1300.75,
-  'SZL': 18.65,
-  'LRD': 190.25,
-  'LSL': 18.65,
-  'NAD': 18.65,
-  'SDG': 601.25,
-  'TND': 3.12,
-  'LYD': 4.85,
-  'BIF': 2850.75,
-  'DJF': 177.75,
-  'GMD': 67.25,
-  'GNF': 8600.5,
-  'MGA': 4500.25,
-  'MRU': 39.85,
-  'SCR': 13.65,
-  'SLL': 22000.5,
-  'SOS': 571.25,
-  'SSP': 1300.75,
-  'STN': 22.85
-});
-
 interface Props {
   userCurrency?: string;
   walletBalance?: number;
-  showCurrencySelector?: boolean;
 }
 
-const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalance = 1000, showCurrencySelector = false }) => {
+const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalance = 1000 }) => {
   const [rates, setRates] = useState<Record<string, number> | null>(null);
   const [ratesLoading, setRatesLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState<'all' | 'world' | 'africa'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [converterAmount, setConverterAmount] = useState('1');
+  const [fromCurrency, setFromCurrency] = useState('USD');
+  const [toCurrency, setToCurrency] = useState(CURRENCY_DATA[userCurrency] ? userCurrency : 'USD');
+  const previousUserCurrency = useRef(userCurrency);
 
-  const [baseCurrency, setBaseCurrency] = useState<string>('USD');
-
-  // walletBalance is expressed in USD. We need to compute approximate wallet value in user's currency
-  // given rates that are expressed relative to `baseCurrency`.
-  const walletInLocalCurrency = rates && userCurrency !== 'USD'
-    ? (() => {
-        const rateToUser = rates[userCurrency] || 1;
-        const rateToUSD = rates['USD'] || 1; // rate of 1 baseCurrency to USD
-        // value of 1 USD in userCurrency = rateToUser / rateToUSD
-        const oneUsdInUser = rateToUser / rateToUSD;
-        return (walletBalance * oneUsdInUser).toFixed(2);
-      })()
+  const availableCurrencies = Object.keys(CURRENCY_DATA).filter((code) =>
+    rates && Number.isFinite(rates[code]) && rates[code] > 0
+  );
+  const amountValue = converterAmount.trim() === '' ? Number.NaN : Number(converterAmount);
+  const convertedValue = rates
+    && Number.isFinite(amountValue)
+    && amountValue >= 0
+    && Number.isFinite(rates[fromCurrency])
+    && rates[fromCurrency] > 0
+    && Number.isFinite(rates[toCurrency])
+    && rates[toCurrency] > 0
+    ? amountValue / rates[fromCurrency] * rates[toCurrency]
+    : null;
+  const walletInLocalCurrency = rates && Number.isFinite(rates[userCurrency]) && rates[userCurrency] > 0
+    ? (walletBalance * rates[userCurrency]).toFixed(2)
     : null;
 
   const filteredCurrencies = Object.entries(CURRENCY_DATA)
@@ -174,10 +122,13 @@ const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalanc
       // Try backend first (uses service-side caching if available)
       let data: any = null;
       try {
-        const backendUrl = BACKEND_API_PATH(baseCurrency);
+        const backendUrl = BACKEND_API_PATH('USD');
         const backendResp = await fetch(backendUrl);
         if (backendResp.ok) {
-          data = await backendResp.json();
+          const responseData = await backendResp.json();
+          if ((!responseData.base || responseData.base === 'USD') && responseData.source !== 'cache-stale') {
+            data = responseData;
+          }
         } else {
           console.warn('Backend currency route returned non-OK', backendResp.status);
         }
@@ -187,44 +138,65 @@ const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalanc
 
       // If backend didn't provide data, fall back to public API
       if (!data) {
-        const response = await fetch(`${EXCHANGE_API_URL_BASE}/${encodeURIComponent(baseCurrency)}`);
+        const response = await fetch(`${EXCHANGE_API_URL_BASE}/USD`);
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         data = await response.json();
       }
 
-      // Support several shapes: { rates: {...}, time_last_updated } or plain rates object
-      const apiRates: Record<string, number> = { ...(data.rates || data.rates_per || data) };
-      const fallbackRates = getFallbackRates();
-      const mergedRates = { ...fallbackRates, ...apiRates };
+      const apiRates = data.rates || data.conversion_rates;
+      if (data.result && data.result !== 'success') throw new Error('The exchange-rate provider reported an error.');
+      if (!apiRates || typeof apiRates !== 'object') throw new Error('The exchange-rate response was invalid.');
+      const validRates = Object.fromEntries(
+        Object.entries(apiRates).filter(([, value]) => typeof value === 'number' && Number.isFinite(value) && value > 0)
+      ) as Record<string, number>;
+      validRates.USD = 1;
+      if (Object.keys(validRates).length < 2) throw new Error('No usable exchange rates were returned.');
 
-      setRates(mergedRates);
-      const ts = data.time_last_updated || data.updated_at || data.updatedAt || data.updated || null;
-      setUpdatedAt(ts ? (typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts)) : new Date());
-      setRetryCount(0);
-    } catch (err: any) {
+      setRates(validRates);
+      const timestamp = data.timestamp || data.time_last_updated || data.updated_at || data.updatedAt;
+      const parsedTimestamp = timestamp
+        ? new Date(typeof timestamp === 'number' && timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp)
+        : new Date();
+      setUpdatedAt(Number.isNaN(parsedTimestamp.getTime()) ? new Date() : parsedTimestamp);
+    } catch (err: unknown) {
       console.error('Failed to fetch exchange rates:', err);
-      setError(err?.message || String(err));
-
-      if (!rates) {
-        if (retryCount < 3) {
-          setRetryCount(prev => prev + 1);
-        } else {
-          setRates(getFallbackRates());
-          setUpdatedAt(new Date());
-        }
-      }
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setRatesLoading(false);
     }
-  }, [rates, retryCount, baseCurrency]);
+  }, []);
 
   useEffect(() => {
     fetchExchangeRates();
-    const intervalId = setInterval(fetchExchangeRates, 60000);
+    const intervalId = setInterval(fetchExchangeRates, 5 * 60 * 1000);
     return () => clearInterval(intervalId);
   }, [fetchExchangeRates]);
 
+  useEffect(() => {
+    if (previousUserCurrency.current !== userCurrency) {
+      previousUserCurrency.current = userCurrency;
+      if (CURRENCY_DATA[userCurrency]) setToCurrency(userCurrency);
+    }
+  }, [userCurrency]);
+
+  useEffect(() => {
+    if (!rates) return;
+    if (!rates[fromCurrency]) setFromCurrency('USD');
+    if (!rates[toCurrency]) setToCurrency(rates[userCurrency] ? userCurrency : 'USD');
+  }, [rates, userCurrency, fromCurrency, toCurrency]);
+
   const handleRefresh = () => fetchExchangeRates();
+  const handleSwapCurrencies = () => {
+    setFromCurrency(toCurrency);
+    setToCurrency(fromCurrency);
+  };
+  const formatConvertedValue = (value: number, currency: string) => {
+    try {
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value);
+    } catch {
+      return `${value.toFixed(2)} ${currency}`;
+    }
+  };
 
   const formatCurrencyValue = (value: number, currency: string) => {
     const currencyData = CURRENCY_DATA[currency];
@@ -244,17 +216,6 @@ const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalanc
             <CardTitle className="text-lg">Live Rates</CardTitle>
           </div>
           <div className="flex items-center gap-2">
-            {showCurrencySelector && (
-              <select
-                value={baseCurrency}
-                onChange={(e) => setBaseCurrency(e.target.value)}
-                className="bg-transparent text-sm text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 rounded px-2 py-1 mr-2"
-              >
-                {['USD','EUR','GBP','ZAR','NGN','KES','GHS'].map(c => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            )}
             <button
               onClick={handleRefresh}
               disabled={ratesLoading}
@@ -314,7 +275,7 @@ const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalanc
               {rates && rates[userCurrency] && (
                 <div className="text-right">
                   <p className="text-lg font-bold text-gray-900 dark:text-gray-100">
-                    1 USD = {rates[userCurrency].toFixed(2)} {userCurrency}
+                    1 USD = {rates[userCurrency].toLocaleString(undefined, { maximumFractionDigits: 4 })} {userCurrency}
                   </p>
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     1 {userCurrency} = {(1 / rates[userCurrency]).toFixed(4)} USD
@@ -330,6 +291,73 @@ const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalanc
               </div>
             )}
           </div>
+
+          <section aria-label="Currency converter" className="rounded-xl border border-blue-100 bg-blue-50/70 p-4 dark:border-blue-900/50 dark:bg-blue-950/20">
+            <div className="mb-3">
+              <h3 className="font-semibold text-gray-900 dark:text-gray-100">Currency converter</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Indicative conversion using the latest available rates.</p>
+            </div>
+            <label htmlFor="converter-amount" className="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-300">Amount</label>
+            <input
+              id="converter-amount"
+              type="number"
+              min="0"
+              step="any"
+              inputMode="decimal"
+              value={converterAmount}
+              onChange={(event) => setConverterAmount(event.target.value)}
+              className="mb-3 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
+            />
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
+              <label className="min-w-0 text-xs font-medium text-gray-600 dark:text-gray-300">
+                From
+                <select
+                  aria-label="Convert from"
+                  value={fromCurrency}
+                  onChange={(event) => setFromCurrency(event.target.value)}
+                  disabled={!rates}
+                  className="mt-1 block w-full rounded-md border border-gray-200 bg-white px-2 py-2 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
+                >
+                  {availableCurrencies.map((code) => <option key={code} value={code}>{code} — {CURRENCY_DATA[code].name}</option>)}
+                </select>
+              </label>
+              <button
+                type="button"
+                aria-label="Swap currencies"
+                onClick={handleSwapCurrencies}
+                disabled={!rates}
+                className="mb-0.5 rounded-full border border-gray-200 bg-white p-2 text-blue-600 hover:bg-blue-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-blue-400"
+              >
+                <ArrowLeftRight className="h-4 w-4" />
+              </button>
+              <label className="min-w-0 text-xs font-medium text-gray-600 dark:text-gray-300">
+                To
+                <select
+                  aria-label="Convert to"
+                  value={toCurrency}
+                  onChange={(event) => setToCurrency(event.target.value)}
+                  disabled={!rates}
+                  className="mt-1 block w-full rounded-md border border-gray-200 bg-white px-2 py-2 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
+                >
+                  {availableCurrencies.map((code) => <option key={code} value={code}>{code} — {CURRENCY_DATA[code].name}</option>)}
+                </select>
+              </label>
+            </div>
+            <div aria-live="polite" className="mt-3 rounded-lg bg-white px-3 py-3 dark:bg-gray-900">
+              {convertedValue !== null ? (
+                <>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Estimated amount</p>
+                  <p className="break-all text-xl font-bold text-blue-700 dark:text-blue-300">
+                    {formatConvertedValue(convertedValue, toCurrency)}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  {ratesLoading ? 'Loading rates…' : error ? 'Conversion is unavailable until rates can be loaded.' : 'Enter a valid amount to convert.'}
+                </p>
+              )}
+            </div>
+          </section>
 
           <div className="space-y-2">
             <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -347,13 +375,13 @@ const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalanc
             ) : error && !rates ? (
               <div className="text-center py-4">
                 <p className="text-sm text-red-500 dark:text-red-400">Failed to fetch rates</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Using fallback data</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Refresh to try again.</p>
               </div>
             ) : rates ? (
               <>
                 {filteredCurrencies.map(([currencyCode, currencyData]) => {
                   const rate = rates[currencyCode];
-                  if (!rate) return null;
+                  if (!Number.isFinite(rate) || rate <= 0) return null;
                   // Determine fraction digits safely and clamp into valid range
                   let maxDigits = (currencyCode === 'JPY' || currencyCode === 'KRW') ? 0 : 2;
                   if (!Number.isFinite(maxDigits) || maxDigits < 0) maxDigits = 0;
@@ -407,16 +435,15 @@ const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalanc
                     Updating rates...
                   </span>
                 ) : error ? (
-                  <span className="text-yellow-500 dark:text-yellow-400">⚠️ Using cached data</span>
+                  <span className="text-yellow-600 dark:text-yellow-400">{rates ? '⚠️ Refresh failed; showing last loaded rates' : '⚠️ Rates unavailable'}</span>
                 ) : (
-                  <span className="text-green-500 dark:text-green-400">✓ Rates live</span>
+                  <span className="text-green-600 dark:text-green-400">✓ Rates available</span>
                 )}
               </div>
 
               {updatedAt && (
                 <div className="text-xs text-gray-500 dark:text-gray-400 text-right">
-                  <p>Updated: {new Date(updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</p>
-                  <CountdownTimer />
+                  <p>Updated: {new Date(updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                 </div>
               )}
             </div>
@@ -431,17 +458,6 @@ const ExchangeRatesCard: React.FC<Props> = ({ userCurrency = 'USD', walletBalanc
       </CardContent>
     </Card>
   );
-};
-
-const CountdownTimer: React.FC = () => {
-  const [seconds, setSeconds] = useState(60);
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      setSeconds(prev => (prev <= 1 ? 60 : prev - 1));
-    }, 1000);
-    return () => clearInterval(intervalId);
-  }, []);
-  return <p className="text-xs">Next update in: <span className="font-medium">{seconds}s</span></p>;
 };
 
 export default ExchangeRatesCard;

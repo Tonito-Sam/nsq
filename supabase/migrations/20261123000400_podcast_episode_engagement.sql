@@ -140,3 +140,4 @@ revoke all on function public.toggle_studio_episode_like(uuid) from public, anon
 grant execute on function public.toggle_studio_episode_like(uuid) to authenticated;
 
 notify pgrst, 'reload schema';
+a

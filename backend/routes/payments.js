@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
 const { enqueuePaidOrderNotification } = require('../utils/whatsappOrderNotifications');
+const { verifyShippingQuoteToken } = require('../utils/shippingQuoteToken');
 
 const router = express.Router();
 
@@ -41,7 +42,7 @@ async function buildStoreOrderRows({ userId, reference, amount, currency, gatewa
   });
   const productIds = [...new Set(requestedItems.map(item => item.productId))];
   const productResponse = await axios.get(
-    `${restUrl('/rest/v1/store_products')}?select=id,store_id,title,price,is_on_sale,sale_price,sale_starts,sale_ends&id=in.(${productIds.join(',')})`,
+    `${restUrl('/rest/v1/store_products')}?select=id,store_id,title,price,product_type,is_on_sale,sale_price,sale_starts,sale_ends&id=in.(${productIds.join(',')})`,
     { headers: supabaseAuthHeaders() }
   );
   const productsById = new Map((productResponse.data || []).map(product => [product.id, product]));
@@ -51,7 +52,11 @@ async function buildStoreOrderRows({ userId, reference, amount, currency, gatewa
   for (const item of requestedItems) {
     const product = productsById.get(item.productId);
     if (!product?.store_id) throw new Error('A cart product is not associated with a store');
-    const group = groups.get(product.store_id) || { storeId: product.store_id, weight: 0, lines: [] };
+    const group = groups.get(product.store_id) || { storeId: product.store_id, weight: 0, lines: [], shippingProductLines: [], requiresShipping: false };
+    const productType = String(product.product_type || '').toLowerCase();
+    const requiresShipping = !['digital', 'download', 'service'].some(type => productType.includes(type));
+    group.requiresShipping ||= requiresShipping;
+    if (requiresShipping) group.shippingProductLines.push({ product_id: item.productId, quantity: item.quantity });
     const now = Date.now();
     const saleStarts = product.sale_starts ? Date.parse(product.sale_starts) : Number.NEGATIVE_INFINITY;
     const saleEnds = product.sale_ends ? Date.parse(product.sale_ends) : Number.POSITIVE_INFINITY;
@@ -66,12 +71,39 @@ async function buildStoreOrderRows({ userId, reference, amount, currency, gatewa
   const totalWeight = groupList.reduce((sum, group) => sum + group.weight, 0);
   if (totalWeight <= 0) throw new Error('The products have no valid prices');
 
+  const shippingByStore = metadata?.shipping_by_store || {};
   let allocated = 0;
   return groupList.map((group, index) => {
     const groupAmount = index === groupList.length - 1
       ? Number((Number(amount) - allocated).toFixed(2))
       : Number((Number(amount) * group.weight / totalWeight).toFixed(2));
     allocated = Number((allocated + groupAmount).toFixed(2));
+    const quote = group.requiresShipping
+      ? verifyShippingQuoteToken(shippingByStore[group.storeId]?.quote_token, { userId, storeId: group.storeId })
+      : null;
+    const quoteProducts = Array.isArray(quote?.productLines) ? quote.productLines : [];
+    const shippingInfo = metadata?.shipping_info || {};
+    const expectedDelivery = {
+      country: String(shippingInfo.country || '').trim().toUpperCase(),
+      postal_code: String(shippingInfo.postalCode || '').trim(),
+      city: String(shippingInfo.city || '').trim(),
+      street: [shippingInfo.address, shippingInfo.address2].map(value => String(value || '').trim()).filter(Boolean).join(', '),
+      province: String(shippingInfo.state || '').trim(),
+      name: String(shippingInfo.fullName || '').trim(),
+      email: String(shippingInfo.email || '').trim(),
+      phone: String(shippingInfo.phone || '').trim(),
+    };
+    const deliveryMatches = quote && Object.entries(expectedDelivery)
+      .every(([field, value]) => quote.deliveryAddress?.[field] === value);
+    const sortProductLines = lines => lines
+      .map(line => ({ product_id: String(line.product_id), quantity: Number(line.quantity) }))
+      .sort((first, second) => first.product_id.localeCompare(second.product_id));
+    if (group.requiresShipping && (!quote || !['courierguy', 'terminalafrica'].includes(quote.provider) ||
+      !quote.rateId || !Number.isFinite(Number(quote.amount)) || Number(quote.amount) < 0 ||
+      !deliveryMatches ||
+      JSON.stringify(sortProductLines(quoteProducts)) !== JSON.stringify(sortProductLines(group.shippingProductLines)))) {
+      throw new Error(`A valid live shipping quote is required for store ${group.storeId}`);
+    }
     return {
       user_id: userId,
       store_id: group.storeId,
@@ -82,6 +114,14 @@ async function buildStoreOrderRows({ userId, reference, amount, currency, gatewa
       payment_method: gateway,
       payment_reference: reference,
       shipping_address: JSON.stringify(metadata?.shipping_info || {}),
+      shipping_cost: quote ? Number(quote.amount) : 0,
+      shipping_currency: quote?.currency || currency,
+      shipping_provider: quote?.provider || null,
+      shipping_rate_id: quote?.rateId || null,
+      shipping_service: quote?.service || null,
+      shipping_estimated_delivery: quote?.estimatedDelivery || null,
+      shipping_quote_token: quote ? shippingByStore[group.storeId].quote_token : null,
+      shipping_status: quote ? 'ready_to_book' : null,
       item_summary: group.lines.join(', ').slice(0, 500),
     };
   });
@@ -849,7 +889,9 @@ router.post('/verify', async (req, res) => {
     }
 
     if (metadata?.wallet_topup === true) {
-      if (!accessToken || String(metadata.wallet_topup_reference || '') !== String(reference)) {
+      const topupReference = String(metadata.wallet_topup_reference || '');
+      const providerReference = String(transaction?.reference || transaction?.tx_ref || '');
+      if (!accessToken || !topupReference || providerReference !== topupReference) {
         return res.status(400).json({ error: 'A matching wallet top-up intent is required' });
       }
       const userResponse = await axios.get(`${SUPABASE_URL.replace(/\/+$/, '')}/auth/v1/user`, {
@@ -862,7 +904,7 @@ router.post('/verify', async (req, res) => {
         return res.status(403).json({ error: 'Signed-in user does not match the wallet top-up' });
       }
       const topup = await creditVerifiedWalletTopup({
-        reference,
+        reference: topupReference,
         gateway,
         amount: chargedAmount,
         currency: chargedCurrency,

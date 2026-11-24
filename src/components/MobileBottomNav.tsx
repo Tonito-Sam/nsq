@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Home, Store, Video, Plus, Grid3X3 } from 'lucide-react';
+import { Home, Video, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { CreatePostModal } from './CreatePostModal';
@@ -72,11 +72,9 @@ export const MobileBottomNav = ({
 
   const navItems = [
     { icon: Home, label: 'Feeds', path: '/' },
-    { icon: Store, label: 'My Store', path: '/my-store' },
   ];
 
   const rightNavItems = [
-    { icon: Grid3X3, label: 'Square', path: '/square' },
     { icon: Video, label: 'Studio', path: '/studio' },
   ];
 

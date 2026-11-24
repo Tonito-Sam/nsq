@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { ChevronDown, User, Wallet, Store, Shield, Settings, LogOut, Megaphone } from 'lucide-react';
+import { ChevronDown, User, Wallet, Shield, Settings, LogOut, Megaphone } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useAdmin } from '@/hooks/useAdmin';
@@ -147,17 +147,6 @@ export const ProfileDropdown = ({ profileAvatarUrl = '' }: ProfileDropdownProps)
             >
               <Megaphone className="h-4 w-4" />
               <span>Ad Center</span>
-            </button>
-
-            <button
-              onClick={() => {
-                navigate('/my-store');
-                setShowProfileDropdown(false);
-              }}
-              className="w-full flex items-center space-x-3 px-3 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-            >
-              <Store className="h-4 w-4" />
-              <span>My Store</span>
             </button>
 
             {isAdmin && (

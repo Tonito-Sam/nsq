@@ -239,7 +239,7 @@ export const ProductFormFields: FC<ProductFormFieldsProps> = ({
 				<div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
 					<div>
 						<Label className="font-semibold">Packed parcel measurements</Label>
-						<p className="mt-1 text-sm text-gray-600 dark:text-gray-400">Required for live South African courier pricing. Measure the packed item.</p>
+						<p className="mt-1 text-sm text-gray-600 dark:text-gray-400">Required for live courier pricing and shipment booking. Measure the packed item.</p>
 					</div>
 					<div className="grid grid-cols-2 gap-3 md:grid-cols-4">
 						<div className="space-y-1"><Label htmlFor="shipping_weight_kg">Weight (kg)</Label><Input id="shipping_weight_kg" type="number" min="0.01" step="0.01" value={formData.shipping_weight_kg} onChange={event => onInputChange('shipping_weight_kg', event.target.value)} required /></div>

@@ -19,6 +19,13 @@ const WalletTopupResult = () => {
             <p className="mb-6 text-xs text-gray-500">Reference: {ref}</p>
             <Button className="w-full" onClick={() => navigate('/wallet')}>Return to Wallet</Button>
           </>
+        ) : status === 'cancelled' ? (
+          <>
+            <h2 className="text-2xl font-bold mb-4 text-gray-700 dark:text-gray-300">Top-up Cancelled</h2>
+            <p className="mb-2 text-gray-700 dark:text-gray-300">You closed the payment window. Your wallet was not credited.</p>
+            <p className="mb-6 text-xs text-gray-500">Reference: {ref}</p>
+            <Button className="w-full" onClick={() => navigate('/wallet')}>Return to Wallet</Button>
+          </>
         ) : (
           <>
             <h2 className="text-2xl font-bold mb-4 text-red-600">Payment Failed</h2>

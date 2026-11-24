@@ -13,6 +13,7 @@ import {
 import { Package, Eye, Edit } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
+import apiUrl from '@/lib/api';
 
 interface Order {
   id: string;
@@ -21,6 +22,14 @@ interface Order {
   status: string;
   created_at: string;
   shipping_address: any;
+  shipping_cost?: number | null;
+  shipping_currency?: string | null;
+  shipping_provider?: string | null;
+  shipping_service?: string | null;
+  shipping_status?: string | null;
+  tracking_number?: string | null;
+  tracking_url?: string | null;
+  shipping_label_url?: string | null;
   customer?: {
     first_name?: string;
     last_name?: string;
@@ -65,6 +74,7 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [bookingOrderId, setBookingOrderId] = useState<string | null>(null);
 
   useEffect(() => {
     if (storeId) {
@@ -157,6 +167,34 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
     }
   };
 
+  const bookShipment = async (orderId: string) => {
+    setBookingOrderId(orderId);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Sign in again before booking this shipment.');
+
+      const response = await fetch(apiUrl(`/api/shipping/orders/${encodeURIComponent(orderId)}/book`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Could not book this shipment.');
+      const bookedOrder = result.order as Order;
+      setOrders(previous => previous.map(order => order.id === orderId ? { ...order, ...bookedOrder } : order));
+      setSelectedOrder(previous => previous?.id === orderId ? { ...previous, ...bookedOrder } : previous);
+      toast({ title: 'Shipment booked', description: 'Tracking details are now available on the order.' });
+    } catch (error) {
+      console.error('Could not book shipment:', error);
+      toast({
+        title: 'Shipment booking failed',
+        description: error instanceof Error ? error.message : 'Could not book this shipment.',
+        variant: 'destructive',
+      });
+    } finally {
+      setBookingOrderId(null);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-yellow-600';
@@ -229,7 +267,7 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
                 </TableCell>
                 <TableCell>
                   <Badge variant={orderRequiresShipping(order) ? 'default' : 'secondary'}>
-                    {orderRequiresShipping(order) ? 'Required' : 'Not required'}
+                    {orderRequiresShipping(order) ? order.shipping_status || 'Required' : 'Not required'}
                   </Badge>
                 </TableCell>
                 <TableCell className="font-semibold">
@@ -260,14 +298,24 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
                         Process
                       </Button>
                     )}
-                    {order.status === 'processing' && (
+                    {order.status === 'processing' && !orderRequiresShipping(order) && (
                       <Button
                         size="sm"
-                        onClick={() => updateOrderStatus(order.id, orderRequiresShipping(order) ? 'shipped' : 'completed')}
+                        onClick={() => updateOrderStatus(order.id, 'completed')}
                       >
-                        {orderRequiresShipping(order) ? 'Ship' : 'Complete'}
+                        Complete
                       </Button>
                     )}
+                    {orderRequiresShipping(order) && order.shipping_status === 'ready_to_book' &&
+                      ['paid', 'processing'].includes(order.status) && (
+                        <Button
+                          size="sm"
+                          onClick={() => void bookShipment(order.id)}
+                          disabled={bookingOrderId === order.id}
+                        >
+                          {bookingOrderId === order.id ? 'Booking…' : 'Book shipment'}
+                        </Button>
+                      )}
                   </div>
                 </TableCell>
               </TableRow>
@@ -311,7 +359,9 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
                   </div>
                   <div>
                     <p className="text-sm text-gray-500">Shipping</p>
-                    <p>{orderRequiresShipping(selectedOrder) ? 'Required' : 'Not required'}</p>
+                    <p>{orderRequiresShipping(selectedOrder)
+                      ? `${selectedOrder.shipping_status || 'Pending'}${selectedOrder.shipping_service ? ` · ${selectedOrder.shipping_service}` : ''}`
+                      : 'Not required'}</p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-500">Total</p>
@@ -320,6 +370,21 @@ export const ManageOrders: React.FC<ManageOrdersProps> = ({ storeId, storeCurren
                     </p>
                   </div>
                 </div>
+
+                {orderRequiresShipping(selectedOrder) && (
+                  <div className="space-y-2 rounded-lg bg-gray-50 p-3 dark:bg-gray-800">
+                    <h4 className="font-semibold">Shipment</h4>
+                    <p className="text-sm">Shipping cost: {selectedOrder.shipping_currency || storeCurrency} {Number(selectedOrder.shipping_cost || 0).toLocaleString()}</p>
+                    {selectedOrder.tracking_number && <p className="text-sm">Tracking number: {selectedOrder.tracking_number}</p>}
+                    {selectedOrder.tracking_url && <a className="text-sm text-blue-600 underline" href={selectedOrder.tracking_url} target="_blank" rel="noopener noreferrer">Track shipment</a>}
+                    {selectedOrder.shipping_label_url && <a className="ml-3 text-sm text-blue-600 underline" href={selectedOrder.shipping_label_url} target="_blank" rel="noopener noreferrer">Shipping label</a>}
+                    {selectedOrder.shipping_status === 'ready_to_book' && ['paid', 'processing'].includes(selectedOrder.status) && (
+                      <Button size="sm" onClick={() => void bookShipment(selectedOrder.id)} disabled={bookingOrderId === selectedOrder.id}>
+                        {bookingOrderId === selectedOrder.id ? 'Booking…' : 'Book shipment'}
+                      </Button>
+                    )}
+                  </div>
+                )}
 
                 <div>
                   <h4 className="font-semibold mb-2">Order Items</h4>

@@ -197,6 +197,8 @@ const loadScript = (src: string): Promise<void> => {
 };
 
 const isWalletTopup = (reference: string) => reference.startsWith('TOPUP-') || reference.startsWith('wallet_');
+const walletTopupResultUrl = (status: 'success' | 'failed' | 'cancelled', reference: string) =>
+  `/wallet-topup-result?status=${status}&ref=${encodeURIComponent(reference)}`;
 
 const getErrorMessage = (err: unknown): string => {
   if (typeof err === 'string') return err;
@@ -210,6 +212,7 @@ const initiatePaystackPayment = async (payment: any) => {
   const publicKey = (import.meta as any).env?.VITE_PAYSTACK_PUBLIC_KEY;
   if (!publicKey) throw new Error('Paystack is not configured');
   await loadScript('https://js.paystack.co/v1/inline.js');
+  let callbackStarted = false;
 
   const config = {
     key: publicKey,
@@ -229,6 +232,7 @@ const initiatePaystackPayment = async (payment: any) => {
       expected_currency: payment.currency,
     },
     callback: (response: any) => {
+      callbackStarted = true;
       (async () => {
         try {
           console.log('Paystack payment successful:', response);
@@ -236,9 +240,9 @@ const initiatePaystackPayment = async (payment: any) => {
           if (isWalletTopup(response.reference)) {
             // WALLET TOP-UP FLOW
             if (verification.status === 'success') {
-              window.location.href = `/wallet-topup-result?status=success&ref=${response.reference}`;
+              window.location.href = walletTopupResultUrl('success', response.reference);
             } else {
-              window.location.href = `/wallet-topup-result?status=failed&ref=${response.reference}`;
+              window.location.href = walletTopupResultUrl('failed', response.reference);
             }
             return;
           }
@@ -257,13 +261,22 @@ const initiatePaystackPayment = async (payment: any) => {
           }
         } catch (err) {
           console.error('Error in Paystack callback:', err);
+          if (isWalletTopup(response.reference)) {
+            window.location.href = walletTopupResultUrl('failed', response.reference);
+            return;
+          }
           alert('A payment error occurred: ' + getErrorMessage(err));
           window.location.href = `/order-summary?status=failed&ref=${response.reference}`;
         }
       })();
     },
     onClose: () => {
+      if (callbackStarted) return;
       console.log('Paystack payment cancelled');
+      if (isWalletTopup(payment.reference)) {
+        window.location.href = walletTopupResultUrl('cancelled', payment.reference);
+        return;
+      }
       window.location.href = '/checkout?status=cancelled';
     }
   };
@@ -286,6 +299,7 @@ const initiateFlutterwavePayment = async (payment: any) => {
   const publicKey = (import.meta as any).env?.VITE_FLUTTERWAVE_PUBLIC_KEY;
   if (!publicKey) throw new Error('Flutterwave is not configured');
   await loadScript('https://checkout.flutterwave.com/v3.js');
+  let callbackStarted = false;
 
   const config = {
     public_key: publicKey,
@@ -305,6 +319,7 @@ const initiateFlutterwavePayment = async (payment: any) => {
     },
     meta: payment.metadata,
     callback: (response: any) => {
+      callbackStarted = true;
       (async () => {
         try {
           console.log('Flutterwave payment successful:', response);
@@ -312,9 +327,9 @@ const initiateFlutterwavePayment = async (payment: any) => {
           if (isWalletTopup(payment.reference)) {
             // WALLET TOP-UP FLOW
             if (verification.status === 'success') {
-              window.location.href = `/wallet-topup-result?status=success&ref=${response.transaction_id}`;
+              window.location.href = walletTopupResultUrl('success', payment.reference);
             } else {
-              window.location.href = `/wallet-topup-result?status=failed&ref=${response.transaction_id}`;
+              window.location.href = walletTopupResultUrl('failed', payment.reference);
             }
             return;
           }
@@ -333,13 +348,22 @@ const initiateFlutterwavePayment = async (payment: any) => {
           }
         } catch (err) {
           console.error('Error in Flutterwave callback:', err);
+          if (isWalletTopup(payment.reference)) {
+            window.location.href = walletTopupResultUrl('failed', payment.reference);
+            return;
+          }
           alert('A payment error occurred: ' + getErrorMessage(err));
           window.location.href = `/order-summary?status=failed&ref=${response.transaction_id}`;
         }
       })();
     },
     onClose: () => {
+      if (callbackStarted) return;
       console.log('Flutterwave payment cancelled');
+      if (isWalletTopup(payment.reference)) {
+        window.location.href = walletTopupResultUrl('cancelled', payment.reference);
+        return;
+      }
       window.location.href = '/checkout?status=cancelled';
     }
   };

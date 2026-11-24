@@ -12,7 +12,7 @@ export const shippingPartners: ShippingPartner[] = [
     name: 'The Courier Guy',
     supportsApi: true,
     docs: 'https://www.shiplogic.com/developers',
-    description: 'South African courier service with nationwide coverage'
+    description: 'South African domestic delivery via ShipLogic'
   },
   {
     code: 'shiplogic',
@@ -26,26 +26,26 @@ export const shippingPartners: ShippingPartner[] = [
     name: 'Terminal Africa',
     supportsApi: true,
     docs: 'https://docs.terminal.africa/tship/master.md',
-    description: 'International shipping quotes for routes to and from Nigeria'
+    description: 'Shipping quotes and booking for routes to or from Nigeria'
   },
   {
     code: 'fedex',
     name: 'FedEx',
-    supportsApi: true,
+    supportsApi: false,
     docs: 'https://developer.fedex.com/',
     description: 'International express delivery service'
   },
   {
     code: 'dhl',
     name: 'DHL',
-    supportsApi: true,
+    supportsApi: false,
     docs: 'https://developer.dhl.com/',
     description: 'Global courier and logistics company'
   },
   {
     code: 'ups',
     name: 'UPS',
-    supportsApi: true,
+    supportsApi: false,
     docs: 'https://developer.ups.com/',
     description: 'United Parcel Service - global shipping'
   },
@@ -58,7 +58,7 @@ export const shippingPartners: ShippingPartner[] = [
   {
     code: 'aramex',
     name: 'Aramex',
-    supportsApi: true,
+    supportsApi: false,
     docs: 'https://www.aramex.com/developers',
     description: 'Middle East and global logistics provider'
   }
@@ -66,19 +66,15 @@ export const shippingPartners: ShippingPartner[] = [
 
 // Utility function to select default shipping partner based on vendor and buyer country
 export function getDefaultShippingPartner(vendorCountry: string, buyerCountry: string, storeDefaultPartner?: string): string {
-  if (vendorCountry.toUpperCase() === 'NG' || buyerCountry.toUpperCase() === 'NG') {
+  const origin = vendorCountry.trim().toUpperCase();
+  const destination = buyerCountry.trim().toUpperCase();
+  if (origin === 'NG' || destination === 'NG') {
     return 'terminalafrica';
   }
-  // If vendor is in South Africa and buyer is outside, use Aramex by default
-  if (vendorCountry === 'ZA' && buyerCountry !== 'ZA') {
-    return 'aramex';
-  }
-  // If both are in South Africa, use Courier Guy by default
-  if (vendorCountry === 'ZA' && buyerCountry === 'ZA') {
+  if (origin === 'ZA' && destination === 'ZA') {
     return 'courierguy';
   }
-  // Fallback to store's configured partner or another logic
-  return storeDefaultPartner || 'courierguy';
+  return storeDefaultPartner?.trim().toLowerCase() || '';
 }
 
 // Alias for backward compatibility

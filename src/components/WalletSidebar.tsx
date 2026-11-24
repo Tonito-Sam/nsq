@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 // Badge import removed: not used in this component
-import { TrendingUp, DollarSign, CreditCard, ArrowUpRight, ArrowDownLeft, Users, UserPlus, ArrowLeft } from 'lucide-react';
+import { TrendingUp, CreditCard, ArrowUpRight, Users, UserPlus, ArrowLeft } from 'lucide-react';
 import ExchangeRatesCard from '@/components/ExchangeRatesCard';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 
@@ -17,9 +17,7 @@ interface User {
 
 interface WalletSidebarProps {
   onTopUp?: () => void;
-  onWithdraw?: () => void;
   onSendMoney?: () => void;
-  onRequestPayment?: () => void;
   // New props for the two cards
   recentRecipients?: User[];
   onSelectRecipient?: (recipient: User) => void;
@@ -31,9 +29,7 @@ interface WalletSidebarProps {
 
 export const WalletSidebar: React.FC<WalletSidebarProps> = ({ 
   onTopUp, 
-  onWithdraw, 
   onSendMoney, 
-  onRequestPayment,
   recentRecipients = [],
   onSelectRecipient,
   onSendToRecipient,
@@ -44,9 +40,7 @@ export const WalletSidebar: React.FC<WalletSidebarProps> = ({
   const [showMobileDetails, setShowMobileDetails] = useState(false);
   const quickActions = [
     { label: 'Send Money', icon: ArrowUpRight, color: 'text-blue-600', onClick: onSendMoney },
-    { label: 'Request Payment', icon: ArrowDownLeft, color: 'text-green-600', onClick: onRequestPayment },
     { label: 'Top Up', icon: CreditCard, color: 'text-purple-600', onClick: onTopUp },
-    { label: 'Withdraw', icon: DollarSign, color: 'text-orange-600', onClick: onWithdraw }
   ];
 
   // ExchangeRatesCard handles local currency conversion and display
@@ -92,10 +86,10 @@ export const WalletSidebar: React.FC<WalletSidebarProps> = ({
           </h3>
           <div className="space-y-4">
             <div className="text-center p-4 bg-gradient-to-r from-purple-600 to-blue-600 rounded-lg">
-              <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+              <div className="text-2xl font-bold text-white">
                 $0
               </div>
-              <div className="text-sm text-gray-600 dark:text-gray-400">
+              <div className="text-sm text-white/85">
                 Total Earned
               </div>
             </div>
@@ -179,7 +173,7 @@ export const WalletSidebar: React.FC<WalletSidebarProps> = ({
         </Card>
 
         {/* Exchange Rates Card (replaced by ExchangeRatesCard component) */}
-        <ExchangeRatesCard userCurrency={userCurrency} walletBalance={walletBalance} showCurrencySelector={true} />
+        <ExchangeRatesCard userCurrency={userCurrency} walletBalance={walletBalance} />
       </div>
 
       {/* Mobile details dialog: shows the hidden cards on small screens */}
@@ -205,8 +199,8 @@ export const WalletSidebar: React.FC<WalletSidebarProps> = ({
                   </h3>
                   <div className="space-y-4">
                     <div className="text-center p-4 bg-gradient-to-r from-purple-600 to-blue-600 rounded-lg">
-                      <div className="text-2xl font-bold text-green-600 dark:text-green-400">$0</div>
-                      <div className="text-sm text-gray-600 dark:text-gray-400">Total Earned</div>
+                      <div className="text-2xl font-bold text-white">$0</div>
+                      <div className="text-sm text-white/85">Total Earned</div>
                     </div>
                     <div className="grid grid-cols-2 gap-3 text-center">
                       <div>
@@ -274,7 +268,7 @@ export const WalletSidebar: React.FC<WalletSidebarProps> = ({
               </Card>
 
             {/* Exchange Rates Card */}
-            <ExchangeRatesCard userCurrency={userCurrency} walletBalance={walletBalance} showCurrencySelector={true} />
+            <ExchangeRatesCard userCurrency={userCurrency} walletBalance={walletBalance} />
           </div>
             {/* Mobile bottom nav for consistency */}
             <div className="sm:hidden">

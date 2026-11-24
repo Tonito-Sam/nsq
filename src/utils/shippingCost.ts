@@ -1,4 +1,5 @@
 import { shippingPartners } from './shippingPartners';
+import type { ShippingPartner } from './shippingPartners';
 import { supabase } from '@/integrations/supabase/client';
 import apiUrl from '@/lib/api';
 
@@ -9,6 +10,12 @@ export interface Address {
   street: string;
   province: string;
   suburb?: string;
+  first_name?: string;
+  last_name?: string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  line2?: string;
 }
 
 export interface Parcel {
@@ -18,6 +25,7 @@ export interface Parcel {
   height: number;
   description?: string;
   items?: Array<{
+    product_id: string;
     name: string;
     description: string;
     type: 'document' | 'parcel';
@@ -41,17 +49,30 @@ export interface ShippingSettings {
   api_key?: string;
 }
 
+export interface LiveShippingQuote {
+  provider: 'courierguy' | 'terminalafrica';
+  rate_id: string;
+  quote_token: string;
+  service: string;
+  amount: number;
+  currency: string;
+  estimated_delivery?: string | null;
+  service_code?: string;
+  pickup_options?: Array<{ type: string }>;
+}
+
 export interface ShippingCalculationResult {
   cost: number | null;
   error?: string;
-  partner?: any;
+  partner?: ShippingPartner;
+  quote?: LiveShippingQuote;
 }
 
 export const calculateShippingCost = async (
   settings: ShippingSettings,
-  collection: Address,
   delivery: Address,
-  parcel: Parcel
+  parcel: Parcel,
+  storeId?: string
 ): Promise<ShippingCalculationResult> => {
   if (!settings.partner_code) {
     return { cost: null, error: 'No shipping partner configured' };
@@ -62,35 +83,28 @@ export const calculateShippingCost = async (
     return { cost: null, error: 'Invalid shipping partner' };
   }
 
-  // If flat rate, return the flat rate
-  if (settings.cost_type === 'flat' && settings.flat_rate) {
-    return { cost: settings.flat_rate, partner };
+  if (settings.cost_type === 'flat' && Number.isFinite(settings.flat_rate) && settings.flat_rate! >= 0) {
+    return { cost: settings.flat_rate!, partner };
   }
 
-  // If API rate but no API key, return error
-  const backendManagedPartner = ['courierguy', 'shiplogic', 'terminalafrica'].includes(settings.partner_code);
-  if (settings.cost_type === 'api' && !settings.api_key && !backendManagedPartner) {
-    return { cost: null, error: 'API key required for live rates', partner };
-  }
-
-  // Calculate live rate via API
-  if (settings.cost_type === 'api' && (settings.api_key || backendManagedPartner)) {
-    return await fetchLiveShippingRate(partner, settings.api_key, collection, delivery, parcel);
+  if (settings.cost_type === 'api') {
+    if (!['courierguy', 'shiplogic', 'terminalafrica'].includes(settings.partner_code)) {
+      return { cost: null, error: `Live rates for ${partner.name} are not enabled`, partner };
+    }
+    if (!storeId) return { cost: null, error: 'Store information is required to request a shipping quote', partner };
+    return await fetchLiveShippingRate(partner, delivery, parcel, storeId);
   }
 
   return { cost: null, error: 'Invalid shipping configuration', partner };
 };
 
 const fetchLiveShippingRate = async (
-  partner: any,
-  apiKey: string,
-  collection: Address,
+  partner: ShippingPartner,
   delivery: Address,
-  parcel: Parcel
+  parcel: Parcel,
+  storeId: string
 ): Promise<ShippingCalculationResult> => {
   try {
-    console.log(`Fetching live rate for ${partner.name}...`, { collection, delivery, parcel });
-
     if (partner.code === 'courierguy' || partner.code === 'shiplogic') {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) throw new Error('Sign in to calculate shipping');
@@ -101,9 +115,9 @@ const fetchLiveShippingRate = async (
           Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          collection,
+          store_id: storeId,
           delivery,
-          parcels: parcel.parcels?.length ? parcel.parcels : [parcel],
+          product_items: parcel.items?.map(item => ({ product_id: item.product_id, quantity: item.quantity })) || [],
         }),
       });
 
@@ -114,8 +128,14 @@ const fetchLiveShippingRate = async (
 
       const data = await response.json();
       const quote = data.quotes?.[0];
-      if (!quote || !Number.isFinite(Number(quote.amount))) return { cost: null, error: 'No CourierGuy rates found', partner };
-      return { cost: Number(quote.amount), partner: { ...partner, name: quote.service || partner.name } };
+      if (!quote || !Number.isFinite(Number(quote.amount)) || !quote.rate_id || !quote.service_code || !quote.quote_token) {
+        return { cost: null, error: 'No bookable CourierGuy rates found for this route', partner };
+      }
+      return {
+        cost: Number(quote.amount),
+        partner: { ...partner, name: quote.service || partner.name },
+        quote: { ...quote, provider: 'courierguy' },
+      };
     } else if (partner.code === 'terminalafrica') {
       if (!parcel.items?.length) return { cost: null, error: 'Add product weights and values to calculate a Terminal Africa quote', partner };
       const { data: { session } } = await supabase.auth.getSession();
@@ -126,7 +146,12 @@ const fetchLiveShippingRate = async (
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ collection, delivery, parcel, currency: 'ZAR' }),
+        body: JSON.stringify({
+          store_id: storeId,
+          delivery,
+          product_items: parcel.items?.map(item => ({ product_id: item.product_id, quantity: item.quantity })) || [],
+          currency: 'ZAR',
+        }),
       });
 
       if (!response.ok) {
@@ -136,113 +161,20 @@ const fetchLiveShippingRate = async (
 
       const data = await response.json();
       const quote = data.quotes?.[0];
-      if (!quote || !Number.isFinite(Number(quote.amount))) return { cost: null, error: 'No Terminal Africa rates found for this route', partner };
-      return { cost: Number(quote.amount), partner: { ...partner, name: quote.service || partner.name } };
-    } else if (partner.code === 'fedex') {
-      // FedEx sandbox API integration
-      const fedexAuth = btoa('l7a5966ad47ff9496688bf25021f88acab:39aef17e89044c76b20077e71c48edaa');
-      
-      // Step 1: Get OAuth token
-      const tokenRes = await fetch('https://apis-sandbox.fedex.com/oauth/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': `Basic ${fedexAuth}`
-        },
-        body: 'grant_type=client_credentials&scope=oob'
-      });
-
-      if (!tokenRes.ok) {
-        throw new Error(`FedEx auth failed: ${tokenRes.status}`);
+      if (!quote || !Number.isFinite(Number(quote.amount)) || !quote.rate_id || !quote.quote_token) {
+        return { cost: null, error: 'No bookable Terminal Africa rates found for this route', partner };
       }
-
-      const tokenData = await tokenRes.json();
-      const fedexToken = tokenData.access_token;
-
-      // Step 2: Call FedEx rates API
-      const fedexRateRes = await fetch('https://apis-sandbox.fedex.com/rate/v1/rates/quotes', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${fedexToken}`
-        },
-        body: JSON.stringify({
-          accountNumber: { value: '510087000' },
-          requestedShipment: {
-            shipper: {
-              address: {
-                countryCode: collection.country,
-                postalCode: collection.postal_code,
-                city: collection.city,
-                stateOrProvinceCode: collection.province
-              }
-            },
-            recipient: {
-              address: {
-                countryCode: delivery.country,
-                postalCode: delivery.postal_code,
-                city: delivery.city,
-                stateOrProvinceCode: delivery.province
-              }
-            },
-            pickupType: 'DROPOFF_AT_FEDEX_LOCATION',
-            rateRequestType: ['ACCOUNT'],
-            requestedPackageLineItems: [
-              {
-                weight: { units: 'KG', value: parcel.weight },
-                dimensions: { length: parcel.length, width: parcel.width, height: parcel.height, units: 'CM' }
-              }
-            ]
-          }
-        })
-      });
-
-      if (!fedexRateRes.ok) {
-        throw new Error(`FedEx rate error: ${fedexRateRes.status}`);
-      }
-
-      const fedexRateData = await fedexRateRes.json();
-      console.log('FedEx response:', fedexRateData);
-
-      const amount = fedexRateData?.output?.rateReplyDetails?.[0]?.ratedShipmentDetails?.[0]?.totalNetCharge?.amount;
-      if (amount) {
-        return { cost: Number(amount), partner };
-      } else {
-        return { cost: null, error: 'No FedEx rates found', partner };
-      }
-    } else if (partner.code === 'aramex') {
-      // Aramex API integration (call your backend proxy for security)
-      try {
-        const response = await fetch(apiUrl('/api/aramex/rate'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            originCountry: collection.country,
-            destinationCountry: delivery.country,
-            weight: parcel.weight,
-          })
-        });
-        if (!response.ok) throw new Error('Aramex API error: ' + response.status);
-        const data = await response.json();
-        // Parse Aramex API response for rate (adjust as needed)
-        const rate = data?.TotalAmount || data?.rate || null;
-        if (rate) {
-          return { cost: Number(rate), partner };
-        } else {
-          return { cost: null, error: 'No Aramex rates found', partner };
-        }
-      } catch (err: any) {
-        return { cost: null, error: 'Aramex API error: ' + err.message, partner };
-      }
-    } else {
-      // Simulate API call for other partners
-      await new Promise(res => setTimeout(res, 1200));
-      const simulatedRate = 25 + Math.random() * 15; // Random rate between 25-40
-      return { cost: Number(simulatedRate.toFixed(2)), partner };
+      return {
+        cost: Number(quote.amount),
+        partner: { ...partner, name: quote.service || partner.name },
+        quote: { ...quote, provider: 'terminalafrica' },
+      };
     }
-  } catch (error: any) {
+    return { cost: null, error: `Live rates for ${partner.name} are not enabled`, partner };
+  } catch (error: unknown) {
     console.error('Shipping rate calculation error:', error);
-    return { cost: null, error: `Failed to calculate shipping: ${error.message}`, partner };
+    const message = error instanceof Error ? error.message : 'Please try again.';
+    return { cost: null, error: `Failed to calculate shipping: ${message}`, partner };
   }
 };
 
@@ -312,9 +244,8 @@ export const getShippingSettingsForStore = async (storeId: string): Promise<Ship
 
 export const getShippingCostForStore = async (params: {
   settings: ShippingSettings;
-  collection: Address;
   delivery: Address;
   parcel: Parcel;
 }): Promise<ShippingCalculationResult> => {
-  return await calculateShippingCost(params.settings, params.collection, params.delivery, params.parcel);
+  return await calculateShippingCost(params.settings, params.delivery, params.parcel);
 };

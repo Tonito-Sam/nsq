@@ -7,10 +7,9 @@ import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import { toast } from '@/hooks/use-toast';
 import { Header } from '@/components/Header';
-import { ShoppingCart, Trash2, Plus, Minus, Truck, Percent, AlertCircle, ArrowLeft, Store, CreditCard } from 'lucide-react';
+import { ShoppingCart, Trash2, Plus, Minus, Truck, Percent, ArrowLeft, Store, CreditCard } from 'lucide-react';
 import { MobileBottomNav } from '@/components/MobileBottomNav';
 // removed unused import
-import { getShippingSettingsForStore, calculateShippingCost, Address, Parcel } from '@/utils/shippingCost';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 
@@ -33,48 +32,11 @@ interface CartItem {
   };
 }
 
-interface StoreShippingInfo {
-  cost: number | null;
-  loading: boolean;
-  error?: string;
-  partner?: any;
-  skippedForDigital?: boolean;
-}
-
 const Cart = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [storeShipping, setStoreShipping] = useState<Record<string, StoreShippingInfo>>({});
-
-  // Default addresses (in a real app, these would come from user input or preferences)
-  const defaultCollection: Address = {
-    country: 'ZA',
-    postal_code: '2196',
-    city: 'Johannesburg',
-    street: '123 Test St',
-    province: 'Gauteng',
-    suburb: 'Sandton'
-  };
-
-  const defaultDelivery: Address = {
-    country: 'ZA',
-    postal_code: '8001',
-    city: 'Cape Town',
-    street: '456 Demo Ave',
-    province: 'Western Cape',
-    suburb: 'Cape Town City Centre'
-  };
-
-  // Default parcel dimensions (could be calculated from cart items)
-  const defaultParcel: Parcel = {
-    weight: 2.5,
-    length: 30,
-    width: 20,
-    height: 10
-  };
-
   useEffect(() => {
     if (user) {
       fetchCart();
@@ -98,7 +60,6 @@ const Cart = () => {
       }
 
       let fetchedItems: any[] = [];
-      setStoreShipping({});
       if (error) {
         console.error('[Cart] initial cart fetch error', error);
         // Attempt fallback: fetch simple cart rows then fetch products separately
@@ -131,13 +92,6 @@ const Cart = () => {
         setCartItems(fetchedItems as unknown as CartItem[]);
       }
 
-      // Calculate shipping for each unique store — handle store_products being returned as an array or object
-      const uniqueStoreIds = Array.from(new Set(fetchedItems.map((item: any) => {
-        const sp = (item as any).store_products;
-        return Array.isArray(sp) ? sp[0]?.store_id : sp?.store_id;
-      }).filter(Boolean))) as string[];
-      await calculateShippingForStores(uniqueStoreIds, fetchedItems as CartItem[]);
-
     } catch (error) {
       console.error('Error fetching cart:', error);
       try {
@@ -153,73 +107,6 @@ const Cart = () => {
       setCartItems([]);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const calculateShippingForStores = async (storeIds: string[], items: CartItem[]) => {
-    // helper: a store only needs shipping if it has at least one physical product
-    // treat anything that includes 'digital' or 'download' as non-physical (consistent with Checkout.tsx)
-    const isStoreHasPhysical = (storeId: string) => {
-      return items.some(item => {
-        const sp = (item as any).store_products;
-        const prod = Array.isArray(sp) ? sp[0] : sp;
-        const sid = prod?.store_id;
-        const pt = (prod?.product_type || '').toString().toLowerCase();
-        // consider product physical unless its type explicitly indicates digital/download
-        const isDigital = pt.includes('digital') || pt.includes('download');
-        return sid === storeId && !isDigital;
-      });
-    };
-
-    for (const storeId of storeIds) {
-      // If a store has no physical products, skip shipping calculation and mark cost as 0
-      if (!isStoreHasPhysical(storeId)) {
-        setStoreShipping(prev => ({
-          ...prev,
-          [storeId]: { cost: 0, loading: false, skippedForDigital: true }
-        }));
-        continue;
-      }
-
-      setStoreShipping(prev => ({
-        ...prev,
-        [storeId]: { cost: null, loading: true }
-      }));
-
-      try {
-        const settings = await getShippingSettingsForStore(storeId);
-        
-        if (!settings) {
-          setStoreShipping(prev => ({
-            ...prev,
-            [storeId]: { cost: null, loading: false, error: 'No shipping configuration' }
-          }));
-          continue;
-        }
-
-        const result = await calculateShippingCost(
-          settings,
-          defaultCollection,
-          defaultDelivery,
-          defaultParcel
-        );
-
-        setStoreShipping(prev => ({
-          ...prev,
-          [storeId]: {
-            cost: result.cost,
-            loading: false,
-            error: result.error,
-            partner: result.partner
-          }
-        }));
-      } catch (error) {
-        console.error(`Error calculating shipping for store ${storeId}:`, error);
-        setStoreShipping(prev => ({
-          ...prev,
-          [storeId]: { cost: null, loading: false, error: 'Calculation failed' }
-        }));
-      }
     }
   };
 
@@ -263,24 +150,13 @@ const Cart = () => {
     }, 0);
   };
 
-  const getTotalShipping = () => {
-    const currentStoreIds = new Set(cartItems.map(item => {
-      const product = Array.isArray(item.store_products) ? item.store_products[0] : item.store_products;
-      return product?.store_id;
-    }).filter(Boolean));
-
-    return Object.entries(storeShipping).reduce((sum, [storeId, shipping]) => {
-      return currentStoreIds.has(storeId) ? sum + (shipping.cost || 0) : sum;
-    }, 0);
-  };
-
   const getServiceFee = () => {
     const subtotal = getSubtotal();
     return Number((subtotal * 0.02).toFixed(2));
   };
 
   const getTotal = () => {
-    return getSubtotal() + getTotalShipping() + getServiceFee();
+    return getSubtotal() + getServiceFee();
   };
 
   if (loading) {
@@ -453,55 +329,21 @@ const Cart = () => {
                   <span className="font-medium">ZAR {getServiceFee().toLocaleString()}</span>
                 </div>
 
-                {/* Shipping per store */}
-                {(() => {
-                  const storeIds = Array.from(new Set(cartItems.map(item => {
-                    const sp = (item as any).store_products;
-                    const prod = Array.isArray(sp) ? sp[0] : sp;
-                    return prod?.store_id;
-                  }).filter(Boolean)));
-
-                  return storeIds.map(storeId => {
-                    const shipping = storeShipping[storeId];
-                    return (
-                      <div key={storeId} className="flex flex-col">
-                        <div className="flex items-center justify-between">
-                          <span className="flex items-center gap-2">
-                            <Truck className="h-4 w-4 text-purple-700" /> 
-                            Shipping
-                            {shipping?.partner && (
-                              <span className="text-xs text-gray-500">({shipping.partner.name})</span>
-                            )}
-                          </span>
-                          <span className="font-medium">
-                            {shipping?.skippedForDigital ? (
-                              <span className="text-xs text-gray-500">No shipping (digital products)</span>
-                            ) : shipping?.loading ? (
-                              <span className="text-xs text-gray-400">Calculating...</span>
-                            ) : shipping?.error ? (
-                              <span className="text-xs text-red-500 flex items-center gap-1">
-                                <AlertCircle className="h-3 w-3" />
-                                Error
-                              </span>
-                            ) : (typeof shipping?.cost === 'number') ? (
-                              `ZAR ${shipping.cost.toLocaleString()}`
-                            ) : (
-                              <span className="text-xs text-gray-400">Not configured</span>
-                            )}
-                          </span>
-                        </div>
-                        {shipping?.error && (
-                          <span className="text-xs text-red-500 ml-6">{shipping.error}</span>
-                        )}
-                      </div>
-                    );
-                  });
-                })()}
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Truck className="h-4 w-4 text-purple-700" />
+                    Shipping
+                  </span>
+                  <span className="text-sm text-gray-500">Quoted at checkout</span>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Delivery is calculated from your address and the sellers’ parcel details at checkout.
+                </p>
                 
                 <hr className="my-4" />
                 
                 <div className="flex items-center justify-between font-bold text-lg">
-                  <span>Total</span>
+                  <span>Subtotal + service fee</span>
                   <span>ZAR {getTotal().toLocaleString()}</span>
                 </div>
               </div>

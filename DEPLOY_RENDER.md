@@ -33,6 +33,15 @@ and that its auto-deploy is enabled (or manually deploy the latest commit).
 - `SUPABASE_URL` = your Supabase project URL
 - `SUPABASE_SERVICE_ROLE_KEY` = your service_role key (KEEP SECRET)
 - `SUPABASE_ANON_KEY` or other keys your backend expects
+- `PAYSTACK_SUPPORTED_CURRENCIES` = currencies enabled for your Paystack account, comma-separated
+  (currently `ZAR,NGN,GHS,KES`). Wallet top-ups convert the user's wallet currency to a selected
+  supported Paystack charge currency, then credit the USD equivalent after verified payment. This
+  is an application allowlist, not proof of merchant support: confirm each currency is enabled in
+  the Paystack dashboard, and ensure `PAYSTACK_SECRET` and the frontend `VITE_PAYSTACK_PUBLIC_KEY`
+  belong to the same Paystack account and environment (test or live).
+- `COURIERGUY_API_KEY` = platform ShipLogic/Courier Guy API key (South African domestic shipments)
+- `TERMINAL_AFRICA_SECRET_KEY` = platform Terminal Africa secret key (routes to/from Nigeria)
+- `TERMINAL_AFRICA_BASE_URL` = `https://api.terminal.africa/v1` for production
 - Any other backend-specific envs (API keys for third-party services)
 - `CORS_ALLOWED_ORIGINS` = comma-separated frontend origins, if the frontend is not hosted at
   `https://nexsq.com` or `https://www.nexsq.com`.
@@ -40,6 +49,13 @@ and that its auto-deploy is enabled (or manually deploy the latest commit).
 The signaling server does not relay audio/video; WebRTC connects the participants directly.
 If direct connections fail on restrictive networks, configure the separate TURN service using
 `TURN_URL` and either `TURN_USER`/`TURN_PASS` or `TURN_SECRET`/`STATIC_TURN_SECRET`.
+
+Marketplace shipping credentials belong only in the backend Render environment. Apply
+`supabase/migrations/20261124000100_marketplace_shipping_booking.sql` before deploying the
+shipping checkout changes. Sellers add pickup locations and parcel dimensions in Store Settings;
+buyers get a live quote during checkout, and sellers book the shipment from Manage Orders after
+payment. Physical checkout intentionally fails rather than displaying a simulated rate when the
+required live carrier is not configured.
 
 4) Frontend: set `VITE_API_BASE_URL` to Render service URL
 

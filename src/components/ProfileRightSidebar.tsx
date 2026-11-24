@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BadgeCheck, Building2, Globe2, MapPin, Store, Users, X } from 'lucide-react';
+import { BadgeCheck, Building2, Globe2, MapPin, Users, X } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
@@ -162,12 +162,6 @@ const ProfileRightSidebar: React.FC<ProfileRightSidebarProps> = ({
             <Users className="h-4 w-4" />
             Browse groups
           </Button>
-          {isOwnProfile && (
-            <Button size="sm" variant="ghost" className="w-full justify-start" onClick={() => navigate('/my-store')}>
-              <Store className="h-4 w-4" />
-              Open my store
-            </Button>
-          )}
         </div>
       </Card>
     </div>

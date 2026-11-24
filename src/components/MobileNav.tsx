@@ -2,7 +2,7 @@
 import React from 'react';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
-import { Menu, Store, ShoppingBag, CreditCard, Users, UserPlus, Eye, ThumbsUp, Settings, LogOut, User, MessageCircle, Wallet, UserCircle, Bookmark, Calendar, Megaphone, Star, Award, Globe, Heart, DollarSign } from 'lucide-react';
+import { Menu, Store, CreditCard, Users, UserPlus, Eye, ThumbsUp, Settings, LogOut, User, MessageCircle, UserCircle, Bookmark, Calendar, Megaphone, Star, Award, Globe, Heart, DollarSign, Wallet } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuth } from '@/hooks/useAuth';
@@ -19,8 +19,6 @@ export const MobileNav = () => {
 
   const quickLinks = [
     { label: 'Profile', icon: User, path: '/profile', color: 'text-blue-600' },
-    { label: 'My Store', icon: Store, path: '/my-store', color: 'text-green-600' },
-    { label: 'Square Marketplace', icon: ShoppingBag, path: '/square', color: 'text-purple-600' },
     { label: 'Wallet', icon: Wallet, path: '/wallet', color: 'text-yellow-600' },
     { label: 'Messages', icon: MessageCircle, path: '/messages', color: 'text-blue-500' },
     { label: 'Groups', icon: Users, path: '/groups', color: 'text-indigo-600' },

@@ -325,8 +325,8 @@ export const Sidebar = () => {
   };
 
   const handleQuickLink = (key: string) => {
-    if (key === 'store') navigate('/my-store');
-    else if (key === 'orders' && storeId) navigate('/my-store?section=orders');
+    const quickLink = QUICK_LINKS.find((link) => link.key === key);
+    if (quickLink) navigate(quickLink.route);
     else if (key === 'saved') navigate('/saved-posts');
   };
 

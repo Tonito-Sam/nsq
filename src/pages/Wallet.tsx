@@ -1,13 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Layout } from '@/components/Layout';
 import { WalletSidebar } from '@/components/WalletSidebar';
-import { WalletModals } from '@/components/WalletModals';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
@@ -15,21 +13,11 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { toast } from '@/components/ui/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
-import CreateVirtualCard from '@/components/CreateVirtualCard';
 import { initializePayment, PaymentGateway } from '@/services/payment';
 import apiUrl from '@/lib/api';
 import { ArrowUpRight, ArrowDownLeft, Plus, CreditCard, Gift, Rocket, ChevronsUpDown, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-interface BankAccount {
-  id: string;
-  bank_name: string;
-  account_number: string;
-  account_name: string;
-  branch_name?: string;
-  country: string;
-  is_primary: boolean;
-}
+import { getCurrencyByCountry } from '@/utils/currencyByCountry';
 
 interface WalletBalance {
   real_balance: number;
@@ -53,12 +41,6 @@ interface Profile {
   avatar_url: string | null;
 }
 
-interface OwnedStore {
-  id: string;
-  store_name: string;
-  base_currency: string | null;
-}
-
 interface PromoTransfer {
   id: string;
   from_user_id: string;
@@ -72,6 +54,14 @@ interface PromoTransfer {
 }
 
 import useCurrencyRates from '@/hooks/useCurrencyRates';
+
+const PAYSTACK_TOPUP_CURRENCIES = ['ZAR', 'NGN', 'GHS', 'KES'];
+const PAYSTACK_CURRENCY_COUNTRIES: Record<string, string> = {
+  ZAR: 'ZA',
+  NGN: 'NG',
+  GHS: 'GH',
+  KES: 'KE',
+};
 
 const convertToUSD = (amount: number, fromCurrency: string, rates: { [k:string]: number } | undefined): number => {
   if (!rates) return amount;
@@ -88,30 +78,17 @@ const convertFromUSD = (amount: number, toCurrency: string, rates: { [k:string]:
 
 const Wallet = () => {
   const { user } = useAuth();
-  const [showTopUp, setShowTopUp] = useState(false);
-  const [showSendMoney, setShowSendMoney] = useState(false);
-  const [showWithdraw, setShowWithdraw] = useState(false);
-  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState('');
   const [topUpGateway, setTopUpGateway] = useState<PaymentGateway>('paystack');
   const [isPaying, setIsPaying] = useState(false);
-  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
-  const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [withdrawMethod, setWithdrawMethod] = useState('bank');
-  const [withdrawBank, setWithdrawBank] = useState('');
   const [showSendMoneyModal, setShowSendMoneyModal] = useState(false);
   const [sendMoneyAmount, setSendMoneyAmount] = useState('');
   const [sendMoneyBalanceType, setSendMoneyBalanceType] = useState<'real' | 'virtual'>('real');
-  const [sendMoneyTargetType, setSendMoneyTargetType] = useState<'person' | 'store'>('person');
-  const [ownedStores, setOwnedStores] = useState<OwnedStore[]>([]);
-  const [selectedStoreId, setSelectedStoreId] = useState('');
   const [sendMoneyNote, setSendMoneyNote] = useState('');
-  const [showRequestPaymentModal, setShowRequestPaymentModal] = useState(false);
-  const [requestAmount, setRequestAmount] = useState('');
-  const [requestUser, setRequestUser] = useState('');
   const [userCurrency, setUserCurrency] = useState('USD');
-  const [paypalEmail, setPaypalEmail] = useState('');
+  const [userCountry, setUserCountry] = useState<string | null>(null);
+  const [paystackChargeCurrency, setPaystackChargeCurrency] = useState('ZAR');
   const [availableGateways, setAvailableGateways] = useState<PaymentGateway[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [promoTransfers, setPromoTransfers] = useState<PromoTransfer[]>([]);
@@ -128,26 +105,20 @@ const Wallet = () => {
   const [recentRecipients, setRecentRecipients] = useState<User[]>([]);
   const { rates, loading: ratesLoading, updatedAt, refresh, isCached: _isCached } = useCurrencyRates('USD', 5 * 60 * 1000);
 
-  // Backwards-compatible wrappers for components that expect 2-arg convert functions
-  const convertToUSDForModals = (amount: number, fromCurrency: string) => convertToUSD(amount, fromCurrency, rates);
-  const convertFromUSDForModals = (amount: number, toCurrency: string) => convertFromUSD(amount, toCurrency, rates);
-
   useEffect(() => {
     if (user) {
-      fetchBankAccounts();
       fetchUserProfile();
       fetchWalletBalance();
       fetchTransactions();
       fetchPromoTransfers();
       fetchRecentRecipients();
-      fetchOwnedStores();
     }
   }, [user]);
 
   const getGatewaysForCurrency = (currency: string): PaymentGateway[] => {
     const env = (import.meta as any).env || {};
     const gateways: PaymentGateway[] = [];
-    if (env.VITE_PAYSTACK_PUBLIC_KEY && ['ZAR', 'NGN', 'GHS', 'KES', 'USD'].includes(currency)) gateways.push('paystack');
+    if (env.VITE_PAYSTACK_PUBLIC_KEY && PAYSTACK_TOPUP_CURRENCIES.length > 0) gateways.push('paystack');
     if (env.VITE_FLUTTERWAVE_PUBLIC_KEY && ['NGN', 'USD', 'GBP', 'EUR', 'KES', 'GHS', 'UGX', 'TZS'].includes(currency)) {
       gateways.push('flutterwave');
     }
@@ -158,59 +129,48 @@ const Wallet = () => {
     if (userCurrency) {
       const gateways = getGatewaysForCurrency(userCurrency);
       setAvailableGateways(gateways);
-      if (!gateways.includes(topUpGateway)) {
+      if (!gateways.includes(topUpGateway) && gateways[0]) {
         setTopUpGateway(gateways[0]);
       }
     }
-  }, [userCurrency]);
+  }, [userCurrency, topUpGateway]);
 
   useEffect(() => {
     // refresh rates when userCurrency changes so conversion displays correct values
     refresh();
   }, [userCurrency, refresh]);
 
-  const fetchBankAccounts = async () => {
-    if (!user) return;
-
-    try {
-      const { data, error } = await supabase
-        .from('user_bank_accounts')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('is_primary', { ascending: false });
-
-      if (error) throw error;
-      setBankAccounts(data || []);
-    } catch (error) {
-      console.error('Error fetching bank accounts:', error);
-    }
-  };
-
-  const fetchOwnedStores = async () => {
-    if (!user) return;
-    const { data, error } = await supabase
-      .from('user_stores')
-      .select('id, store_name, base_currency')
-      .eq('user_id', user.id)
-      .eq('is_active', true);
-    if (error) {
-      console.error('Error loading owned stores for transfer:', error);
-      return;
-    }
-    setOwnedStores(data || []);
-  };
-
   const fetchUserProfile = async () => {
     if (!user) return;
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('currency, paypal_email')
+        .select('currency,country')
         .eq('id', user.id)
         .single();
-      if (!error && data && typeof data === 'object' && data !== null && 'currency' in data && 'paypal_email' in data) {
-        setUserCurrency(data.currency || 'USD');
-        setPaypalEmail(data.paypal_email || '');
+      if (!error && data && typeof data === 'object' && data !== null && 'currency' in data) {
+        const currency = String(data.currency || 'USD').toUpperCase();
+        const country = 'country' in data && typeof data.country === 'string' ? data.country.trim() : null;
+        const countryNames: Record<string, string> = {
+          'SOUTH AFRICA': 'ZA',
+          NIGERIA: 'NG',
+          GHANA: 'GH',
+          KENYA: 'KE',
+        };
+        const countryCode = country
+          ? /^[A-Za-z]{2}$/.test(country)
+            ? country.toUpperCase()
+            : countryNames[country.toUpperCase()] || null
+          : null;
+        setUserCurrency(currency);
+        setUserCountry(countryCode);
+        const countryCurrency = getCurrencyByCountry(countryCode);
+        const preferredPaystackCurrency = PAYSTACK_TOPUP_CURRENCIES.includes(countryCurrency)
+          ? countryCurrency
+          : PAYSTACK_TOPUP_CURRENCIES.includes(currency)
+            ? currency
+            : 'ZAR';
+        setPaystackChargeCurrency(preferredPaystackCurrency);
       }
     } catch (error) {
       console.error('Error fetching user profile:', error);
@@ -451,17 +411,33 @@ const Wallet = () => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ amount_local: localAmount, currency: userCurrency, gateway: topUpGateway }),
+        body: JSON.stringify({
+          amount_local: localAmount,
+          currency: userCurrency,
+          gateway: topUpGateway,
+          charge_currency: topUpGateway === 'paystack' ? paystackChargeCurrency : userCurrency,
+        }),
       });
       const intent = await intentResponse.json().catch(() => ({}));
       if (!intentResponse.ok) throw new Error(intent.error || 'Could not create wallet top-up request');
+
+      const expectedCurrency = topUpGateway === 'paystack' ? paystackChargeCurrency : userCurrency;
+      if (String(intent.currency || '').toUpperCase() !== expectedCurrency) {
+        console.error('Wallet top-up currency mismatch:', {
+          expectedCurrency,
+          returnedCurrency: intent.currency,
+        });
+        throw new Error(
+          `The wallet service returned ${intent.currency || 'no currency'} instead of ${expectedCurrency}. Restart or redeploy the backend before retrying.`
+        );
+      }
 
       await initializePayment(topUpGateway, {
         amount: intent.amount_local,
         currency: intent.currency,
         accessToken: session.access_token,
-        buyerCountry: 'NG',
-        buyerCurrency: userCurrency,
+        buyerCountry: userCountry || PAYSTACK_CURRENCY_COUNTRIES[intent.currency] || 'ZA',
+        buyerCurrency: intent.currency,
         sellerCountry: 'US',
         sellerCurrency: 'USD',
         email: user.email || '',
@@ -487,8 +463,7 @@ const Wallet = () => {
   };
 
   const handleSendMoney = async () => {
-    const validTarget = sendMoneyTargetType === 'person' ? !!selectedUser : !!selectedStoreId;
-    if (!sendMoneyAmount || !validTarget || !user || (sendMoneyTargetType === 'store' && sendMoneyBalanceType !== 'real')) {
+    if (!sendMoneyAmount || !selectedUser || !user) {
       toast({ title: 'Error', description: 'Please fill all fields.' });
       return;
     }
@@ -518,33 +493,21 @@ const Wallet = () => {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.access_token) throw new Error('Please sign in again to transfer wallet funds.');
         const reference = `WALLET-${crypto.randomUUID()}`;
-        const isStoreTransfer = sendMoneyTargetType === 'store';
-        const response = await fetch(apiUrl(isStoreTransfer ? '/api/wallet/store-transfers' : '/api/wallet/transfers'), {
+        const response = await fetch(apiUrl('/api/wallet/transfers'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify(isStoreTransfer
-            ? { store_id: selectedStoreId, amount_usd: amount, reference }
-            : { recipient_user_id: selectedUser?.id, amount_usd: amount, reference }),
+          body: JSON.stringify({ recipient_user_id: selectedUser.id, amount_usd: amount, reference }),
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(result.error || 'Wallet transfer failed');
 
         await Promise.all([fetchWalletBalance(), fetchTransactions()]);
-        if (isStoreTransfer) {
-          const store = ownedStores.find(item => item.id === selectedStoreId);
-          toast({
-            title: 'Store wallet funded',
-            description: `${localAmount.toLocaleString()} ${userCurrency} was transferred to ${store?.store_name || 'your store'}.`,
-          });
-        } else {
-          const recipientName = selectedUser?.full_name || selectedUser?.username || selectedUser?.email || 'the recipient';
-          toast({ title: 'Money sent', description: `${localAmount.toLocaleString()} ${userCurrency} was transferred to ${recipientName}.` });
-        }
+        const recipientName = selectedUser.full_name || selectedUser.username || selectedUser.email || 'the recipient';
+        toast({ title: 'Money sent', description: `${localAmount.toLocaleString()} ${userCurrency} was transferred to ${recipientName}.` });
       } else if (sendMoneyBalanceType === 'virtual') {
-        if (!selectedUser) throw new Error('Choose a recipient for the promo transfer.');
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.access_token) throw new Error('Please sign in again to transfer promo balance.');
         const reference = `PROMO-${crypto.randomUUID()}`;
@@ -576,41 +539,12 @@ const Wallet = () => {
       setShowSendMoneyModal(false);
       setSendMoneyAmount('');
       setSelectedUser(null);
-      setSelectedStoreId('');
-      setSendMoneyTargetType('person');
       setSendMoneyNote('');
       
     } catch (error) {
       console.error('Error sending money:', error);
       toast({ title: 'Error', description: error instanceof Error ? error.message : 'Failed to send money. Please try again.', variant: 'destructive' });
     }
-  };
-
-  const handleWithdraw = () => {
-    const amount = Number(withdrawAmount);
-    if (!Number.isFinite(amount) || amount <= 0 || amount > walletBalance.real_balance) {
-      toast({ 
-        title: 'Invalid withdrawal amount',
-        description: `Enter a positive amount up to your available real balance.`,
-        variant: 'destructive',
-      });
-      return;
-    }
-    toast({ 
-      title: 'Personal wallet withdrawals unavailable',
-      description: 'No personal payout rail is connected yet. Your balance has not been changed.',
-      variant: 'destructive',
-    });
-  };
-
-  const handleRequestPayment = () => {
-    setShowRequestPaymentModal(false);
-    setRequestAmount('');
-    setRequestUser('');
-    toast({ 
-      title: 'Payment Request Sent', 
-      description: `Requested $${requestAmount} from ${requestUser}.`
-    });
   };
 
   const getUSDEquivalent = (amount: string) => {
@@ -620,6 +554,17 @@ const Wallet = () => {
     const usdAmount = convertToUSD(localAmount, userCurrency, rates);
     return `≈ $${usdAmount.toFixed(2)} USD`;
   };
+
+  const getPaystackChargeEstimate = () => {
+    const amount = Number(topUpAmount);
+    const walletCurrencyRate = rates[userCurrency];
+    const paystackCurrencyRate = rates[paystackChargeCurrency];
+    if (!Number.isFinite(amount) || amount <= 0
+      || !Number.isFinite(walletCurrencyRate) || walletCurrencyRate <= 0
+      || !Number.isFinite(paystackCurrencyRate) || paystackCurrencyRate <= 0) return null;
+    return Number(((amount / walletCurrencyRate) * paystackCurrencyRate).toFixed(2));
+  };
+  const paystackChargeEstimate = getPaystackChargeEstimate();
 
   const getTransactionIcon = (type: string) => {
     switch (type) {
@@ -713,9 +658,7 @@ const Wallet = () => {
         <div className="w-full lg:w-64 mb-6 lg:mb-0">
           <WalletSidebar
             onTopUp={() => setShowTopUpModal(true)}
-            onWithdraw={() => setShowWithdrawModal(true)}
             onSendMoney={() => setShowSendMoneyModal(true)}
-            onRequestPayment={() => setShowRequestPaymentModal(true)}
             recentRecipients={recentRecipients}
             onSelectRecipient={handleSelectRecentRecipient}
             onSendToRecipient={(recipient) => {
@@ -732,7 +675,9 @@ const Wallet = () => {
         <div className="flex-1">
           <div className="mb-6 sm:mb-8">
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2">Wallet</h1>
-            <p className="text-gray-600 dark:text-gray-400 text-sm sm:text-base">Manage your finances and transactions</p>
+            <p className="text-gray-600 dark:text-gray-400 text-sm sm:text-base">
+              Top up, send money to other users, and pay for Podcast subscriptions. Withdrawals are temporarily unavailable.
+            </p>
           </div>
           <div className="flex flex-col lg:flex-row gap-4 sm:gap-6">
             <div className="flex-1 space-y-4 sm:space-y-6">
@@ -753,14 +698,14 @@ const Wallet = () => {
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Real Balance</span>
                           <Badge variant="outline" className="bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
-                            Withdrawable
+                            Available
                           </Badge>
                         </div>
                         <p className="text-2xl font-bold text-green-600 dark:text-green-400">
                           {new Intl.NumberFormat(undefined, { style: 'currency', currency: userCurrency }).format(convertFromUSD(walletBalance.real_balance, userCurrency, rates))}
                         </p>
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          Can be withdrawn or used for any purpose
+                          Available for person-to-person transfers and Podcast subscriptions
                         </p>
                       </div>
                       
@@ -788,9 +733,6 @@ const Wallet = () => {
                   </div>
                 </CardContent>
               </Card>
-              
-              {/* Virtual Card Section */}
-              <CreateVirtualCard />
               
               {/* Recent Transactions */}
               <Card className="dark:bg-[#161616]">
@@ -842,21 +784,6 @@ const Wallet = () => {
             </div>
           </div>
           
-          <WalletModals
-            showTopUp={showTopUp}
-            showSendMoney={showSendMoney}
-            showWithdraw={showWithdraw}
-            onClose={() => {
-              setShowTopUp(false);
-              setShowSendMoney(false);
-              setShowWithdraw(false);
-            }}
-            bankAccounts={bankAccounts}
-            userCurrency={userCurrency}
-            convertToUSD={convertToUSDForModals}
-            convertFromUSD={convertFromUSDForModals}
-          />
-          
           {/* Top Up Modal */}
           <Dialog open={showTopUpModal} onOpenChange={setShowTopUpModal}>
             <DialogContent>
@@ -871,7 +798,8 @@ const Wallet = () => {
                   <div className="flex items-center gap-2">
                     <Input
                       type="number"
-                      min="1"
+                      min="0.01"
+                      step="0.01"
                       placeholder="Enter amount"
                       value={topUpAmount}
                       onChange={e => setTopUpAmount(e.target.value)}
@@ -885,8 +813,37 @@ const Wallet = () => {
                     </p>
                   )}
                 </div>
+                {topUpGateway === 'paystack' && availableGateways.includes('paystack') && (
+                  <div className="space-y-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+                    <label htmlFor="paystack-charge-currency" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Paystack charge currency
+                    </label>
+                    <select
+                      id="paystack-charge-currency"
+                      value={paystackChargeCurrency}
+                      onChange={event => setPaystackChargeCurrency(event.target.value)}
+                      className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100"
+                    >
+                      {PAYSTACK_TOPUP_CURRENCIES.map(currency => (
+                        <option key={currency} value={currency}>{currency}</option>
+                      ))}
+                    </select>
+                    {topUpAmount && (
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        {paystackChargeEstimate !== null
+                          ? `Paystack will charge approximately ${new Intl.NumberFormat(undefined, { style: 'currency', currency: paystackChargeCurrency }).format(paystackChargeEstimate)}. ${getUSDEquivalent(topUpAmount)} will be added to your USD wallet balance.`
+                          : ratesLoading
+                            ? 'Current exchange rates are loading; the charge estimate will appear shortly.'
+                            : 'Exchange rates are unavailable; refresh rates before starting a top-up.'}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Preselected from your saved country or wallet currency; ZAR is the fallback. You can change it before paying.
+                    </p>
+                  </div>
+                )}
                 {availableGateways.length === 0 ? (
-                  <div className="text-red-600 text-sm">No payment gateway available for your currency. Please contact support.</div>
+                  <div className="text-red-600 text-sm">No payment gateway is configured for this wallet. Please contact support.</div>
                 ) : (
                   <div>
                     <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
@@ -912,90 +869,19 @@ const Wallet = () => {
               <DialogFooter>
                 <Button
                   onClick={handleTopUpPayment}
-                  disabled={!topUpAmount || isPaying || availableGateways.length === 0}
-                  className="w-full"
-                >
-                  {isPaying ? 'Processing...' : `Pay ${topUpAmount} ${userCurrency}`}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-          
-          {/* Withdraw Modal - Only from Real Balance */}
-          <Dialog open={showWithdrawModal} onOpenChange={setShowWithdrawModal}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Withdraw Funds</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
-                    Amount to Withdraw (from Real Balance)
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number"
-                      min="1"
-                      max={walletBalance.real_balance}
-                      placeholder="Enter amount"
-                      value={withdrawAmount}
-                      onChange={e => setWithdrawAmount(e.target.value)}
-                      className="w-full"
-                    />
-                    <span className="font-semibold">USD</span>
-                  </div>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                    Available Real Balance: <span className="font-semibold text-green-600">${walletBalance.real_balance.toFixed(2)}</span>
-                  </p>
-                  <p className="text-xs text-red-500 dark:text-red-400 mt-1">
-                    Note: Virtual balance cannot be withdrawn. It can only be used for post boosting or sent to other users.
-                  </p>
-                </div>
-                
-                <RadioGroup value={withdrawMethod} onValueChange={setWithdrawMethod} className="flex gap-4">
-                  <RadioGroupItem value="bank" id="bank" />
-                  <label htmlFor="bank" className="mr-4">Bank</label>
-                  <RadioGroupItem value="paypal" id="paypal" />
-                  <label htmlFor="paypal">PayPal</label>
-                </RadioGroup>
-                
-                {withdrawMethod === 'bank' ? (
-                  bankAccounts.length > 0 ? (
-                    <Select value={withdrawBank} onValueChange={setWithdrawBank}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select bank account" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {bankAccounts.map((account) => (
-                          <SelectItem key={account.id} value={account.id}>
-                            {account.bank_name} - {account.account_number}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <div className="text-red-600 text-sm">You need to add a bank account in your Edit Profile page before you can withdraw to a bank.</div>
-                  )
-                ) : (
-                  paypalEmail ? (
-                    <Input value={paypalEmail} readOnly className="w-full" />
-                  ) : (
-                    <div className="text-red-600 text-sm">You need to add a PayPal email in your Edit Profile page before you can withdraw to PayPal.</div>
-                  )
-                )}
-              </div>
-              <DialogFooter>
-                <Button
-                  onClick={handleWithdraw}
                   disabled={
-                    !withdrawAmount ||
-                    Number(withdrawAmount) > walletBalance.real_balance ||
-                    (withdrawMethod === 'bank' && (!withdrawBank || bankAccounts.length === 0)) ||
-                    (withdrawMethod === 'paypal' && !paypalEmail)
+                    !topUpAmount
+                    || isPaying
+                    || availableGateways.length === 0
+                    || (topUpGateway === 'paystack' && paystackChargeEstimate === null)
                   }
                   className="w-full"
                 >
-                  Request Withdrawal
+                  {isPaying
+                    ? 'Processing...'
+                    : topUpGateway === 'paystack' && paystackChargeEstimate !== null
+                      ? `Pay approx. ${new Intl.NumberFormat(undefined, { style: 'currency', currency: paystackChargeCurrency }).format(paystackChargeEstimate)}`
+                      : `Pay ${topUpAmount} ${userCurrency}`}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -1024,7 +910,7 @@ const Wallet = () => {
                       </label>
                     </div>
                     <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="virtual" id="send-virtual" disabled={sendMoneyTargetType === 'store'} />
+                      <RadioGroupItem value="virtual" id="send-virtual" />
                       <label htmlFor="send-virtual" className={`font-medium ${getBalanceColor('virtual')}`}>
                         Virtual Balance: ${walletBalance.virtual_balance.toFixed(2)}
                       </label>
@@ -1059,37 +945,7 @@ const Wallet = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Send to</label>
-                  <Select
-                    value={sendMoneyTargetType}
-                    onValueChange={(value) => {
-                      const target = value as 'person' | 'store';
-                      setSendMoneyTargetType(target);
-                      if (target === 'store') setSendMoneyBalanceType('real');
-                    }}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="person">Another person</SelectItem>
-                      <SelectItem value="store" disabled={ownedStores.length === 0}>My store</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {sendMoneyTargetType === 'person' ? 'Select Recipient' : 'Select Store'}
-                  </label>
-                  {sendMoneyTargetType === 'store' ? (
-                    <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
-                      <SelectTrigger><SelectValue placeholder="Select your store" /></SelectTrigger>
-                      <SelectContent>
-                        {ownedStores.map(store => (
-                          <SelectItem key={store.id} value={store.id}>{store.store_name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Select Recipient</label>
                   <Popover open={openUserDropdown} onOpenChange={setOpenUserDropdown}>
                     <PopoverTrigger asChild>
                       <Button
@@ -1154,7 +1010,6 @@ const Wallet = () => {
                       </Command>
                     </PopoverContent>
                   </Popover>
-                  )}
                 </div>
                 
                 <div>
@@ -1169,7 +1024,7 @@ const Wallet = () => {
                   />
                 </div>
                 
-                {sendMoneyBalanceType === 'virtual' && sendMoneyTargetType === 'person' && (
+                {sendMoneyBalanceType === 'virtual' && (
                   <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md">
                     <p className="text-sm text-blue-700 dark:text-blue-300">
                       💡 Virtual Balance can only be used for post boosting. When you send virtual balance to another user, 
@@ -1190,64 +1045,6 @@ const Wallet = () => {
             </DialogContent>
           </Dialog>
           
-          {/* Request Payment Modal */}
-          <Dialog open={showRequestPaymentModal} onOpenChange={setShowRequestPaymentModal}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Request Payment</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
-                    Select Balance Type
-                  </label>
-                  <RadioGroup 
-                    value={sendMoneyBalanceType} 
-                    onValueChange={(value) => setSendMoneyBalanceType(value as 'real' | 'virtual')} 
-                    className="flex gap-4"
-                  >
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="real" id="request-real" />
-                      <label htmlFor="request-real" className="font-medium">Real Balance</label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="virtual" id="request-virtual" />
-                      <label htmlFor="request-virtual" className="font-medium">Virtual Balance</label>
-                    </div>
-                  </RadioGroup>
-                </div>
-                
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    placeholder="Enter amount"
-                    value={requestAmount}
-                    onChange={e => setRequestAmount(e.target.value)}
-                    className="w-full"
-                  />
-                  <span className="font-semibold">USD</span>
-                </div>
-                
-                <Input
-                  placeholder="Enter username or email"
-                  value={requestUser}
-                  onChange={e => setRequestUser(e.target.value)}
-                  className="w-full"
-                />
-              </div>
-              <DialogFooter>
-                <Button
-                  onClick={handleRequestPayment}
-                  disabled={!requestAmount || !requestUser}
-                  className="w-full"
-                >
-                  Request Payment
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
         </div>
       </div>
     </Layout>

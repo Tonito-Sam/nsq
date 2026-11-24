@@ -11,7 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from '@/hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
-import { getShippingSettingsForStore, calculateShippingCost, Address, Parcel } from '@/utils/shippingCost';
+import { getShippingSettingsForStore, calculateShippingCost, Address, Parcel, LiveShippingQuote } from '@/utils/shippingCost';
 import { getDisplayPrice } from '@/utils/pricing';
 import { countries } from '@/utils/countries';
 import { statesByCountry } from '@/utils/statesByCountry';
@@ -54,6 +54,8 @@ interface StoreShippingInfo {
   loading: boolean;
   error?: string;
   partner?: any;
+  quote?: LiveShippingQuote;
+  quoteAddressSignature?: string;
 }
 
 // Payment gateway logos and information
@@ -106,6 +108,7 @@ const Checkout = () => {
   const [shippingInfo, setShippingInfo] = useState({
     fullName: '',
     email: '',
+    phone: '',
     address: '',
     address2: '',
     country: 'ZA',
@@ -137,9 +140,21 @@ const Checkout = () => {
       .filter(Boolean)
   )) as string[];
   const checkoutCountries = countries;
+  const shippingAddressSignature = JSON.stringify([
+    shippingInfo.fullName.trim(),
+    shippingInfo.email.trim(),
+    shippingInfo.phone.trim(),
+    shippingInfo.address.trim(),
+    shippingInfo.address2.trim(),
+    shippingInfo.country,
+    shippingInfo.state.trim(),
+    shippingInfo.city.trim(),
+    shippingInfo.postalCode.trim(),
+  ]);
   const hasUnquotedPhysicalStore = physicalStoreIds.some(storeId => {
     const shipping = storeShipping[storeId];
-    return !shipping || shipping.loading || Boolean(shipping.error) || shipping.cost === null;
+    return !shipping || shipping.loading || Boolean(shipping.error) || shipping.cost === null ||
+      !shipping.quote || shipping.quoteAddressSignature !== shippingAddressSignature;
   });
 
   useEffect(() => {
@@ -286,12 +301,16 @@ const Checkout = () => {
   };
 
   const calculateShippingForStores = async (storeIds: string[]) => {
+    const quoteAddressSignature = shippingAddressSignature;
     const delivery: Address = {
       country: shippingInfo.country,
       postal_code: shippingInfo.postalCode.trim(),
       city: shippingInfo.city.trim(),
       street: [shippingInfo.address, shippingInfo.address2].map(value => value.trim()).filter(Boolean).join(', '),
       province: shippingInfo.state.trim(),
+      name: shippingInfo.fullName.trim(),
+      email: shippingInfo.email.trim(),
+      phone: shippingInfo.phone.trim(),
     };
 
     for (const storeId of storeIds) {
@@ -301,17 +320,16 @@ const Checkout = () => {
       }));
 
       try {
-        if (!delivery.country || !delivery.city || !delivery.street || !delivery.province) {
+        if (!delivery.country || !delivery.postal_code || !delivery.city || !delivery.street || !delivery.province) {
           setStoreShipping(prev => ({
             ...prev,
             [storeId]: { cost: null, loading: false, error: 'Enter a complete delivery address to get a live quote' }
           }));
           continue;
         }
-
         const { data: storeData } = await supabase
           .from('user_stores')
-          .select('id, base_currency, country, shipping_pickup_address, shipping_pickup_suburb, shipping_pickup_city, shipping_pickup_province, shipping_pickup_postal_code')
+          .select('id, base_currency, country')
           .eq('id', storeId)
           .single();
         const vendorCountry = String(storeData?.country || '').trim().toUpperCase();
@@ -326,26 +344,17 @@ const Checkout = () => {
 
         const nigeriaLane = vendorCountry === 'NG' || buyerCountry === 'NG';
         const southAfricaDomestic = vendorCountry === 'ZA' && buyerCountry === 'ZA';
+        if (nigeriaLane && (!delivery.name || !delivery.email || !delivery.phone)) {
+          setStoreShipping(prev => ({
+            ...prev,
+            [storeId]: { cost: null, loading: false, error: 'Add buyer name, email, and phone to get a Nigeria shipping quote' }
+          }));
+          continue;
+        }
         if (!nigeriaLane && !southAfricaDomestic) {
           setStoreShipping(prev => ({
             ...prev,
             [storeId]: { cost: null, loading: false, error: 'Live shipping is available for South African domestic and Nigeria routes' }
-          }));
-          continue;
-        }
-
-        const collection: Address = {
-          country: vendorCountry,
-          postal_code: String(storeData.shipping_pickup_postal_code || '').trim(),
-          city: String(storeData.shipping_pickup_city || '').trim(),
-          street: String(storeData.shipping_pickup_address || '').trim(),
-          province: String(storeData.shipping_pickup_province || '').trim(),
-          suburb: String(storeData.shipping_pickup_suburb || '').trim(),
-        };
-        if (!collection.street || !collection.city || !collection.province || (vendorCountry === 'ZA' && !collection.postal_code)) {
-          setStoreShipping(prev => ({
-            ...prev,
-            [storeId]: { cost: null, loading: false, error: 'Seller must complete the courier pickup address in Store Settings' }
           }));
           continue;
         }
@@ -390,6 +399,7 @@ const Checkout = () => {
           height: Math.max(...quoteItems.map(line => line.height)),
           description: quoteItems.map(line => line.item.product.title).join(', ').slice(0, 500),
           items: quoteItems.map(line => ({
+            product_id: line.item.product.id,
             name: line.item.product.title,
             description: (line.item.product.description || line.item.product.title).slice(0, 500),
             type: 'parcel',
@@ -421,7 +431,7 @@ const Checkout = () => {
           settings.partner_code = defaultPartner;
         }
         settings.cost_type = 'api';
-        const result = await calculateShippingCost(settings, collection, delivery, parcel);
+        const result = await calculateShippingCost(settings, delivery, parcel, storeId);
 
         setStoreShipping(prev => ({
           ...prev,
@@ -429,7 +439,9 @@ const Checkout = () => {
             cost: result.cost,
             loading: false,
             error: result.error,
-            partner: result.partner
+            partner: result.partner,
+            quote: result.quote,
+            quoteAddressSignature: result.quote ? quoteAddressSignature : undefined,
           }
         }));
       } catch (error) {
@@ -444,7 +456,7 @@ const Checkout = () => {
 
   useEffect(() => {
     if (physicalStoreIds.length > 0) calculateShippingForStores(physicalStoreIds);
-  }, [cartItems, shippingInfo.address, shippingInfo.address2, shippingInfo.city, shippingInfo.country, shippingInfo.postalCode, shippingInfo.state]);
+  }, [cartItems, shippingInfo.address, shippingInfo.address2, shippingInfo.city, shippingInfo.country, shippingInfo.email, shippingInfo.fullName, shippingInfo.phone, shippingInfo.postalCode, shippingInfo.state]);
 
   const getSubtotal = () => {
     return cartItems.reduce((total, item) => {
@@ -529,10 +541,10 @@ const Checkout = () => {
       return;
     }
 
-    if (!shippingInfo.email || !shippingInfo.fullName) {
+    if (!shippingInfo.email || !shippingInfo.fullName || (physicalStoreIds.length > 0 && !shippingInfo.phone)) {
       toast({
         title: "Missing Information",
-        description: "Please provide your email and full name",
+        description: "Please provide your name, email, and phone number for delivery",
         variant: "destructive"
       });
       return;
@@ -551,6 +563,11 @@ const Checkout = () => {
         : getTotal();
 
       const { data: { session } } = await supabase.auth.getSession();
+      const shippingByStore = Object.fromEntries(physicalStoreIds.map(storeId => {
+        const quote = storeShipping[storeId]?.quote;
+        if (!quote) throw new Error('A live shipping quote expired or is missing. Refresh the quote before paying.');
+        return [storeId, { quote_token: quote.quote_token }];
+      }));
       await initializePayment(selectedGateway, {
         amount: finalAmount,
         currency: paymentCurrency,
@@ -565,6 +582,7 @@ const Checkout = () => {
           user_id: user?.id,
           cart_items: cartItems,
           shipping_info: shippingInfo,
+          shipping_by_store: shippingByStore,
           customer: {
             email: shippingInfo.email,
             name: shippingInfo.fullName
@@ -787,6 +805,18 @@ const Checkout = () => {
                         required
                       />
                     </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="phone" className="text-gray-700 dark:text-gray-300">Phone number *</Label>
+                      <Input
+                        id="phone"
+                        type="tel"
+                        value={shippingInfo.phone}
+                        onChange={(e) => setShippingInfo({...shippingInfo, phone: e.target.value})}
+                        placeholder="+27 00 000 0000"
+                        className="border-gray-300 dark:border-gray-600 focus:border-purple-500"
+                        required
+                      />
+                    </div>
                     <div className="md:col-span-2 space-y-2">
                       <Label htmlFor="address" className="text-gray-700 dark:text-gray-300">Address Line 1 *</Label>
                       <Input
@@ -893,12 +923,13 @@ const Checkout = () => {
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="postalCode" className="text-gray-700 dark:text-gray-300">Postal Code</Label>
+                      <Label htmlFor="postalCode" className="text-gray-700 dark:text-gray-300">Postal Code *</Label>
                       <Input
                         id="postalCode"
                         value={shippingInfo.postalCode}
                         onChange={(e) => setShippingInfo({...shippingInfo, postalCode: e.target.value})}
                         className="border-gray-300 dark:border-gray-600 focus:border-purple-500"
+                        required
                       />
                     </div>
                   </div>

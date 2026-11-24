@@ -10,7 +10,6 @@ import {
   UserPlus,
   Eye,
   MessageCircle,
-  Store,
   Radio,
   Building2,
   MoreHorizontal,
@@ -638,25 +637,6 @@ const Profile = () => {
     navigate('/messages', { state: { openConversationId: conversationId } });
   };
 
-  const handleOpenStore = async () => {
-    if (!userData) return;
-    if (isOwnProfile) {
-      navigate('/my-store');
-      return;
-    }
-    const { data: store } = await supabase
-      .from('user_stores')
-      .select('id')
-      .eq('user_id', userData.id)
-      .eq('is_active', true)
-      .single();
-    if (store?.id) {
-      navigate(`/store/${store.id}`);
-    } else {
-      toast({ title: 'No Store', description: 'This user has not created a store yet.' });
-    }
-  };
-
   const handleOpenStudio = async () => {
     if (!userData) return;
     const { data: channel } = await supabase
@@ -999,18 +979,12 @@ const Profile = () => {
 
               {/* ── Action bar ── */}
               <div className="mt-6">
-                <div className="grid grid-cols-5 gap-2 sm:hidden">
+                <div className="grid grid-cols-4 gap-2 sm:hidden">
                   <ActionTile
                     icon={MessageCircle}
                     label="Message"
                     gradient="from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
                     onClick={handleMessageUser}
-                  />
-                  <ActionTile
-                    icon={Store}
-                    label="Store"
-                    gradient="from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600"
-                    onClick={handleOpenStore}
                   />
                   <ActionTile
                     icon={Radio}
@@ -1038,12 +1012,6 @@ const Profile = () => {
                     label="Message"
                     gradient="from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
                     onClick={handleMessageUser}
-                  />
-                  <ActionPill
-                    icon={Store}
-                    label="Store"
-                    gradient="from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600"
-                    onClick={handleOpenStore}
                   />
                   <ActionPill
                     icon={Radio}

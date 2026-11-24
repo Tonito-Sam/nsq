@@ -263,6 +263,7 @@ const App = () => {
                     <Route path="/share" element={<ShareTarget />} />
                     <Route path="/wallet" element={<Wallet />} />
                     <Route path="/wallet/topup-result" element={<WalletTopupResult />} />
+                    <Route path="/wallet-topup-result" element={<WalletTopupResult />} />
                     <Route path="/my-store" element={<MyStore />} />
                     <Route path="/create-store" element={<CreateStore />} />
                     <Route path="/store/:store_id" element={<StorePage />} />
