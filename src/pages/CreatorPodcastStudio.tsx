@@ -81,6 +81,7 @@ type PodcastEpisode = {
   scheduled_time: string | null;
   views: number | null;
   shares: number | null;
+  likes: number | null;
   is_active: boolean;
 };
 
@@ -923,7 +924,7 @@ export default function CreatorPodcastStudio({
     }
 
     let episodesQuery = supabase.from('studio_episodes')
-      .select('id, show_id, title, topic, host_names, description, video_url, thumbnail_url, duration, created_at, scheduled_time, views, shares, is_active')
+      .select('id, show_id, title, topic, host_names, description, video_url, thumbnail_url, duration, created_at, scheduled_time, views, shares, likes, is_active')
       .in('id', episodeIds)
       .order('created_at', { ascending: false });
     if (podcastShowId) episodesQuery = episodesQuery.eq('show_id', podcastShowId);

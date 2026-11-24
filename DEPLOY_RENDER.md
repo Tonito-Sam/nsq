@@ -64,3 +64,10 @@ If direct connections fail on restrictive networks, configure the separate TURN 
 
 - Keep `SUPABASE_SERVICE_ROLE_KEY` secret — only set it on Render server envs (backend service), never in frontend envs.
 - For development locally, keep using the Vite proxy (relative `/api` paths) and set `VITE_API_BASE_URL` only for production builds.
+
+8) Apache frontend: Podcast share previews
+
+- Deploy the latest backend so `/api/podcast-og/:showId` can serve the generated 1200×630 cover card with the NexSq logo. It uses the existing `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `sharp` backend dependency.
+- Deploy the Vite `dist` output to the Apache document root, keeping `podcast-share.php` and `.htaccess` from `public/`. The rewrite serves crawler-ready Open Graph and Twitter metadata for `/podcast/:showId?episode=...`.
+- The PHP host needs cURL or PHP URL streams enabled. It calls the public podcast metadata endpoint and uses `https://nsq-98et.onrender.com` for the image API by default. If the backend URL changes, set Apache's `PODCAST_OG_API_BASE`; set `PUBLIC_SITE_URL` if the canonical frontend origin differs from `https://www.nexsq.com`.
+- Test with a publicly reachable production URL. A `localhost` share URL cannot be fetched by social platforms.

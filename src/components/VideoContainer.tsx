@@ -170,7 +170,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
 
   const videoCurrentTimeRef = useRef<number>(0);
   const youtubeTimePollRef = useRef<number | null>(null);
-  const nativeSeekRetryRefs = useRef<number[]>([]);
+  const nativeSeekCleanupRef = useRef<(() => void) | null>(null);
   const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -185,6 +185,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   const modalQueueRequestRef = useRef(0);
   const modalPlayerMutedRef = useRef(modalPlayerMuted);
   modalPlayerMutedRef.current = modalPlayerMuted;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
 
   const sortedShows = shows;
   const currentShow = scheduleTransition
@@ -516,8 +518,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       youtubePlayerRef.current = new window.YT.Player(playerId, {
         videoId,
         playerVars: {
-          autoplay: 1,
-          mute: muted ? 1 : 0,
+          autoplay: scheduleDrivenPlayback && playbackStartOffsetSeconds > 0 ? 0 : 1,
+          mute: mutedRef.current ? 1 : 0,
           controls: 1,
           rel: 0,
           modestbranding: 1,
@@ -575,7 +577,8 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
             if (event.data === 0) moveToNextShow();
           },
           onReady: (event: any) => {
-            if (muted) event.target.mute();
+            if (mutedRef.current) event.target.mute();
+            else event.target.unMute();
             if (!scheduleDrivenPlayback) {
               try {
                 if (!videoCurrentTimeRef.current) {
@@ -595,6 +598,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                 : videoCurrentTimeRef.current;
               if (typeof event.target.seekTo === 'function' && seekToTime > 0) {
                 event.target.seekTo(seekToTime, true);
+                if (scheduleDrivenPlayback) event.target.playVideo();
               }
             } catch {}
             setIsVideoPlaying(true);
@@ -619,7 +623,6 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     currentShow,
     trackingShowId,
     ytReady,
-    muted,
     scheduleTransition,
     scheduleDrivenPlayback,
     playbackStartOffsetSeconds,
@@ -643,11 +646,11 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         }
       } catch {}
     }
-    nativeSeekRetryRefs.current.forEach((id) => clearTimeout(id));
-    nativeSeekRetryRefs.current = [];
+    nativeSeekCleanupRef.current?.();
+    nativeSeekCleanupRef.current = null;
     return () => {
-      nativeSeekRetryRefs.current.forEach((id) => clearTimeout(id));
-      nativeSeekRetryRefs.current = [];
+      nativeSeekCleanupRef.current?.();
+      nativeSeekCleanupRef.current = null;
     };
   }, [currentShow?.id, playbackStartOffsetSeconds, scheduleDrivenPlayback]);
 
@@ -662,7 +665,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     const iframe = vimeoRef.current;
     if (!iframe) return;
 
-    const postCommand = (method: string, value?: string | number) => {
+    const postCommand = (method: string, value?: string | number | boolean) => {
       iframe.contentWindow?.postMessage(JSON.stringify({ method, value }), 'https://player.vimeo.com');
     };
     const subscribeToPlayback = () => postCommand('addEventListener', 'ended');
@@ -676,8 +679,10 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
       }
       if (payload.event === 'ready') {
         subscribeToPlayback();
+        postCommand('setMuted', mutedRef.current);
         if (scheduleDrivenPlayback && playbackStartOffsetSeconds > 0) {
           postCommand('setCurrentTime', playbackStartOffsetSeconds);
+          window.setTimeout(() => postCommand('play'), 250);
         }
       } else if (payload.event === 'ended') {
         handleVideoEnded();
@@ -775,42 +780,77 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
   };
 
   const restoreNativePosition = (seekToTime: number) => {
-    if (!videoRef.current || !seekToTime || seekToTime <= 0) return;
-    try {
-      videoRef.current.currentTime = seekToTime;
-    } catch {}
+    const video = videoRef.current;
+    if (!video || !seekToTime || seekToTime <= 0) return;
+
+    nativeSeekCleanupRef.current?.();
+    video.pause();
     let attempts = 0;
-    const maxAttempts = 6;
-    const trySeek = () => {
-      if (!videoRef.current) return;
-      attempts += 1;
-      const current = videoRef.current.currentTime || 0;
-      const diff = Math.abs(current - seekToTime);
-      if (diff > 0.5 && attempts <= maxAttempts) {
-        try {
-          videoRef.current.currentTime = seekToTime;
-        } catch {}
-        const id = window.setTimeout(trySeek, 250);
-        nativeSeekRetryRefs.current.push(id);
-      } else {
-        try {
-          if (videoRef.current.paused) {
-            const p = videoRef.current.play();
-            if (p && typeof p.then === 'function') p.then(() => {}).catch(() => {});
-          }
-        } catch {}
-      }
+    let retryTimeoutId = 0;
+    const maxAttempts = 30;
+    const cleanup = () => {
+      window.clearTimeout(retryTimeoutId);
+      video.removeEventListener('seeked', attemptSeek);
+      if (nativeSeekCleanupRef.current === cleanup) nativeSeekCleanupRef.current = null;
     };
-    trySeek();
+    const resumePlayback = () => {
+      cleanup();
+      void video.play().catch((error) => {
+        console.warn('[VideoContainer] Could not resume after schedule sync:', error);
+      });
+    };
+    const attemptSeek = () => {
+      if (videoRef.current !== video) {
+        cleanup();
+        return;
+      }
+
+      if (!video.seeking && Math.abs(video.currentTime - seekToTime) <= 0.5) {
+        resumePlayback();
+        return;
+      }
+
+      if (attempts >= maxAttempts) {
+        cleanup();
+        console.warn('[VideoContainer] Could not seek to the scheduled playback position.', {
+          requestedSeconds: seekToTime,
+          currentSeconds: video.currentTime,
+          durationSeconds: video.duration,
+        });
+        void video.play().catch(() => {});
+        return;
+      }
+
+      attempts += 1;
+      if (!video.seeking) {
+        try {
+          video.currentTime = seekToTime;
+        } catch (error) {
+          console.warn('[VideoContainer] Scheduled seek attempt failed:', error);
+        }
+      }
+      retryTimeoutId = window.setTimeout(attemptSeek, 500);
+    };
+
+    video.addEventListener('seeked', attemptSeek);
+    nativeSeekCleanupRef.current = cleanup;
+    attemptSeek();
   };
 
   const handleMuteToggle = () => {
-    setMuted(!muted);
+    const nextMuted = !muted;
+    setMuted(nextMuted);
     if (youtubePlayerRef.current) {
-      if (muted) youtubePlayerRef.current.unMute();
-      else youtubePlayerRef.current.mute();
+      if (nextMuted) youtubePlayerRef.current.mute();
+      else youtubePlayerRef.current.unMute();
     }
-    if (videoRef.current) videoRef.current.muted = !muted;
+    if (vimeoRef.current?.contentWindow) {
+      vimeoRef.current.contentWindow.postMessage(
+        JSON.stringify({ method: 'setMuted', value: nextMuted }),
+        'https://player.vimeo.com',
+      );
+    }
+    if (videoRef.current) videoRef.current.muted = nextMuted;
   };
 
   const handleLike = () => {
@@ -1208,7 +1248,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
           className="w-full h-full"
           src={`https://player.vimeo.com/video/${extractVimeoID(
             currentShow.video_url,
-          )}?autoplay=1&muted=${muted ? 1 : 0}&controls=1&api=1&player_id=vimeoPlayer&playsinline=1`}
+          )}?autoplay=${scheduleDrivenPlayback && playbackStartOffsetSeconds > 0 ? 0 : 1}&muted=1&controls=1&api=1&player_id=vimeoPlayer&playsinline=1`}
           title={currentShow.title}
           allow="autoplay; fullscreen; picture-in-picture"
           allowFullScreen
@@ -1238,7 +1278,7 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
           onPlay={handleVideoPlay}
           onPause={handleVideoPause}
           onTimeUpdate={handleVideoTimeUpdate}
-          autoPlay
+          autoPlay={!scheduleDrivenPlayback || playbackStartOffsetSeconds <= 0}
           style={{
             position: isFullscreenMode ? 'absolute' : 'relative',
             top: 0,
@@ -1664,8 +1704,13 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
                       )}
                     </div>
                     <h3 className="text-sm font-bold text-white leading-snug line-clamp-2">
-                      {currentShow.title}
+                      {currentShow.show_title || currentShow.title}
                     </h3>
+                    {currentShow.show_title && currentShow.title !== currentShow.show_title && (
+                      <p className="mt-0.5 text-xs text-white/70 line-clamp-1">
+                        Episode: {currentShow.title}
+                      </p>
+                    )}
                   </div>
                 </div>
 

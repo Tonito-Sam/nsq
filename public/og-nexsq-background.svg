@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <defs>
+    <linearGradient id="background" x1="86" y1="50" x2="1090" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111027"/>
+      <stop offset=".52" stop-color="#090B19"/>
+      <stop offset="1" stop-color="#07171D"/>
+    </linearGradient>
+    <radialGradient id="purpleGlow" cx="0" cy="0" r="1" gradientTransform="matrix(465 220 -173 365 1035 174)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9148F4" stop-opacity=".48"/>
+      <stop offset="1" stop-color="#9148F4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cyanGlow" cx="0" cy="0" r="1" gradientTransform="matrix(390 174 -136 305 1059 563)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22D3C5" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#22D3C5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="82" y1="65" x2="446" y2="115" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B76BFF"/>
+      <stop offset=".54" stop-color="#8A53F0"/>
+      <stop offset="1" stop-color="#F087D3"/>
+    </linearGradient>
+    <linearGradient id="card" x1="790" y1="106" x2="1118" y2="515" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity=".14"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity=".035"/>
+    </linearGradient>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+      <path d="M34 0H0V34" stroke="#FFFFFF" stroke-opacity=".045"/>
+    </pattern>
+    <filter id="shadow" x="755" y="71" width="404" height="495" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="17"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#background)"/>
+  <rect width="1200" height="630" fill="url(#purpleGlow)"/>
+  <rect width="1200" height="630" fill="url(#cyanGlow)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+
+  <path d="M720 0h480v630H854c155-137 209-329 85-455C865 99 793 41 720 0Z" fill="#12152A" fill-opacity=".54"/>
+  <path d="M768 0h432v630H975c141-159 178-318 64-433C956 113 857 40 768 0Z" fill="url(#accent)" fill-opacity=".08"/>
+
+  <rect x="791" y="106" width="328" height="414" rx="44" fill="#000000" fill-opacity=".22" filter="url(#shadow)"/>
+  <rect x="790" y="106" width="328" height="414" rx="44" fill="url(#card)" stroke="#FFFFFF" stroke-opacity=".19"/>
+  <rect x="807" y="123" width="294" height="380" rx="34" stroke="#FFFFFF" stroke-opacity=".075"/>
+  <circle cx="954" cy="267" r="133" stroke="#E7D8FF" stroke-opacity=".12"/>
+  <circle cx="954" cy="267" r="108" stroke="#B968F4" stroke-opacity=".2"/>
+  <circle cx="954" cy="267" r="87" fill="#FFFFFF" fill-opacity=".08"/>
+  <circle cx="1073" cy="151" r="7" fill="#E992E0"/>
+  <circle cx="832" cy="383" r="5" fill="#50D8CE"/>
+
+  <rect x="847" y="410" width="216" height="52" rx="26" fill="#0B0B18" fill-opacity=".68" stroke="#FFFFFF" stroke-opacity=".12"/>
+  <circle cx="875" cy="436" r="5" fill="#7EE4CB"/>
+  <text x="893" y="442" fill="#FFFFFF" fill-opacity=".88" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" letter-spacing="2">NEXSQ COMMUNITY</text>
+
+  <rect x="86" y="76" width="222" height="38" rx="19" fill="#FFFFFF" fill-opacity=".07" stroke="#FFFFFF" stroke-opacity=".14"/>
+  <circle cx="107" cy="95" r="4" fill="#B774F3"/>
+  <circle cx="121" cy="95" r="4" fill="#D678D3"/>
+  <circle cx="135" cy="95" r="4" fill="#63DCCC"/>
+  <text x="151" y="100" fill="#E9E4F6" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" letter-spacing="1.7">CONNECT · CREATE · GROW</text>
+
+  <text x="87" y="341" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="49" font-weight="700" letter-spacing="-1.4">Where conversation</text>
+  <text x="87" y="402" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="49" font-weight="700" letter-spacing="-1.4">and community</text>
+  <text x="87" y="463" fill="url(#accent)" font-family="Arial, Helvetica, sans-serif" font-size="49" font-weight="700" letter-spacing="-1.4">meet commerce.</text>
+  <text x="90" y="520" fill="#D5D4E1" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400">A global digital square for creators, entrepreneurs and communities.</text>
+
+  <path d="M87 568H1115" stroke="#FFFFFF" stroke-opacity=".13"/>
+  <text x="88" y="599" fill="#FFFFFF" fill-opacity=".73" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" letter-spacing="2.6">NEXSQ.COM</text>
+  <text x="1112" y="599" text-anchor="end" fill="#C5C6D5" fill-opacity=".7" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="600" letter-spacing="1.8">YOUR SPACE. YOUR PEOPLE. YOUR POSSIBILITIES.</text>
+</svg>

@@ -32,6 +32,8 @@ type PodcastEpisode = {
   scheduled_time: string | null;
   views: number | null;
   shares: number | null;
+  likes: number | null;
+  is_active: boolean;
 };
 
 const PRIVATE_VIDEO_PREFIX = 'podcast-private://';
@@ -142,7 +144,7 @@ export default function PodcastChannelPage() {
 
       const { data: episodeRows, error: episodesError } = await supabase
         .from('studio_episodes')
-        .select('id, title, topic, host_names, description, video_url, thumbnail_url, created_at, scheduled_time, views, shares')
+        .select('id, title, topic, host_names, description, video_url, thumbnail_url, created_at, scheduled_time, views, shares, likes, is_active')
         .eq('show_id', showId)
         .eq('is_active', true)
         .order('created_at', { ascending: false });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getPodcastLowerThirdStage,
   getNextPodcastBroadcastSlot,
   PODCAST_OUTRO_DURATION_MS,
   shouldShowPodcastLowerThird,
@@ -7,19 +8,30 @@ import {
 } from '../podcastIntroMontage';
 
 describe('shouldShowPodcastLowerThird', () => {
-  it('shows the first lower third after 30 seconds for 15 seconds', () => {
+  it('shows the first lower third after five seconds for 15 seconds', () => {
     expect(shouldShowPodcastLowerThird(0)).toBe(false);
-    expect(shouldShowPodcastLowerThird(29_999)).toBe(false);
-    expect(shouldShowPodcastLowerThird(30_000)).toBe(true);
-    expect(shouldShowPodcastLowerThird(44_999)).toBe(true);
-    expect(shouldShowPodcastLowerThird(45_000)).toBe(false);
+    expect(shouldShowPodcastLowerThird(4_999)).toBe(false);
+    expect(shouldShowPodcastLowerThird(5_000)).toBe(true);
+    expect(shouldShowPodcastLowerThird(19_999)).toBe(true);
+    expect(shouldShowPodcastLowerThird(20_000)).toBe(false);
   });
 
-  it('repeats every minute after the first appearance', () => {
-    expect(shouldShowPodcastLowerThird(89_999)).toBe(false);
-    expect(shouldShowPodcastLowerThird(90_000)).toBe(true);
-    expect(shouldShowPodcastLowerThird(104_999)).toBe(true);
-    expect(shouldShowPodcastLowerThird(105_000)).toBe(false);
+  it('repeats every 30 seconds after the first appearance', () => {
+    expect(shouldShowPodcastLowerThird(34_999)).toBe(false);
+    expect(shouldShowPodcastLowerThird(35_000)).toBe(true);
+    expect(shouldShowPodcastLowerThird(49_999)).toBe(true);
+    expect(shouldShowPodcastLowerThird(50_000)).toBe(false);
+  });
+});
+
+describe('getPodcastLowerThirdStage', () => {
+  it('cycles the channel, topic, and host through the lower third', () => {
+    expect(getPodcastLowerThirdStage(4_999)).toBeNull();
+    expect(getPodcastLowerThirdStage(5_000)).toEqual({ stage: 0, progress: 0 });
+    expect(getPodcastLowerThirdStage(10_000)).toEqual({ stage: 1, progress: 0 });
+    expect(getPodcastLowerThirdStage(15_000)).toEqual({ stage: 2, progress: 0 });
+    expect(getPodcastLowerThirdStage(19_999)?.stage).toBe(2);
+    expect(getPodcastLowerThirdStage(20_000)).toBeNull();
   });
 });
 

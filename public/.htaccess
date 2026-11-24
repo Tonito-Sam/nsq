@@ -1,6 +1,7 @@
 RewriteEngine On
 RewriteBase /
 RewriteRule ^index\.html$ - [L]
+RewriteRule ^podcast/([0-9a-fA-F-]{36})/?$ podcast-share.php?show_id=$1 [L,QSA]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . /index.html [L]

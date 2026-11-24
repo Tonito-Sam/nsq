@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { CalendarDays, Eye, Mic2, Play, Share2 } from 'lucide-react';
+import { PodcastEpisodeEngagement } from '@/components/podcast/PodcastEpisodeEngagement';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 
@@ -15,6 +16,8 @@ type PodcastEpisodeCardData = {
   scheduled_time: string | null;
   views: number | null;
   shares: number | null;
+  likes: number | null;
+  is_active?: boolean;
 };
 
 export function PodcastEpisodeCard({
@@ -37,6 +40,8 @@ export function PodcastEpisodeCard({
   const [playbackError, setPlaybackError] = useState('');
   const [views, setViews] = useState(episode.views || 0);
   const [shares, setShares] = useState(episode.shares || 0);
+  const [discussionOpen, setDiscussionOpen] = useState(false);
+  const [autoPlayDiscussionVideo, setAutoPlayDiscussionVideo] = useState(false);
   const { toast } = useToast();
   const viewCountedRef = useRef(false);
   const viewCountInFlightRef = useRef(false);
@@ -76,6 +81,21 @@ export function PodcastEpisodeCard({
     void video.play().catch((playError: unknown) => {
       setPlaybackError(playError instanceof Error ? playError.message : 'Could not play this episode.');
     });
+  };
+
+  const handleDiscussionOpen = useCallback(() => {
+    videoRef.current?.pause();
+    setIsPlaying(false);
+  }, []);
+
+  const handleDiscussionOpenChange = useCallback((open: boolean) => {
+    setDiscussionOpen(open);
+    if (!open) setAutoPlayDiscussionVideo(false);
+  }, []);
+
+  const openFullscreenPlayer = () => {
+    setAutoPlayDiscussionVideo(true);
+    setDiscussionOpen(true);
   };
 
   const shareEpisode = async () => {
@@ -191,7 +211,7 @@ export function PodcastEpisodeCard({
             </div>
             <button
               type="button"
-              onClick={playEpisode}
+              onClick={episode.is_active === false ? playEpisode : openFullscreenPlayer}
               aria-label={`Play episode: ${episode.title}`}
               className="absolute bottom-4 right-4 z-10 inline-flex h-11 w-11 items-center justify-center rounded-full border border-white/50 bg-emerald-400 text-slate-950 shadow-[0_0_24px_rgba(52,211,153,0.55)] transition hover:scale-105 hover:bg-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:bottom-5 sm:right-5"
             >
@@ -237,18 +257,41 @@ export function PodcastEpisodeCard({
           </span>
         </p>
         <div className="flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={() => void shareEpisode()}
-            className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium text-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label={`Share ${episode.title}`}
-          >
-            <Share2 className="h-3.5 w-3.5" />
-            Share
-          </button>
-          <span className="text-xs text-muted-foreground" aria-label={`${shares} shares`}>
-            {Number(shares).toLocaleString()} shares
-          </span>
+          {episode.is_active !== false && (
+            <PodcastEpisodeEngagement
+              episodeId={episode.id}
+              showId={showId}
+              episodeTitle={episode.title}
+              shareCount={Number(shares) || 0}
+              onShareEpisode={() => { void shareEpisode(); }}
+              podcastName={podcastName}
+              topic={episode.topic?.trim() || 'Discussion topic'}
+              hostNames={episode.host_names?.trim() || 'Your host'}
+              channelLogoUrl={channelLogoUrl}
+              videoUrl={episode.video_url}
+              thumbnailUrl={episode.thumbnail_url}
+              initialLikes={Number(episode.likes) || 0}
+              open={discussionOpen}
+              autoPlayVideo={autoPlayDiscussionVideo}
+              onOpenChange={handleDiscussionOpenChange}
+              onDiscussionOpen={handleDiscussionOpen}
+              onEpisodePlay={() => void recordView()}
+            />
+          )}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void shareEpisode()}
+              className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium text-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Share ${episode.title}`}
+            >
+              <Share2 className="h-3.5 w-3.5" />
+              Share
+            </button>
+            <span className="text-xs text-muted-foreground" aria-label={`${shares} shares`}>
+              {Number(shares).toLocaleString()} shares
+            </span>
+          </div>
         </div>
       </div>
     </article>

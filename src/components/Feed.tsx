@@ -171,7 +171,7 @@ const Feed: React.FC = () => {
   const [showRepostModal, setShowRepostModal] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [currentShowIndex, setCurrentShowIndex] = useState(0);
-  const [scheduleTransition, setScheduleTransition] = useState(false);
+  const [scheduleTransition, setScheduleTransition] = useState(true);
   const [nextProgramIndex, setNextProgramIndex] = useState<number | null>(null);
   const [playbackStartOffsetSeconds, setPlaybackStartOffsetSeconds] = useState(0);
   const [scheduleSyncWarning, setScheduleSyncWarning] = useState('');
@@ -642,7 +642,7 @@ const Feed: React.FC = () => {
   });
 
   // Query for studio shows with caching
-  const { data: studioShows = [] } = useQuery({
+  const { data: studioShows = [], isLoading: studioShowsLoading } = useQuery({
     queryKey: QUERY_KEYS.studioShows,
     queryFn: async () => {
       const { data: shows, error } = await supabase
@@ -742,6 +742,11 @@ const Feed: React.FC = () => {
   );
 
   useEffect(() => {
+    if (studioShowsLoading) {
+      setScheduleTransition(true);
+      return;
+    }
+
     if (!studioShows.length) {
       setScheduleTransition(false);
       setNextProgramIndex(null);
@@ -899,7 +904,7 @@ const Feed: React.FC = () => {
     selectScheduledProgram();
     const intervalId = window.setInterval(selectScheduledProgram, 1000);
     return () => window.clearInterval(intervalId);
-  }, [studioShows, episodeDurationOverrides, episodeDurationProbeResults]);
+  }, [studioShows, studioShowsLoading, episodeDurationOverrides, episodeDurationProbeResults]);
 
   // Get all posts from pages
   const loadedPosts: Post[] = (postsData as any)?.pages?.flatMap((page: any) => page.posts) || [];

@@ -223,6 +223,14 @@ try {
 }
 
 try {
+  const podcastOg = require('./routes/podcast-og.cjs');
+  app.use('/api/podcast-og', podcastOg);
+  console.log('✅ Mounted /api/podcast-og');
+} catch (e) {
+  console.warn('⚠️ podcast OG route not available:', e?.message || e);
+}
+
+try {
   const dailyPodcast = require('./routes/daily-podcast');
   app.use('/api/daily-podcast', dailyPodcast);
   console.log('✅ Mounted /api/daily-podcast');

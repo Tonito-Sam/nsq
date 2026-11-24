@@ -46,8 +46,8 @@ import {
   drawPodcastOutroFrame,
   PODCAST_INTRO_DURATION_MS,
   PODCAST_OUTRO_DURATION_MS,
+  getPodcastLowerThirdStage,
   shouldStartPodcastOutro,
-  shouldShowPodcastLowerThird,
   type PodcastBroadcastSlot,
 } from '@/utils/podcastIntroMontage';
 
@@ -395,10 +395,15 @@ export default function PodcastTeleprompter() {
   const sectionCount = sections.length;
   const activeSectionBody = sections[activeSection]?.body || '';
   const introHostNames = draft ? getHostNames(draft) : 'Your host';
-  const liveOverlaysVisible = !recordingUrl
-    && (recordingState === 'recording' || recordingState === 'paused');
-  const liveLowerThirdVisible = liveOverlaysVisible
-    && shouldShowPodcastLowerThird(recordingSeconds * 1000);
+  const liveOverlayDecorationsVisible = !recordingUrl
+    && (recordingState === 'recording' || recordingState === 'paused')
+    && !introMontageActive
+    && !outroActive;
+  const liveLowerThirdStage = getPodcastLowerThirdStage(recordingSeconds * 1000);
+  const liveLowerThirdVisible = !recordingUrl
+    && (recordingState === 'recording' || recordingState === 'paused')
+    && !outroActive
+    && liveLowerThirdStage !== null;
   const showArtworkUrl = draft?.coverImageUrl || draft?.logoImageUrl;
   const hasAudioProcessing = audioCleanup.noiseGate
     || audioCleanup.declip
@@ -1441,16 +1446,20 @@ export default function PodcastTeleprompter() {
             cameraZoomRef.current,
           );
         }
-        drawPodcastBroadcastOverlays(
-          context,
-          canvas.width,
-          canvas.height,
-          elapsedMs,
-          draft?.showName?.trim() || draft?.title || 'Podcast',
-          draft?.topic?.trim() || '',
-          hostNames,
-          coverImageRef.current || logoImageRef.current,
-        );
+        const introActive = elapsedMs < PODCAST_INTRO_DURATION_MS;
+        if (!outroActiveRef.current && (!introActive || getPodcastLowerThirdStage(elapsedMs))) {
+          drawPodcastBroadcastOverlays(
+            context,
+            canvas.width,
+            canvas.height,
+            elapsedMs,
+            draft?.showName?.trim() || draft?.title || 'Podcast',
+            draft?.topic?.trim() || '',
+            hostNames,
+            coverImageRef.current || logoImageRef.current,
+            introActive,
+          );
+        }
         const sceneIndex = Math.min(2, Math.floor(elapsedMs / (PODCAST_INTRO_DURATION_MS / 3)));
         if (sceneIndex !== previousScene) {
           previousScene = sceneIndex;
@@ -2054,22 +2063,24 @@ export default function PodcastTeleprompter() {
                 </div>
               </div>
             )}
-            {liveOverlaysVisible && (
+            {(liveOverlayDecorationsVisible || liveLowerThirdVisible) && (
               <>
-                {showArtworkUrl && (
+                {liveOverlayDecorationsVisible && showArtworkUrl && (
                   <img
                     src={showArtworkUrl}
                     alt=""
                     className="absolute right-3 top-3 z-20 h-14 w-[42px] rounded-md border border-white/45 bg-black/75 object-contain shadow-lg sm:h-[72px] sm:w-[54px]"
                   />
                 )}
-                <div className="absolute left-3 top-3 z-20 flex max-w-[68%] items-center gap-2 overflow-hidden rounded-md border border-white/20 bg-black/65 px-2.5 py-1.5 text-white shadow-lg backdrop-blur-sm">
-                  <span className="shrink-0 text-[8px] font-bold uppercase tracking-[0.14em] text-emerald-300 sm:text-[9px]">Topic</span>
-                  <span className="h-3 w-px shrink-0 bg-white/25" />
-                  <span className="truncate text-[9px] font-medium sm:text-[11px]">{draft.topic?.trim() || 'Discussion topic'}</span>
-                </div>
+                {liveOverlayDecorationsVisible && liveLowerThirdStage?.stage !== 1 && (
+                  <div className="absolute left-3 top-3 z-20 flex max-w-[68%] items-center gap-2 overflow-hidden rounded-md border border-white/20 bg-black/65 px-2.5 py-1.5 text-white shadow-lg backdrop-blur-sm">
+                    <span className="shrink-0 text-[8px] font-bold uppercase tracking-[0.14em] text-emerald-300 sm:text-[9px]">Topic</span>
+                    <span className="h-3 w-px shrink-0 bg-white/25" />
+                    <span className="truncate text-[9px] font-medium sm:text-[11px]">{draft.topic?.trim() || 'Discussion topic'}</span>
+                  </div>
+                )}
                 {liveLowerThirdVisible && (
-                  <div className="absolute bottom-0 left-0 right-0 z-20 flex h-[14%] min-h-9 items-center gap-1.5 overflow-hidden border-t border-white/15 bg-gradient-to-r from-[#03100d]/90 via-[#050c0d]/85 to-[#080a0e]/90 px-2 text-white shadow-xl backdrop-blur-sm sm:gap-3 sm:px-4">
+                  <div className="absolute bottom-0 left-0 right-0 z-20 flex h-[14%] min-h-9 items-center gap-1.5 overflow-hidden border-t border-white/15 bg-gradient-to-r from-[#03100d]/90 via-[#050c0d]/85 to-[#080a0e]/90 px-2 text-white shadow-xl backdrop-blur-sm animate-in fade-in slide-in-from-bottom-5 zoom-in-95 duration-700 ease-out sm:gap-3 sm:px-4">
                     <span className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-emerald-300 via-emerald-600 to-transparent" />
                     {showArtworkUrl ? (
                       <img src={showArtworkUrl} alt="" className="h-7 w-7 shrink-0 rounded object-cover ring-1 ring-white/25 sm:h-10 sm:w-10" />
@@ -2078,9 +2089,18 @@ export default function PodcastTeleprompter() {
                         {(draft.showName?.trim() || draft.title).split(/\s+/).slice(0, 2).map((word) => word[0]).join('').toUpperCase() || 'P'}
                       </div>
                     )}
-                    <p className="min-w-0 flex-[0.8] truncate text-[9px] font-bold sm:text-xs">{draft.showName?.trim() || draft.title}</p>
-                    <span className="h-4 w-px shrink-0 bg-white/20" />
-                    <p className="min-w-0 flex-1 truncate text-[8px] text-white/65 sm:text-[9px]">Hosted by {introHostNames}</p>
+                    <div key={liveLowerThirdStage?.stage} className="min-w-0 flex-1 animate-in fade-in slide-in-from-bottom-3 zoom-in-95 duration-500 ease-out">
+                      <p className="text-[7px] font-bold uppercase tracking-[0.16em] text-emerald-300 sm:text-[9px]">
+                        {liveLowerThirdStage?.stage === 0 ? 'Podcast' : liveLowerThirdStage?.stage === 1 ? 'Topic' : 'Host'}
+                      </p>
+                      <p className="truncate text-[9px] font-bold sm:text-xs">
+                        {liveLowerThirdStage?.stage === 0
+                          ? draft.showName?.trim() || draft.title
+                          : liveLowerThirdStage?.stage === 1
+                            ? draft.topic?.trim() || 'Discussion topic'
+                            : introHostNames}
+                      </p>
+                    </div>
                   </div>
                 )}
               </>

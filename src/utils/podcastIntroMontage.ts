@@ -1,7 +1,7 @@
 export const PODCAST_INTRO_DURATION_MS = 15_000;
 export const PODCAST_OUTRO_DURATION_MS = 15_000;
-export const PODCAST_LOWER_THIRD_INITIAL_DELAY_MS = 30_000;
-export const PODCAST_LOWER_THIRD_INTERVAL_MS = 60_000;
+export const PODCAST_LOWER_THIRD_INITIAL_DELAY_MS = 5_000;
+export const PODCAST_LOWER_THIRD_INTERVAL_MS = 30_000;
 export const PODCAST_LOWER_THIRD_DURATION_MS = 15_000;
 
 export type PodcastBroadcastSlot = {
@@ -187,6 +187,17 @@ export function shouldShowPodcastLowerThird(elapsedMs: number) {
     < PODCAST_LOWER_THIRD_DURATION_MS;
 }
 
+export function getPodcastLowerThirdStage(elapsedMs: number): { stage: 0 | 1 | 2; progress: number } | null {
+  if (!shouldShowPodcastLowerThird(elapsedMs)) return null;
+  const elapsedInStrip = (elapsedMs - PODCAST_LOWER_THIRD_INITIAL_DELAY_MS) % PODCAST_LOWER_THIRD_INTERVAL_MS;
+  const stageDuration = PODCAST_LOWER_THIRD_DURATION_MS / 3;
+  const stage = Math.floor(elapsedInStrip / stageDuration) as 0 | 1 | 2;
+  return {
+    stage,
+    progress: (elapsedInStrip % stageDuration) / stageDuration,
+  };
+}
+
 export function shouldStartPodcastOutro(recordingSeconds: number, targetDurationMinutes: number) {
   if (!Number.isFinite(targetDurationMinutes) || targetDurationMinutes <= 0) return false;
   return recordingSeconds >= targetDurationMinutes * 60 - PODCAST_OUTRO_DURATION_MS / 1000;
@@ -314,57 +325,63 @@ export function drawPodcastBroadcastOverlays(
   topic: string,
   hostNames: string,
   artworkImage?: HTMLImageElement | null,
+  lowerThirdOnly = false,
 ) {
+  const lowerThirdStage = getPodcastLowerThirdStage(elapsedMs);
   const margin = width * 0.045;
   const image = artworkImage?.complete && artworkImage.naturalWidth ? artworkImage : null;
   const artworkWidth = height * 0.105;
   const artworkHeight = height * 0.14;
-  drawPodcastArtwork(
-    context,
-    image,
-    width - margin - artworkWidth,
-    height * 0.045,
-    artworkWidth,
-    artworkHeight,
-  );
+  if (!lowerThirdOnly) {
+    drawPodcastArtwork(
+      context,
+      image,
+      width - margin - artworkWidth,
+      height * 0.045,
+      artworkWidth,
+      artworkHeight,
+    );
+  }
 
-  const topicText = topic.trim() || 'Discussion topic';
-  const topicX = margin;
-  const topicY = height * 0.045;
-  const topicHeight = height * 0.07;
-  const topicPadding = height * 0.018;
-  const topicLabel = 'TOPIC';
-  context.save();
-  context.font = `700 ${Math.max(9, height * 0.014)}px "Segoe UI", Arial, sans-serif`;
-  const topicLabelWidth = context.measureText(topicLabel).width;
-  const topicTextX = topicX + topicPadding * 2 + topicLabelWidth;
-  const topicMaxWidth = width * 0.58 - (topicTextX - topicX) - topicPadding;
-  context.font = `600 ${Math.max(12, height * 0.021)}px "Segoe UI", Arial, sans-serif`;
-  const topicPillWidth = Math.min(
-    width * 0.58,
-    topicTextX - topicX + topicPadding + context.measureText(topicText).width,
-  );
-  roundedRectPath(context, topicX, topicY, topicPillWidth, topicHeight, topicHeight * 0.22);
-  context.fillStyle = 'rgba(3, 10, 12, 0.76)';
-  context.fill();
-  context.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-  context.lineWidth = Math.max(1, height * 0.0015);
-  context.stroke();
-  context.textAlign = 'left';
-  context.textBaseline = 'middle';
-  context.font = `700 ${Math.max(9, height * 0.014)}px "Segoe UI", Arial, sans-serif`;
-  context.fillStyle = '#65e6b2';
-  context.fillText(topicLabel, topicX + topicPadding, topicY + topicHeight / 2);
-  context.font = `600 ${Math.max(12, height * 0.021)}px "Segoe UI", Arial, sans-serif`;
-  context.fillStyle = '#ffffff';
-  context.fillText(
-    fitCanvasText(context, topicText, topicMaxWidth),
-    topicTextX,
-    topicY + topicHeight / 2,
-  );
-  context.restore();
+  if (!lowerThirdOnly && lowerThirdStage?.stage !== 1) {
+    const topicText = topic.trim() || 'Discussion topic';
+    const topicX = margin;
+    const topicY = height * 0.045;
+    const topicHeight = height * 0.07;
+    const topicPadding = height * 0.018;
+    const topicLabel = 'TOPIC';
+    context.save();
+    context.font = `700 ${Math.max(9, height * 0.014)}px "Segoe UI", Arial, sans-serif`;
+    const topicLabelWidth = context.measureText(topicLabel).width;
+    const topicTextX = topicX + topicPadding * 2 + topicLabelWidth;
+    const topicMaxWidth = width * 0.58 - (topicTextX - topicX) - topicPadding;
+    context.font = `600 ${Math.max(12, height * 0.021)}px "Segoe UI", Arial, sans-serif`;
+    const topicPillWidth = Math.min(
+      width * 0.58,
+      topicTextX - topicX + topicPadding + context.measureText(topicText).width,
+    );
+    roundedRectPath(context, topicX, topicY, topicPillWidth, topicHeight, topicHeight * 0.22);
+    context.fillStyle = 'rgba(3, 10, 12, 0.76)';
+    context.fill();
+    context.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    context.lineWidth = Math.max(1, height * 0.0015);
+    context.stroke();
+    context.textAlign = 'left';
+    context.textBaseline = 'middle';
+    context.font = `700 ${Math.max(9, height * 0.014)}px "Segoe UI", Arial, sans-serif`;
+    context.fillStyle = '#65e6b2';
+    context.fillText(topicLabel, topicX + topicPadding, topicY + topicHeight / 2);
+    context.font = `600 ${Math.max(12, height * 0.021)}px "Segoe UI", Arial, sans-serif`;
+    context.fillStyle = '#ffffff';
+    context.fillText(
+      fitCanvasText(context, topicText, topicMaxWidth),
+      topicTextX,
+      topicY + topicHeight / 2,
+    );
+    context.restore();
+  }
 
-  if (!shouldShowPodcastLowerThird(elapsedMs)) return;
+  if (!lowerThirdStage) return;
 
   const barX = 0;
   const barHeight = height * 0.14;
@@ -390,28 +407,35 @@ export function drawPodcastBroadcastOverlays(
   const imageY = barY + (barHeight - imageSize) / 2;
   drawPodcastLogoMark(context, image, imageX, imageY, imageSize, showName);
 
-  const itemGap = height * 0.018;
-  const separatorGap = height * 0.012;
-  const textX = imageX + imageSize + itemGap;
-  const availableTextWidth = width - textX - horizontalPadding - separatorGap * 2 - height * 0.002;
-  const showWidth = availableTextWidth * 0.42;
-  const hostsWidth = availableTextWidth * 0.58;
+  const textX = imageX + imageSize + height * 0.018;
+  const availableTextWidth = width - textX - horizontalPadding;
+  const sceneLabel = lowerThirdStage.stage === 0
+    ? 'PODCAST'
+    : lowerThirdStage.stage === 1
+      ? 'TOPIC'
+      : 'HOST';
+  const sceneText = lowerThirdStage.stage === 0
+    ? showName || 'Podcast'
+    : lowerThirdStage.stage === 1
+      ? topic.trim() || 'Discussion topic'
+      : hostNames || 'Your host';
+  const edgeProgress = Math.min(1, Math.min(
+    lowerThirdStage.progress,
+    1 - lowerThirdStage.progress,
+  ) / 0.16);
+  const easedProgress = 1 - (1 - edgeProgress) ** 3;
+  const textOffset = (1 - easedProgress) * height * 0.012;
+  context.globalAlpha = easedProgress;
+  context.translate(0, (1 - easedProgress) * height * 0.035);
   context.textAlign = 'left';
   context.textBaseline = 'middle';
-
   const textY = barY + barHeight / 2;
-  context.font = `700 ${Math.max(14, height * 0.03)}px "Segoe UI", Arial, sans-serif`;
+  context.fillStyle = '#72f0bc';
+  context.font = `700 ${Math.max(9, height * 0.014)}px "Segoe UI", Arial, sans-serif`;
+  context.fillText(sceneLabel, textX + textOffset, textY - barHeight * 0.14);
   context.fillStyle = '#ffffff';
-  context.fillText(fitCanvasText(context, showName || 'Podcast', showWidth), textX, textY);
-
-  const dividerX = textX + showWidth + separatorGap;
-  context.fillStyle = 'rgba(255, 255, 255, 0.22)';
-  context.fillRect(dividerX, barY + barHeight * 0.28, Math.max(1, height * 0.002), barHeight * 0.44);
-
-  const hostsX = dividerX + separatorGap + height * 0.002;
-  context.font = `500 ${Math.max(11, height * 0.023)}px "Segoe UI", Arial, sans-serif`;
-  context.fillStyle = '#b7c8c0';
-  context.fillText(fitCanvasText(context, `Hosted by ${hostNames || 'Your host'}`, hostsWidth), hostsX, textY);
+  context.font = `700 ${Math.max(14, height * 0.03)}px "Segoe UI", Arial, sans-serif`;
+  context.fillText(fitCanvasText(context, sceneText, availableTextWidth), textX + textOffset, textY + barHeight * 0.16);
   context.restore();
 }
 
