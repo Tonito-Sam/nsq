@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Home, Video, Plus } from 'lucide-react';
+import { Newspaper, Video, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { CreatePostModal } from './CreatePostModal';
@@ -71,7 +71,7 @@ export const MobileBottomNav = ({
   }, []);
 
   const navItems = [
-    { icon: Home, label: 'Feeds', path: '/' },
+    { icon: Newspaper, label: 'Feeds', path: '/' },
   ];
 
   const rightNavItems = [
@@ -92,14 +92,14 @@ export const MobileBottomNav = ({
                   key={item.path}
                   variant="ghost"
                   size="sm"
-                  className={`flex flex-col items-center p-2 h-auto min-w-0 ${
+                  className={`flex flex-col items-center gap-0.5 p-2 h-auto min-w-0 ${
                     isActive(item.path) 
                       ? 'text-purple-600 dark:text-purple-400' 
                       : 'text-gray-600 dark:text-gray-400'
                   }`}
                   onClick={() => navigate(item.path)}
                 >
-                  <item.icon className="h-4 w-4 sm:h-5 sm:w-5 mb-0.5" />
+                  <item.icon className="!h-6 !w-6 sm:!h-7 sm:!w-7" />
                   <span className="text-xs truncate">{item.label}</span>
                 </Button>
               ))}
@@ -122,14 +122,14 @@ export const MobileBottomNav = ({
                   key={item.path}
                   variant="ghost"
                   size="sm"
-                  className={`flex flex-col items-center p-2 h-auto min-w-0 ${
+                  className={`flex flex-col items-center gap-0.5 p-2 h-auto min-w-0 ${
                     isActive(item.path) 
                       ? 'text-purple-600 dark:text-purple-400' 
                       : 'text-gray-600 dark:text-gray-400'
                   }`}
                   onClick={() => navigate(item.path)}
                 >
-                  <item.icon className="h-4 w-4 sm:h-5 sm:w-5 mb-0.5" />
+                  <item.icon className="!h-6 !w-6 sm:!h-7 sm:!w-7" />
                   <span className="text-xs truncate">{item.label}</span>
                 </Button>
               ))}

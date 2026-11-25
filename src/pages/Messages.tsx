@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Layout } from '@/components/Layout';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Search, MessageCircle, Send, Mic, MicOff, Paperclip, FileText, Camera, Image as ImageIcon, X, ArrowLeft, Loader2, MoreVertical, SwitchCamera, Check } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
@@ -101,7 +102,6 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ open, onClose, onCapture 
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
   const [capturing, setCapturing] = useState(false);
 
-  // Start / stop the camera when the modal opens/closes or facing changes
   useEffect(() => {
     if (!open) return;
 
@@ -111,7 +111,6 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ open, onClose, onCapture 
 
     const start = async () => {
       try {
-        // Stop any existing stream before starting a new one
         if (streamRef.current) {
           streamRef.current.getTracks().forEach((t) => t.stop());
           streamRef.current = null;
@@ -160,7 +159,6 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ open, onClose, onCapture 
     };
   }, [open, facingMode]);
 
-  // Clean up on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -319,10 +317,10 @@ const Messages = () => {
   const defaultWhistleSound = useRef<HTMLAudioElement | null>(null);
   const messageSubRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const lastPlayedMessageId = useRef<string | null>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const scrollAreaViewportRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRootRef = useRef<HTMLDivElement>(null);
   const voiceNoteInputRef = useRef<HTMLInputElement>(null);
   const photoUploadInputRef = useRef<HTMLInputElement>(null);
+  const mobileMessageInputRef = useRef<HTMLTextAreaElement>(null);
   const transcriberRef = useRef<ReturnType<typeof createPodcastShortTranscriber> | null>(null);
   const isMountedRef = useRef(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -659,12 +657,27 @@ const Messages = () => {
   }, [messages, user]);
 
   useEffect(() => {
-    if (scrollAreaViewportRef.current) {
-      scrollAreaViewportRef.current.scrollTop = scrollAreaViewportRef.current.scrollHeight;
-    } else if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    }
+    const frame = window.requestAnimationFrame(() => {
+      const viewport = scrollAreaRootRef.current?.querySelector<HTMLDivElement>(
+        '[data-radix-scroll-area-viewport]'
+      );
+      if (viewport) {
+        viewport.scrollTop = viewport.scrollHeight;
+      } else {
+        messagesEndRef.current?.scrollIntoView({ block: 'end' });
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frame);
   }, [messages]);
+
+  useEffect(() => {
+    const textarea = mobileMessageInputRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
+  }, [newMessage]);
 
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedConversation || !user) return;
@@ -677,8 +690,15 @@ const Messages = () => {
         content: newMessage.trim(),
         created_at: sentAt,
       };
-      const { error } = await supabase.from('messages').insert(messageData);
+      const { data: sentMessage, error } = await supabase
+        .from('messages')
+        .insert(messageData)
+        .select()
+        .single();
       if (error) throw error;
+      setMessages((previous) => previous.some((message) => message.id === sentMessage.id)
+        ? previous
+        : [...previous, sentMessage]);
       const { error: conversationError } = await supabase
         .from('conversations')
         .update({ last_message_at: sentAt })
@@ -929,7 +949,7 @@ const Messages = () => {
 
   return (
     <Layout hideSidebar hideRightSidebar>
-      <div className="flex h-[calc(100vh-64px)] bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-950 dark:to-gray-900">
+      <div className="relative flex h-[calc(100dvh-160px)] md:h-[calc(100vh-64px)] overflow-hidden bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-950 dark:to-gray-900">
         {/* Desktop Sidebar */}
         <aside className="w-full max-w-sm border-r border-slate-200/60 dark:border-gray-800/60 bg-white/70 dark:bg-gray-900/70 backdrop-blur-xl h-full hidden md:flex flex-col shadow-sm">
           <SidebarContent
@@ -945,15 +965,17 @@ const Messages = () => {
         </aside>
 
         {/* Mobile Sidebar Toggle */}
-        <div className="md:hidden">
-          <button
-            className="p-2.5 m-2 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow-lg hover:shadow-xl transition-all duration-200 active:scale-95"
-            onClick={() => setShowMobileSidebar(true)}
-            aria-label="Open conversations"
-          >
-            <MessageCircle className="h-5 w-5" />
-          </button>
-        </div>
+        {!selectedConversation && (
+          <div className="absolute left-3 top-3 z-20 md:hidden">
+            <button
+              className="p-2.5 m-2 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow-lg hover:shadow-xl transition-all duration-200 active:scale-95"
+              onClick={() => setShowMobileSidebar(true)}
+              aria-label="Open conversations"
+            >
+              <MessageCircle className="h-5 w-5" />
+            </button>
+          </div>
+        )}
 
         {/* Mobile Sidebar Drawer */}
         {showMobileSidebar && (
@@ -1026,10 +1048,10 @@ const Messages = () => {
             </div>
           )}
 
-          <div className="flex flex-col h-full max-w-4xl mx-auto w-full">
+          <div className="flex flex-col h-full max-w-4xl mx-auto w-full min-h-0">
             {/* Chat Header */}
             {selectedConversation && (
-              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200/60 dark:border-gray-800/60 bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl sticky top-0 z-10">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200/60 dark:border-gray-800/60 bg-white/80 dark:bg-gray-900/80 backdrop-blur-xl sticky top-0 z-10 shrink-0">
                 <div className="flex items-center gap-3">
                   <button
                     onClick={handleBackToList}
@@ -1057,7 +1079,6 @@ const Messages = () => {
                     </div>
                   </div>
                 </div>
-                {/* Call & video icons removed — only overflow menu remains */}
                 <div className="flex items-center gap-1">
                   <Button variant="ghost" size="icon" className="rounded-full text-slate-500 hover:text-purple-600">
                     <MoreVertical className="h-4 w-4" />
@@ -1066,18 +1087,9 @@ const Messages = () => {
               </div>
             )}
 
-            <div className="flex-1 flex flex-col min-h-0">
-              <ScrollArea className="flex-1 min-h-0">
-                <div
-                  className="flex flex-col gap-2 justify-end min-h-full px-3 sm:px-4 py-4"
-                  ref={el => {
-                    (chatContainerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
-                    if (el && el.parentElement?.classList.contains('radix-scroll-area-viewport')) {
-                      (scrollAreaViewportRef as React.MutableRefObject<HTMLDivElement | null>).current = el.parentElement as HTMLDivElement;
-                    }
-                  }}
-                  style={{ minHeight: '100%' }}
-                >
+            <div className="flex-1 flex flex-col min-h-0 relative">
+              <ScrollArea ref={scrollAreaRootRef} className="flex-1 min-h-0">
+                <div className="flex flex-col gap-2 px-3 sm:px-4 py-4">
                   {!selectedConversation ? (
                     <div className="flex flex-col items-center justify-center flex-1 py-16">
                       <div className="rounded-full bg-slate-100 dark:bg-gray-800 p-6 mb-4">
@@ -1220,8 +1232,8 @@ const Messages = () => {
 
               {/* Message Input */}
               {selectedConversation && (
-                <div className="border-t border-slate-200/60 dark:border-gray-800/60 p-3 sm:p-4 bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl sticky bottom-0 z-10">
-                  <div className="flex items-end gap-1.5 sm:gap-2">
+                <div className="border-t border-slate-200/60 dark:border-gray-800/60 p-3 sm:p-4 bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl shrink-0 z-10 w-full">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-end md:gap-2">
                     {/* Hidden gallery input only — camera is handled by modal */}
                     <input
                       ref={photoUploadInputRef}
@@ -1246,90 +1258,103 @@ const Messages = () => {
                       }}
                     />
 
-                    <div className="flex items-center gap-0.5">
-                      {/* Take a photo — opens live camera modal */}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setShowCamera(true)}
-                        disabled={loading}
-                        className="rounded-full h-9 w-9 text-slate-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
-                        aria-label="Take a photo"
-                        title="Take a photo"
-                      >
-                        <Camera className="h-5 w-5" />
-                      </Button>
+                    <div className="order-2 flex w-full items-center justify-between md:contents">
+                      <div className="flex items-center gap-0.5 md:order-1">
+                        {/* Take a photo — opens live camera modal */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setShowCamera(true)}
+                          disabled={loading}
+                          className="rounded-full h-9 w-9 text-slate-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
+                          aria-label="Take a photo"
+                          title="Take a photo"
+                        >
+                          <Camera className="h-5 w-5" />
+                        </Button>
 
-                      {/* Upload an existing image — opens gallery/file picker */}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => photoUploadInputRef.current?.click()}
-                        disabled={loading}
-                        className="rounded-full h-9 w-9 text-slate-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
-                        aria-label="Upload a photo"
-                        title="Upload a photo"
-                      >
-                        <ImageIcon className="h-5 w-5" />
-                      </Button>
+                        {/* Upload an existing image — opens gallery/file picker */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => photoUploadInputRef.current?.click()}
+                          disabled={loading}
+                          className="rounded-full h-9 w-9 text-slate-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
+                          aria-label="Upload a photo"
+                          title="Upload a photo"
+                        >
+                          <ImageIcon className="h-5 w-5" />
+                        </Button>
 
-                      {/* Attach audio file as voice note */}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => voiceNoteInputRef.current?.click()}
-                        disabled={loading}
-                        className="rounded-full h-9 w-9 text-slate-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
-                        aria-label="Attach audio voice note"
-                        title="Attach audio voice note"
-                      >
-                        <Paperclip className="h-5 w-5" />
-                      </Button>
+                        {/* Attach audio file as voice note */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => voiceNoteInputRef.current?.click()}
+                          disabled={loading}
+                          className="rounded-full h-9 w-9 text-slate-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
+                          aria-label="Attach audio voice note"
+                          title="Attach audio voice note"
+                        >
+                          <Paperclip className="h-5 w-5" />
+                        </Button>
 
-                      {/* Record voice message */}
+                        {/* Record voice message */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setShowVoiceRecorder(!showVoiceRecorder)}
+                          className={cn(
+                            "rounded-full h-9 w-9 transition-all duration-200",
+                            isRecording
+                              ? "bg-red-500 text-white hover:bg-red-600 animate-pulse"
+                              : "text-slate-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20"
+                          )}
+                          aria-label="Record voice message"
+                          title="Record voice message"
+                        >
+                          {isRecording ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                        </Button>
+                      </div>
+
                       <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setShowVoiceRecorder(!showVoiceRecorder)}
+                        onClick={sendMessage}
+                        disabled={!newMessage.trim() || loading}
                         className={cn(
-                          "rounded-full h-9 w-9 transition-all duration-200",
-                          isRecording
-                            ? "bg-red-500 text-white hover:bg-red-600 animate-pulse"
-                            : "text-slate-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20"
+                          "order-2 rounded-full h-10 w-10 shadow-md transition-all duration-200 md:order-3",
+                          newMessage.trim()
+                            ? "bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white active:scale-95"
+                            : "bg-slate-200 dark:bg-gray-700 text-slate-400 dark:text-gray-500"
                         )}
-                        aria-label="Record voice message"
-                        title="Record voice message"
+                        aria-label="Send message"
                       >
-                        {isRecording ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                        {loading ? (
+                          <Loader2 className="h-5 w-5 animate-spin" />
+                        ) : (
+                          <Send className="h-5 w-5" />
+                        )}
                       </Button>
                     </div>
+
+                    <Textarea
+                      ref={mobileMessageInputRef}
+                      rows={3}
+                      value={newMessage}
+                      onChange={(event) => setNewMessage(event.target.value)}
+                      onKeyDown={handleKeyPress}
+                      placeholder="Type a message..."
+                      className="order-1 min-h-[88px] max-h-32 resize-none overflow-y-auto rounded-2xl border-0 bg-slate-100 px-4 py-3 text-sm focus-visible:ring-2 focus-visible:ring-purple-400 dark:bg-gray-800 md:hidden"
+                      disabled={loading}
+                    />
 
                     <Input
                       value={newMessage}
                       onChange={(e) => setNewMessage(e.target.value)}
                       onKeyDown={handleKeyPress}
                       placeholder="Type a message..."
-                      className="flex-1 rounded-full px-4 py-2.5 border-0 bg-slate-100 dark:bg-gray-800 focus-visible:ring-2 focus-visible:ring-purple-400 text-sm"
+                      className="hidden flex-1 rounded-full border-0 bg-slate-100 px-4 py-2.5 text-sm focus-visible:ring-2 focus-visible:ring-purple-400 dark:bg-gray-800 md:order-2 md:flex"
                       disabled={loading}
                     />
-
-                    <Button
-                      onClick={sendMessage}
-                      disabled={!newMessage.trim() || loading}
-                      className={cn(
-                        "rounded-full h-10 w-10 shadow-md transition-all duration-200",
-                        newMessage.trim()
-                          ? "bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white active:scale-95"
-                          : "bg-slate-200 dark:bg-gray-700 text-slate-400 dark:text-gray-500"
-                      )}
-                      aria-label="Send message"
-                    >
-                      {loading ? (
-                        <Loader2 className="h-5 w-5 animate-spin" />
-                      ) : (
-                        <Send className="h-5 w-5" />
-                      )}
-                    </Button>
                   </div>
                 </div>
               )}
