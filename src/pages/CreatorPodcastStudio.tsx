@@ -1001,7 +1001,7 @@ export default function CreatorPodcastStudio({
             .maybeSingle(),
         ]);
         if (!active) return;
-        setEligible(eligibility.eligible);
+        setEligible(eligibility.canUsePodcastStudio);
         if (pendingResult.error) throw pendingResult.error;
         if (approvedResult.error) throw approvedResult.error;
 
@@ -2293,7 +2293,7 @@ export default function CreatorPodcastStudio({
           <h1 className="text-xl font-semibold">Podcast Studio is locked</h1>
           {error
             ? <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>
-            : <p className="mt-2 text-sm text-muted-foreground">A Studio channel needs at least 10 reels and 1 subscriber to use Podcast Studio.</p>}
+            : <p className="mt-2 text-sm text-muted-foreground">A Studio channel needs at least 50 Reels of 360 seconds or less and 20 subscribers to use Podcast Studio.</p>}
         </section>
       </PageContainer>,
     );

@@ -36,6 +36,7 @@ import SkeletonAvatar from '@/components/skeletons/SkeletonAvatar';
 import SkeletonLine from '@/components/skeletons/SkeletonLine';
 import { cn } from '@/lib/utils';
 import { ShowSlotApplication } from '@/components/studio/ShowSlotApplication';
+import { useStudioMonetizationEligibility } from '@/hooks/useStudioMonetizationEligibility';
 
 // ─── Social platform config ───────────────────────────────────────────────────
 
@@ -54,9 +55,6 @@ const CATEGORIES = [
   'Fiction', 'TV & Film', 'Kickstart', 'Arts', 'Leisure', 'Government',
   'Spirituality', 'Personal Journals', 'Documentary', 'Other',
 ];
-
-const MIN_VIEWS = 10000;
-const MIN_SUBSCRIBERS = 2000;
 
 // ─── Reusable UI primitives ───────────────────────────────────────────────────
 
@@ -140,26 +138,27 @@ const FieldLabel = ({
 
 const MonetizationCard = ({
   channel,
-  totalChannelViews,
-  subscriberCounts,
   handleToggleMonetization,
 }: any) => {
-  const viewsOk = totalChannelViews >= MIN_VIEWS;
-  const subsOk = (subscriberCounts[channel.id] ?? 0) >= MIN_SUBSCRIBERS;
-  const monetizationEnabled = viewsOk && subsOk;
-
-  const progress = Math.min(
-    100,
-    Math.round(
-      ((Math.min(totalChannelViews, MIN_VIEWS) / MIN_VIEWS) * 0.5 +
-        (Math.min(subscriberCounts[channel.id] ?? 0, MIN_SUBSCRIBERS) / MIN_SUBSCRIBERS) * 0.5) *
-        100,
-    ),
-  );
+  const eligibility = useStudioMonetizationEligibility(channel?.id, channel?.user_id);
+  const donationEnabled = Boolean(channel?.donation_enabled);
+  const subscriptionEnabled = Boolean(channel?.subscription_enabled);
 
   const toggles = [
-    { key: 'donation', label: 'Enable Donations', hint: 'Accept tips during live streams', checked: channel?.donation_enabled },
-    { key: 'subscription', label: 'Enable Subscriptions', hint: 'Monetize your series content', checked: channel?.subscription_enabled },
+    {
+      key: 'donation' as const,
+      label: 'Enable Donations',
+      hint: 'Accept live donations after 10 qualifying Reels',
+      checked: donationEnabled,
+      eligible: eligibility.liveDonations,
+    },
+    {
+      key: 'subscription' as const,
+      label: 'Enable Subscriptions',
+      hint: 'Monetize series after Podcast channel approval',
+      checked: subscriptionEnabled,
+      eligible: eligibility.seriesSubscriptions,
+    },
   ];
 
   return (
@@ -167,31 +166,19 @@ const MonetizationCard = ({
       <SectionHeader
         icon={Sparkles}
         title="Monetization"
-        subtitle={monetizationEnabled ? 'Your channel is eligible' : 'Unlock earning features'}
+        subtitle={eligibility.seriesSubscriptions
+          ? 'Podcast channel approved'
+          : eligibility.liveDonations
+            ? 'Live donations unlocked'
+            : 'Unlock earning features'}
       />
 
-      {/* Progress bar when not yet eligible */}
-      {!monetizationEnabled && (
+      {(!eligibility.liveDonations || !eligibility.seriesSubscriptions) && (
         <div className="mb-5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3.5">
-          <div className="flex items-center justify-between text-xs font-medium mb-2">
-            <span className="text-amber-700 dark:text-amber-400">Progress to eligibility</span>
-            <span className="text-amber-700 dark:text-amber-400 tabular-nums">{progress}%</span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-amber-500/15">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-700 ease-out"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
-            <div className="flex items-center gap-1.5 text-muted-foreground">
-              <div className={cn('h-1.5 w-1.5 rounded-full', viewsOk ? 'bg-emerald-500' : 'bg-amber-500')} />
-              {totalChannelViews.toLocaleString()} / {MIN_VIEWS.toLocaleString()} views
-            </div>
-            <div className="flex items-center gap-1.5 text-muted-foreground">
-              <div className={cn('h-1.5 w-1.5 rounded-full', subsOk ? 'bg-emerald-500' : 'bg-amber-500')} />
-              {(subscriberCounts[channel.id] ?? 0).toLocaleString()} / {MIN_SUBSCRIBERS.toLocaleString()} subs
-            </div>
+          <div className="space-y-2 text-xs text-muted-foreground">
+            <p>Live donations: {eligibility.qualifyingReelCount}/10 Reels of at least 90 seconds.</p>
+            <p>Series subscriptions: unlock after your Podcast channel is approved.</p>
+            {eligibility.error && <p role="alert" className="text-destructive">{eligibility.error}</p>}
           </div>
         </div>
       )}
@@ -202,7 +189,7 @@ const MonetizationCard = ({
             key={t.key}
             className={cn(
               'flex items-center justify-between rounded-xl p-3 transition-colors',
-              monetizationEnabled ? 'hover:bg-accent/50' : 'opacity-50',
+              t.eligible ? 'hover:bg-accent/50' : 'opacity-50',
             )}
           >
             <div>
@@ -212,7 +199,7 @@ const MonetizationCard = ({
             <Switch
               checked={t.checked || false}
               onCheckedChange={(checked) => handleToggleMonetization(t.key, checked)}
-              disabled={!monetizationEnabled}
+              disabled={eligibility.loading || (!t.eligible && !t.checked)}
             />
           </div>
         ))}
@@ -605,8 +592,6 @@ const StudioSettings = () => {
             {/* ── Monetization ── */}
             <MonetizationCard
               channel={channel}
-              totalChannelViews={totalChannelViews}
-              subscriberCounts={subscriberCounts}
               handleToggleMonetization={handleToggleMonetization}
             />
           </div>

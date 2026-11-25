@@ -10,17 +10,11 @@ export const HeaderLogo = () => {
       className="flex items-center space-x-2 cursor-pointer"
       onClick={() => navigate('/')}
     >
-      {/* Desktop Logo - Increased size to h-14 */}
-      <img 
-        src="/uploads/3a993d3c-2671-42a3-9e99-587f4e3a7462.png" 
+      <img
+        src="/nexsq-logo-2026-transparent.png"
         alt="NexSq" 
-        className="hidden md:block h-14"
-      />
-      {/* Mobile Portrait Logo */}
-      <img 
-          src="/uploads/3a993d3c-2671-42a3-9e99-587f4e3a7462.png" 
-        alt="NexSq" 
-        className="block md:hidden h-8 w-20"
+        className="h-[26px] w-[115px] object-cover md:h-[45px] md:w-[205px]"
+        style={{ objectPosition: 'center 54%' }}
       />
     </div>
   );

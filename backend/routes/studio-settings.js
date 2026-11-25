@@ -12,6 +12,8 @@ const SOCIAL_HOSTS = {
   youtube: ['youtube.com', 'youtu.be'],
   x: ['x.com', 'twitter.com'],
 };
+const LIVE_DONATION_REEL_COUNT = 10;
+const LIVE_DONATION_REEL_MIN_DURATION_SECONDS = 90;
 
 function serviceHeaders(extra = {}) {
   return {
@@ -20,6 +22,15 @@ function serviceHeaders(extra = {}) {
     'Content-Type': 'application/json',
     ...extra,
   };
+}
+
+function exactCountFromResponse(response, description) {
+  const total = response.headers?.['content-range']?.split('/').pop();
+  const count = total && total !== '*' ? Number(total) : NaN;
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error(`Could not verify ${description}`);
+  }
+  return count;
 }
 
 router.put('/:channelId/settings', async (req, res) => {
@@ -113,18 +124,42 @@ router.put('/:channelId/settings', async (req, res) => {
       if (Object.hasOwn(body, key)) {
         if (typeof body[key] !== 'boolean') return res.status(400).json({ error: `Invalid ${key} value` });
         if (body[key]) {
-          const [videosResponse, subscribersResponse] = await Promise.all([
-            axios.get(`${SUPABASE_URL}/rest/v1/studio_videos?select=views&channel_id=eq.${encodeURIComponent(req.params.channelId)}`, {
-              headers: serviceHeaders(),
-            }),
-            axios.get(`${SUPABASE_URL}/rest/v1/studio_channel_subscribers?select=channel_id&channel_id=eq.${encodeURIComponent(req.params.channelId)}`, {
-              headers: serviceHeaders({ Prefer: 'count=exact', Range: '0-0' }),
-            }),
-          ]);
-          const totalViews = (videosResponse.data || []).reduce((sum, video) => sum + Number(video.views || 0), 0);
-          const subscriberTotal = Number(subscribersResponse.headers['content-range']?.split('/')[1] || 0);
-          if (totalViews < 10000 || subscriberTotal < 2000) {
-            return res.status(403).json({ error: 'Monetization requires at least 10,000 views and 2,000 subscribers' });
+          if (key === 'donation_enabled') {
+            const reelQuery = new URLSearchParams({
+              select: 'id',
+              channel_id: `eq.${req.params.channelId}`,
+              user_id: `eq.${userId}`,
+              is_reel: 'eq.true',
+              duration: `gte.${LIVE_DONATION_REEL_MIN_DURATION_SECONDS}`,
+            });
+            const reelsResponse = await axios.get(
+              `${SUPABASE_URL}/rest/v1/studio_videos?${reelQuery}`,
+              { headers: serviceHeaders({ Prefer: 'count=exact', Range: '0-0' }) }
+            );
+            const reelCount = exactCountFromResponse(reelsResponse, 'qualifying Reels');
+            if (reelCount < LIVE_DONATION_REEL_COUNT) {
+              return res.status(403).json({
+                error: `Live donations require at least ${LIVE_DONATION_REEL_COUNT} Reels of ${LIVE_DONATION_REEL_MIN_DURATION_SECONDS} seconds or longer`,
+              });
+            }
+          } else {
+            const applicationQuery = new URLSearchParams({
+              select: 'id',
+              channel_id: `eq.${req.params.channelId}`,
+              applicant_id: `eq.${userId}`,
+              status: 'eq.approved',
+              approved_show_id: 'not.is.null',
+              limit: '1',
+            });
+            const applicationResponse = await axios.get(
+              `${SUPABASE_URL}/rest/v1/studio_show_applications?${applicationQuery}`,
+              { headers: serviceHeaders() }
+            );
+            if (!applicationResponse.data?.length) {
+              return res.status(403).json({
+                error: 'Series subscriptions require an approved Podcast channel',
+              });
+            }
           }
         }
         patch[key] = body[key];
@@ -145,7 +180,10 @@ router.put('/:channelId/settings', async (req, res) => {
     return res.json({ channel: updateResponse.data?.[0] || null });
   } catch (error) {
     const status = error.response?.status || 500;
-    const message = status === 401 ? 'Your session is invalid or expired' : error.response?.data?.message || 'Could not save Studio settings';
+    const message = status === 401
+      ? 'Your session is invalid or expired'
+      : error.response?.data?.message
+        || (error.message.startsWith('Could not verify ') ? error.message : 'Could not save Studio settings');
     if (status >= 500) console.error('Studio settings error:', error.response?.data || error.message);
     return res.status(status).json({ error: message });
   }

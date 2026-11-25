@@ -367,32 +367,32 @@ const RecordReel = () => {
   }, [location.search]);
 
   // Unlock/locker UI helpers
-  const [total90s, setTotal90s] = useState<number>(0);
+  const [qualifying90sReels, setQualifying90sReels] = useState<number>(0);
   const requiredToUnlock360 = 10;
-  const percentUnlocked = Math.min(100, Math.round((total90s / requiredToUnlock360) * 100));
-  const remainingToUnlock = Math.max(0, requiredToUnlock360 - total90s);
+  const percentUnlocked = Math.min(100, Math.round((qualifying90sReels / requiredToUnlock360) * 100));
+  const remainingToUnlock = Math.max(0, requiredToUnlock360 - qualifying90sReels);
   const effectiveRecordingDuration = canEnable360 ? 360 : 90;
 
-  // Fetch user's count of 90s reels to determine unlock progress
+  // Count completed 90-second Reels toward the 360-second recording unlock.
   useEffect(() => {
     let mounted = true;
-    const fetch90sCount = async () => {
+    const fetchQualifyingReelCount = async () => {
       try {
         if (!user || !user.id) return;
-        // Count studio_videos for this user with duration <= 90 (seconds)
         const { count, error } = await supabase
           .from('studio_videos')
           .select('*', { head: true, count: 'exact' })
           .eq('user_id', user.id)
-          .lte('duration', 90);
+          .eq('is_reel', true)
+          .gte('duration', 90);
 
         if (error) {
-          console.warn('Failed to fetch 90s count:', error);
+          console.warn('Failed to fetch qualifying Reel count:', error);
           return;
         }
 
         if (mounted && typeof count === 'number') {
-          setTotal90s(count);
+          setQualifying90sReels(count);
           setCanEnable360(count >= requiredToUnlock360);
         }
       } catch (e) {
@@ -400,7 +400,7 @@ const RecordReel = () => {
       }
     };
 
-    fetch90sCount();
+    fetchQualifyingReelCount();
     return () => { mounted = false; };
   }, [user]);
 

@@ -25,6 +25,8 @@ import { useNavigate } from 'react-router-dom';
 import useMeta from '@/hooks/useMeta';
 import StudioSkeleton from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import apiUrl from '@/lib/api';
+import { getPodcastStudioEligibility } from '@/lib/podcastStudioEligibility';
 
 const categories = [
   { name: 'All', icon: Grid3x3 },
@@ -105,6 +107,12 @@ const Studio = () => {
   const [mostViewed, setMostViewed] = useState<any[]>([]);
   const [userSubscriptions, setUserSubscriptions] = useState<Set<string>>(new Set());
   const [subscriberCounts, setSubscriberCounts] = useState<Record<string, number>>({});
+  const [personalizationEligibility, setPersonalizationEligibility] = useState({
+    reelCount: 0,
+    subscriberCount: 0,
+    eligible: false,
+  });
+  const [personalizationEligibilityError, setPersonalizationEligibilityError] = useState<string | null>(null);
   const [studioSearch, setStudioSearch] = useState({
     query: '',
     type: 'all' as 'all' | 'creators' | 'channels' | 'videos',
@@ -1060,15 +1068,42 @@ const Studio = () => {
       .reduce((sum, v) => sum + (v.views || 0), 0);
   }, [videos, channel]);
 
-  const canPersonalize = useMemo(() => {
-    return (
-      channel &&
-      user &&
-      channel.user_id === user.id &&
-      totalChannelViews >= 1000 &&
-      (subscriberCounts[channel.id] ?? 0) >= 200
-    );
-  }, [channel, user, totalChannelViews, subscriberCounts]);
+  useEffect(() => {
+    let active = true;
+
+    if (!user || !channel?.id || channel.user_id !== user.id) {
+      setPersonalizationEligibility({ reelCount: 0, subscriberCount: 0, eligible: false });
+      setPersonalizationEligibilityError(null);
+      return () => { active = false; };
+    }
+
+    setPersonalizationEligibilityError(null);
+    const loadPersonalizationEligibility = async () => {
+      try {
+        const eligibility = await getPodcastStudioEligibility(user.id);
+        if (!active) return;
+        const matchesChannel = eligibility.channelId === channel.id;
+        setPersonalizationEligibility({
+          reelCount: matchesChannel ? eligibility.reelCount : 0,
+          subscriberCount: matchesChannel ? eligibility.subscriberCount : 0,
+          eligible: matchesChannel && eligibility.eligible,
+        });
+      } catch (error) {
+        console.error('Could not load Studio personalization eligibility:', error);
+        if (active) {
+          setPersonalizationEligibility({ reelCount: 0, subscriberCount: 0, eligible: false });
+          setPersonalizationEligibilityError('Could not verify personalization eligibility. Refresh and try again.');
+        }
+      }
+    };
+
+    void loadPersonalizationEligibility();
+    return () => { active = false; };
+  }, [user?.id, channel?.id, channel?.user_id]);
+
+  const canPersonalize = Boolean(
+    channel && user && channel.user_id === user.id && personalizationEligibility.eligible,
+  );
 
   const handleLike = useCallback(
     async (videoId: string) => {
@@ -1193,10 +1228,20 @@ const Studio = () => {
     async (type: 'donation' | 'subscription', enabled: boolean) => {
       if (!channel) return;
       try {
-        await supabase
-          .from('studio_channels')
-          .update({ [`${type}_enabled`]: enabled })
-          .eq('id', channel.id);
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (!session?.access_token) throw new Error('Please sign in again to update Studio settings.');
+
+        const response = await fetch(apiUrl(`/api/studio-settings/${channel.id}/settings`), {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ [`${type}_enabled`]: enabled }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not update Studio monetization settings.');
         await refetchChannel();
         toast({ description: `Monetization ${enabled ? 'enabled' : 'disabled'} for ${type}.` });
       } catch (error) {
@@ -1655,6 +1700,9 @@ const Studio = () => {
                 channel={channel}
                 totalChannelViews={totalChannelViews}
                 subscriberCounts={subscriberCounts}
+                qualifyingReelCount={personalizationEligibility.reelCount}
+                qualifyingSubscriberCount={personalizationEligibility.subscriberCount}
+                eligibilityError={personalizationEligibilityError}
                 canPersonalize={canPersonalize}
                 navigate={navigate}
                 handleCreateChannel={handleCreateChannel}
@@ -1662,8 +1710,6 @@ const Studio = () => {
               <RightInviteFriends channel={channel} />
               <MonetizationCard
                 channel={channel}
-                totalChannelViews={totalChannelViews}
-                subscriberCounts={subscriberCounts}
                 handleToggleMonetization={handleToggleMonetization}
               />
             </div>

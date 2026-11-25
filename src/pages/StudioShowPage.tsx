@@ -740,8 +740,8 @@ const StudioShowPage = () => {
     void getPodcastStudioEligibility(user.id)
       .then((eligibility) => {
         if (!current) return;
-        setPodcastEligible(eligibility.eligible);
-        if (!eligibility.eligible) setActivePageTab('show');
+        setPodcastEligible(eligibility.canUsePodcastStudio);
+        if (!eligibility.canUsePodcastStudio) setActivePageTab('show');
       })
       .catch((error: unknown) => {
         console.error('Could not check approved-show Podcast tab eligibility:', error);

@@ -2,11 +2,19 @@ import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Eye, UserCheck, Sparkles, TrendingUp, Users, Award, Settings } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import {
+  PODCAST_STUDIO_MAX_REEL_DURATION_SECONDS,
+  PODCAST_STUDIO_MIN_REELS,
+  PODCAST_STUDIO_MIN_SUBSCRIBERS,
+} from '@/lib/podcastStudioEligibility';
 
 interface Props {
   channel: any;
   totalChannelViews: number;
   subscriberCounts: Record<string, number>;
+  qualifyingReelCount: number;
+  qualifyingSubscriberCount: number;
+  eligibilityError: string | null;
   canPersonalize: boolean;
   navigate: any;
   handleCreateChannel: () => void;
@@ -16,15 +24,18 @@ const RightYourStudio: React.FC<Props> = ({
   channel, 
   totalChannelViews, 
   subscriberCounts, 
+  qualifyingReelCount,
+  qualifyingSubscriberCount,
+  eligibilityError,
   canPersonalize, 
   navigate, 
   handleCreateChannel 
 }) => {
   const { toast } = useToast();
   const subs = subscriberCounts[channel.id] ?? 0;
-  const viewsProgress = Math.min(100, (totalChannelViews / 1000) * 100);
-  const subsProgress = Math.min(100, (subs / 200) * 100);
-  const overallProgress = Math.min(100, (viewsProgress + subsProgress) / 2);
+  const reelsProgress = Math.min(100, (qualifyingReelCount / PODCAST_STUDIO_MIN_REELS) * 100);
+  const subsProgress = Math.min(100, (qualifyingSubscriberCount / PODCAST_STUDIO_MIN_SUBSCRIBERS) * 100);
+  const overallProgress = Math.min(100, (reelsProgress + subsProgress) / 2);
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-gray-200 bg-gradient-to-br from-white via-white to-purple-50 p-6 shadow-sm transition-all duration-300 hover:border-purple-300 hover:shadow-xl hover:shadow-purple-500/10 dark:border-white/10 dark:from-gray-900/90 dark:via-gray-800/90 dark:to-purple-900/50 dark:backdrop-blur-xl dark:hover:border-purple-500/30">
@@ -97,22 +108,23 @@ const RightYourStudio: React.FC<Props> = ({
                 <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Progress to Personalization</span>
                 <span className="text-xs font-bold text-purple-700 dark:text-purple-400">{Math.round(overallProgress)}%</span>
               </div>
+              {eligibilityError && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{eligibilityError}</p>}
               <div className="space-y-2">
                 <div>
                   <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
-                    <span>Views: {totalChannelViews}/1,000</span>
-                    <span>{Math.round(viewsProgress)}%</span>
+                    <span>Reels (360 sec or less): {qualifyingReelCount}/{PODCAST_STUDIO_MIN_REELS}</span>
+                    <span>{Math.round(reelsProgress)}%</span>
                   </div>
                   <div className="w-full h-1.5 bg-gray-200 dark:bg-white/10 rounded-full overflow-hidden">
                     <div 
                       className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-500"
-                      style={{ width: `${viewsProgress}%` }}
+                      style={{ width: `${reelsProgress}%` }}
                     />
                   </div>
                 </div>
                 <div>
                   <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
-                    <span>Subscribers: {subs}/200</span>
+                    <span>Subscribers: {qualifyingSubscriberCount}/{PODCAST_STUDIO_MIN_SUBSCRIBERS}</span>
                     <span>{Math.round(subsProgress)}%</span>
                   </div>
                   <div className="w-full h-1.5 bg-gray-200 dark:bg-white/10 rounded-full overflow-hidden">
@@ -125,7 +137,9 @@ const RightYourStudio: React.FC<Props> = ({
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
                 <Award className="w-3 h-3 text-purple-400 flex-shrink-0" />
-                <span className="leading-tight">Unlock custom link at 1,000 views & 200 subs</span>
+                <span className="leading-tight">
+                  Unlock custom link at {PODCAST_STUDIO_MIN_REELS} Reels of {PODCAST_STUDIO_MAX_REEL_DURATION_SECONDS} seconds or less and {PODCAST_STUDIO_MIN_SUBSCRIBERS} subscribers
+                </span>
               </div>
             </div>
           )}

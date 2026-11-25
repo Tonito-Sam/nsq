@@ -196,7 +196,10 @@ const loadScript = (src: string): Promise<void> => {
   });
 };
 
-const isWalletTopup = (reference: string) => reference.startsWith('TOPUP-') || reference.startsWith('wallet_');
+const isWalletTopup = (reference: string, metadata?: Record<string, unknown>) =>
+  metadata?.wallet_topup === true
+  || reference.startsWith('TOPUP-')
+  || reference.startsWith('wallet_');
 const walletTopupResultUrl = (status: 'success' | 'failed' | 'cancelled', reference: string) =>
   `/wallet-topup-result?status=${status}&ref=${encodeURIComponent(reference)}`;
 
@@ -237,7 +240,7 @@ const initiatePaystackPayment = async (payment: any) => {
         try {
           console.log('Paystack payment successful:', response);
           const verification = await verifyPayment(response.reference, 'paystack', payment.amount, payment.currency, payment);
-          if (isWalletTopup(response.reference)) {
+          if (isWalletTopup(response.reference, payment.metadata)) {
             // WALLET TOP-UP FLOW
             if (verification.status === 'success') {
               window.location.href = walletTopupResultUrl('success', response.reference);
@@ -261,7 +264,7 @@ const initiatePaystackPayment = async (payment: any) => {
           }
         } catch (err) {
           console.error('Error in Paystack callback:', err);
-          if (isWalletTopup(response.reference)) {
+          if (isWalletTopup(response.reference, payment.metadata)) {
             window.location.href = walletTopupResultUrl('failed', response.reference);
             return;
           }
@@ -273,7 +276,7 @@ const initiatePaystackPayment = async (payment: any) => {
     onClose: () => {
       if (callbackStarted) return;
       console.log('Paystack payment cancelled');
-      if (isWalletTopup(payment.reference)) {
+      if (isWalletTopup(payment.reference, payment.metadata)) {
         window.location.href = walletTopupResultUrl('cancelled', payment.reference);
         return;
       }
@@ -314,7 +317,7 @@ const initiateFlutterwavePayment = async (payment: any) => {
     },
     customizations: {
       title: '1Voice Store',
-      description: isWalletTopup(payment.reference) ? 'Wallet Top-up' : 'Payment for your order',
+      description: isWalletTopup(payment.reference, payment.metadata) ? 'Wallet Top-up' : 'Payment for your order',
       logo: 'https://1voice.com/logo.png'
     },
     meta: payment.metadata,
@@ -324,7 +327,7 @@ const initiateFlutterwavePayment = async (payment: any) => {
         try {
           console.log('Flutterwave payment successful:', response);
           const verification = await verifyPayment(response.transaction_id, 'flutterwave', payment.amount, payment.currency, payment);
-          if (isWalletTopup(payment.reference)) {
+          if (isWalletTopup(payment.reference, payment.metadata)) {
             // WALLET TOP-UP FLOW
             if (verification.status === 'success') {
               window.location.href = walletTopupResultUrl('success', payment.reference);
@@ -348,7 +351,7 @@ const initiateFlutterwavePayment = async (payment: any) => {
           }
         } catch (err) {
           console.error('Error in Flutterwave callback:', err);
-          if (isWalletTopup(payment.reference)) {
+          if (isWalletTopup(payment.reference, payment.metadata)) {
             window.location.href = walletTopupResultUrl('failed', payment.reference);
             return;
           }
@@ -360,7 +363,7 @@ const initiateFlutterwavePayment = async (payment: any) => {
     onClose: () => {
       if (callbackStarted) return;
       console.log('Flutterwave payment cancelled');
-      if (isWalletTopup(payment.reference)) {
+      if (isWalletTopup(payment.reference, payment.metadata)) {
         window.location.href = walletTopupResultUrl('cancelled', payment.reference);
         return;
       }

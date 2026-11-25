@@ -71,7 +71,7 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
       if (!user) return;
       try {
         const eligibility = await getPodcastStudioEligibility(user.id);
-        if (!cancelled) setPodcastEligible(eligibility.eligible);
+        if (!cancelled) setPodcastEligible(eligibility.canUsePodcastStudio);
       } catch (error) {
         console.error('Could not check Podcast Studio eligibility:', error);
       }

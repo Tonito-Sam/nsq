@@ -1,7 +1,6 @@
 import React from 'react';
 import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { MessageCircle, Phone, Video } from 'lucide-react';
+import { MessageCircle } from 'lucide-react';
 
 export const MessagesSidebar = ({ conversations, selectedConversation, setSelectedConversation }: any) => {
   return (
@@ -33,14 +32,6 @@ export const MessagesSidebar = ({ conversations, selectedConversation, setSelect
         ) : (
           <div className="p-4 text-gray-500 text-center">No conversations yet.</div>
         )}
-      </div>
-      <div className="p-4 border-t border-gray-200 dark:border-gray-700 flex gap-2">
-        <Button variant="outline" className="flex-1 flex items-center gap-2">
-          <Phone className="h-4 w-4" /> Call
-        </Button>
-        <Button variant="outline" className="flex-1 flex items-center gap-2">
-          <Video className="h-4 w-4" /> Video
-        </Button>
       </div>
     </Card>
   );

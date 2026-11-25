@@ -80,9 +80,9 @@ export const Header = () => {
   return (
     <>
       <header className="sticky top-0 z-50 w-full border-b bg-background shadow-sm">
-        <div className="container flex h-16 items-center justify-between px-4">
+        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4">
           {/* Desktop: Logo first, Mobile: Logo first, then hamburger */}
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-4 lg:-ml-4 lg:w-72 lg:shrink-0 lg:justify-center">
             <HeaderLogo />
           </div>
 

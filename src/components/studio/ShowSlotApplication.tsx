@@ -48,6 +48,8 @@ export const ShowSlotApplication = () => {
   const [channelId, setChannelId] = useState<string | null>(null);
   const [videoCount, setVideoCount] = useState(0);
   const [subscriberCount, setSubscriberCount] = useState(0);
+  const [canApplyForPodcastStudio, setCanApplyForPodcastStudio] = useState(false);
+  const [eligibilityException, setEligibilityException] = useState(false);
   const [application, setApplication] = useState<ShowApplication | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -72,11 +74,12 @@ export const ShowSlotApplication = () => {
       setLoading(true);
       try {
         const eligibility = await getPodcastStudioEligibility(user.id);
-        const { data: applications, error: applicationsError } = eligibility.channelId
+        const applicationChannelId = eligibility.approvedChannelId || eligibility.channelId;
+        const { data: applications, error: applicationsError } = applicationChannelId
           ? await supabase
             .from('studio_show_applications' as any)
             .select('id, show_title, category, status, reviewer_notes, approved_show_id')
-            .eq('channel_id', eligibility.channelId)
+            .eq('channel_id', applicationChannelId)
             .in('status', ['pending', 'approved'])
             .order('created_at', { ascending: false })
             .limit(1)
@@ -85,9 +88,11 @@ export const ShowSlotApplication = () => {
         if (applicationsError) throw applicationsError;
 
         if (current) {
-          setChannelId(eligibility.channelId);
+          setChannelId(applicationChannelId);
           setVideoCount(eligibility.reelCount);
           setSubscriberCount(eligibility.subscriberCount);
+          setCanApplyForPodcastStudio(eligibility.canApplyForPodcastStudio);
+          setEligibilityException(eligibility.eligibilityException);
           setApplication((applications?.[0] as ShowApplication | undefined) || null);
         }
       } catch (error) {
@@ -102,8 +107,7 @@ export const ShowSlotApplication = () => {
     return () => { current = false; };
   }, [user]);
 
-  const eligible = videoCount >= PODCAST_STUDIO_MIN_REELS
-    && subscriberCount >= PODCAST_STUDIO_MIN_SUBSCRIBERS;
+  const eligible = canApplyForPodcastStudio;
 
   const toggleDay = (day: string) => {
     setPreferredDays((selected) => selected.includes(day)
@@ -210,7 +214,9 @@ export const ShowSlotApplication = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-            Eligibility: {videoCount} / {PODCAST_STUDIO_MIN_REELS} Studio reels and {subscriberCount} / {PODCAST_STUDIO_MIN_SUBSCRIBERS} channel subscribers.
+            {eligibilityException
+              ? 'Eligibility exception: this account may apply regardless of Reel and subscriber counts.'
+              : `Eligibility: ${videoCount} / ${PODCAST_STUDIO_MIN_REELS} Studio Reels (360 seconds or less) and ${subscriberCount} / ${PODCAST_STUDIO_MIN_SUBSCRIBERS} channel subscribers.`}
           </div>
           <form id="show-slot-application" onSubmit={submitApplication} className="space-y-4">
             <div className="space-y-1.5">

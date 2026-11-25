@@ -875,7 +875,7 @@ export default function PodcastTeleprompter() {
               .maybeSingle(),
           ]);
           if (draftResult.error) throw draftResult.error;
-          if (!eligibility.eligible || !draftResult.data || !['draft', 'changes_requested'].includes(draftResult.data.status)) {
+          if (!eligibility.canUsePodcastStudio || !draftResult.data || !['draft', 'changes_requested'].includes(draftResult.data.status)) {
             throw new Error('This creator podcast draft is no longer available for recording.');
           }
         } else {
