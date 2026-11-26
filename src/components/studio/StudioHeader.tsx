@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, ChevronDown, X, Video, Grid3x3, Flame, Upload, Tv, Mic2 } from 'lucide-react';
+import { HeaderLogo } from '@/components/header/HeaderLogo';
 import { ProfileDropdown } from '@/components/header/ProfileDropdown';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -259,26 +260,14 @@ const StudioHeader: React.FC<StudioHeaderProps> = ({
       >
         <div className="max-w-7xl mx-auto">
           {/* First Row: Logo + Brand + Dropdown */}
-          <div className="flex items-center justify-between mb-3">
-            {/* Mobile icon; full brand logo on tablets and desktop */}
-            <button 
-              onClick={() => navigate('/')} 
-              className="flex items-center gap-2 text-foreground hover:opacity-80 transition-opacity z-[110] relative"
-              aria-label="Home"
-            >
-              <img src="/favicon.ico" alt="NexSq" className="h-7 w-7 rounded-md md:hidden" />
-              <img
-                src="/uploads/3a993d3c-2671-42a3-9e99-587f4e3a7462.png"
-                alt="NexSq"
-                className="hidden h-8 w-auto max-w-[150px] object-contain md:block"
-              />
-            </button>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <HeaderLogo />
 
             {/* Middle: Brand */}
             <div className="flex items-center gap-2 z-[110] relative">
               <Video className="h-4 w-4 text-red-500" />
               <span className="font-semibold text-sm text-gray-900 dark:text-white">Shorts On</span>
-              <span className="text-xs px-2 py-0.5 bg-red-500 text-white rounded-full font-medium">
+              <span className="hidden sm:inline-flex text-xs px-2 py-0.5 bg-red-500 text-white rounded-full font-medium">
                 One-Studio
               </span>
             </div>

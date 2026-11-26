@@ -67,6 +67,7 @@ interface LiveChatProps {
   showId?: string;
   showTitle?: string;
   showDescription?: string;
+  compact?: boolean;
 }
 
 // ─── Reusable stat chip ───────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ export const LiveChat: React.FC<LiveChatProps> = ({
   showId: showIdOverride,
   showTitle,
   showDescription,
+  compact = false,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -1036,7 +1038,12 @@ export const LiveChat: React.FC<LiveChatProps> = ({
     <>
       <Card
         data-livechat
-        className="relative flex h-[85vh] max-h-[900px] min-h-[360px] flex-col rounded-2xl border-border/60 bg-card shadow-xl overflow-hidden"
+        className={cn(
+          'relative flex flex-col rounded-2xl border-border/60 bg-card shadow-xl overflow-hidden',
+          compact
+            ? 'h-full min-h-0 max-h-full'
+            : 'h-[85vh] max-h-[900px] min-h-[360px]',
+        )}
       >
         {/* ── Header ── */}
         <div className="relative shrink-0 overflow-hidden border-b border-border/50 bg-gradient-to-br from-purple-500/8 via-fuchsia-500/5 to-pink-500/8 px-4 py-3.5">

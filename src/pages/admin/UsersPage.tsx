@@ -80,8 +80,10 @@ const UsersPage = () => {
   const [activeTab, setActiveTab] = useState<'all' | 'users' | 'admins' | 'suspended'>('all');
 
   // Backend URL for email admin operations
-  // Default to the local `email-backend` service (port 3001) used in development
-  const EMAIL_BACKEND_URL = (import.meta.env.VITE_EMAIL_BACKEND_URL as string) || 'http://localhost:3001';
+  const configuredEmailBackendUrl = (import.meta.env.VITE_EMAIL_BACKEND_URL as string | undefined)?.trim();
+  const EMAIL_BACKEND_URL = (configuredEmailBackendUrl || (
+    import.meta.env.DEV ? 'http://localhost:4000' : 'https://nsq-email-backend.onrender.com'
+  )).replace(/\/+$/, '');
   const [scrollPosition, setScrollPosition] = useState(0);
   const [isTableExpanded, setIsTableExpanded] = useState(false);
 
@@ -144,6 +146,19 @@ const UsersPage = () => {
   // Format currency with USD as default
   const formatCurrency = (currency: string | null | undefined) => {
     return currency || 'USD';
+  };
+
+  const getEmailAdminHeaders = async () => {
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    if (!session?.access_token) {
+      throw new Error('Your admin session has expired. Please sign in again.');
+    }
+
+    return {
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+    };
   };
 
   // Function to fetch email verification status using PostgreSQL function
@@ -288,54 +303,54 @@ const UsersPage = () => {
 
   // Resend verification email
   const resendVerification = async (email: string, userId?: string) => {
-    if (!email) return;
+    if (!email) {
+      toast.error('This user does not have an email address');
+      return;
+    }
     setPerformingAction(true);
     try {
       const res = await fetch(`${EMAIL_BACKEND_URL}/resend-verification`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getEmailAdminHeaders(),
         body: JSON.stringify({ 
           email,
           user_id: userId,
-          admin_request: true 
         })
       });
       
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
       
-      if (!res.ok) {
+      if (!res.ok || json?.success !== true) {
         console.error('Resend verification failed', json);
-        toast.error(json?.error || 'Failed to resend verification');
-      } else {
-        toast.success(`Verification email resent to ${email}`);
-        // Refresh verification status for this user
-        if (userId) {
-          const emailStatus = await fetchEmailVerificationStatus([userId]);
-          if (emailStatus[userId]) {
-            // Update the user in local state
-            setUsers(prev => prev.map(user => 
-              user.id === userId 
-                ? { ...user, 
-                    verified: emailStatus[userId].is_verified,
-                    email_confirmed_at: emailStatus[userId].email_confirmed_at 
-                  } 
-                : user
-            ));
-            
-            // Update selected user if open
-            if (selectedUser?.id === userId) {
-              setSelectedUser(prev => prev ? { 
-                ...prev, 
-                verified: emailStatus[userId].is_verified,
-                email_confirmed_at: emailStatus[userId].email_confirmed_at 
-              } : null);
-            }
+        throw new Error(json?.error || `Could not resend verification email (HTTP ${res.status})`);
+      }
+
+      toast.success(`Verification email resent to ${email}`);
+      if (userId) {
+        const emailStatus = await fetchEmailVerificationStatus([userId]);
+        if (emailStatus[userId]) {
+          setUsers(prev => prev.map(user => (
+            user.id === userId
+              ? {
+                  ...user,
+                  verified: emailStatus[userId].is_verified,
+                  email_confirmed_at: emailStatus[userId].email_confirmed_at,
+                }
+              : user
+          )));
+
+          if (selectedUser?.id === userId) {
+            setSelectedUser(prev => prev ? {
+              ...prev,
+              verified: emailStatus[userId].is_verified,
+              email_confirmed_at: emailStatus[userId].email_confirmed_at,
+            } : null);
           }
         }
       }
     } catch (err) {
       console.error('Resend verification error', err);
-      toast.error('Failed to resend verification email');
+      toast.error(err instanceof Error ? err.message : 'Failed to resend verification email');
     } finally {
       setPerformingAction(false);
     }
@@ -354,16 +369,29 @@ const UsersPage = () => {
     const batchDelayMs = 1000; // delay between batches
     let successCount = 0;
     let failCount = 0;
+    let adminHeaders: Awaited<ReturnType<typeof getEmailAdminHeaders>>;
+    try {
+      adminHeaders = await getEmailAdminHeaders();
+    } catch (err) {
+      setPerformingAction(false);
+      toast.error(err instanceof Error ? err.message : 'Please sign in again as an administrator');
+      return;
+    }
 
     // Prefer server-side bulk endpoint to avoid client-side rate limits
     try {
       const emails = unverified.map(u => u.email);
       const res = await fetch(`${EMAIL_BACKEND_URL}/resend-verification-bulk`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminHeaders,
         body: JSON.stringify({ emails })
       });
       const json = await res.json().catch(() => ({}));
+      if (!res.ok && (res.status === 401 || res.status === 403)) {
+        setPerformingAction(false);
+        toast.error(json?.error || 'You are not authorized to resend verification emails');
+        return;
+      }
       if (res.ok && json.success) {
         successCount = json.successCount || (json.results || []).filter((r: any) => r.success).length;
         failCount = json.failCount || (json.results || []).filter((r: any) => !r.success).length;
@@ -376,11 +404,11 @@ const UsersPage = () => {
             try {
               const r = await fetch(`${EMAIL_BACKEND_URL}/resend-verification`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email: u.email, user_id: u.id, admin_request: true })
+                headers: adminHeaders,
+                body: JSON.stringify({ email: u.email, user_id: u.id })
               });
               const j = await r.json().catch(() => ({}));
-              if (r.ok && j?.success !== false) successCount++;
+              if (r.ok && j?.success === true) successCount++;
               else { failCount++; console.warn('Resend failed for', u.email, j); }
             } catch (err) { failCount++; console.error('Resend error for', u.email, err); }
           }));
@@ -395,11 +423,11 @@ const UsersPage = () => {
           try {
             const r = await fetch(`${EMAIL_BACKEND_URL}/resend-verification`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: u.email, user_id: u.id, admin_request: true })
+              headers: adminHeaders,
+              body: JSON.stringify({ email: u.email, user_id: u.id })
             });
             const j = await r.json().catch(() => ({}));
-            if (r.ok && j?.success !== false) successCount++;
+            if (r.ok && j?.success === true) successCount++;
             else { failCount++; console.warn('Resend failed for', u.email, j); }
           } catch (err2) { failCount++; console.error('Resend error for', u.email, err2); }
         }));
@@ -408,7 +436,8 @@ const UsersPage = () => {
     }
 
     setPerformingAction(false);
-    toast.success(`Resent to ${successCount} users (${failCount} failed)`);
+    if (failCount > 0) toast.error(`Resent to ${successCount} users; ${failCount} failed`);
+    else toast.success(`Resent verification emails to ${successCount} users`);
 
     // Refresh verification statuses for all previously unverified users
     try {

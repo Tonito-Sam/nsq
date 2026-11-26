@@ -6,6 +6,21 @@ export type PodcastRecordingStoragePaths = {
 };
 
 export const PODCAST_RECORDING_STORAGE_BUCKET = 'creator-podcast-drafts';
+export const PRIVATE_PODCAST_VIDEO_PREFIX = 'podcast-private://';
+
+export async function resolvePodcastEpisodeVideoUrl(videoUrl: string): Promise<string> {
+  if (!videoUrl.startsWith(PRIVATE_PODCAST_VIDEO_PREFIX)) return videoUrl;
+
+  const assetPath = videoUrl.slice(PRIVATE_PODCAST_VIDEO_PREFIX.length);
+  if (!assetPath) throw new Error('The private podcast recording path is missing.');
+
+  const { data, error } = await supabase.storage
+    .from(PODCAST_RECORDING_STORAGE_BUCKET)
+    .createSignedUrl(assetPath, 60 * 60);
+  if (error) throw error;
+  if (!data?.signedUrl) throw new Error('Could not create a playback URL for this podcast episode.');
+  return data.signedUrl;
+}
 
 export function getPodcastRecordingStoragePaths(
   userId: string,

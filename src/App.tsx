@@ -233,6 +233,7 @@ const App = () => {
                     {/* Public Routes */}
                     <Route path="/auth" element={<Auth />} />
                     <Route path="/forgot-password" element={<ForgotPassword />} />
+                    <Route path="/reset-password" element={<ResetPassword />} />
                     <Route path="/reset-password/:token" element={<ResetPassword />} />
                     <Route path="/email-confirmed" element={<EmailConfirmed />} />
                     <Route path="/about" element={<About />} />

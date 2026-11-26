@@ -104,6 +104,37 @@ if (process.env.SUPABASE_URL && serviceRoleKey) {
   console.warn('SUPABASE_URL or service role key not set; /resend-verification endpoint will be unavailable');
 }
 
+async function requireAdmin(req, res, next) {
+  const accessToken = req.get('authorization')?.replace(/^Bearer\s+/i, '');
+  if (!accessToken) return res.status(401).json({ success: false, error: 'Sign in as an administrator to continue' });
+  if (!supabaseAdmin) return res.status(503).json({ success: false, error: 'Supabase admin client is not configured' });
+
+  try {
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(accessToken);
+    if (authError || !user) {
+      return res.status(401).json({ success: false, error: 'Your session is invalid or expired' });
+    }
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('users')
+      .select('privilege')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (profileError) {
+      console.error('Could not verify admin privilege for email resend:', profileError.message);
+      return res.status(503).json({ success: false, error: 'Could not verify administrator access' });
+    }
+    if (profile?.privilege !== 'admin' && profile?.privilege !== 'superadmin') {
+      return res.status(403).json({ success: false, error: 'Administrator access is required' });
+    }
+
+    return next();
+  } catch (error) {
+    console.error('Email resend authorization failed:', error);
+    return res.status(503).json({ success: false, error: 'Could not verify administrator access' });
+  }
+}
+
 // Send OTP email
 app.post('/send-otp', async (req, res) => {
   const { email, otp } = req.body;
@@ -281,7 +312,7 @@ app.post('/send-bulk-multipart', upload.array('attachments'), async (req, res) =
 });
 
 // Resend verification email for a single user (admin only - uses service role key)
-app.post('/resend-verification', async (req, res) => {
+app.post('/resend-verification', requireAdmin, async (req, res) => {
   const email = req.body?.email;
   if (!email) return res.status(400).json({ success: false, error: 'email is required' });
   if (!supabaseAdmin) return res.status(500).json({ success: false, error: 'supabase admin client not configured' });
@@ -303,7 +334,7 @@ app.post('/resend-verification', async (req, res) => {
 });
 
 // Resend verification emails in bulk (server-side batching to avoid client rate limits)
-app.post('/resend-verification-bulk', async (req, res) => {
+app.post('/resend-verification-bulk', requireAdmin, async (req, res) => {
   const emails = req.body?.emails || req.body?.users;
   if (!emails || !Array.isArray(emails) || emails.length === 0) return res.status(400).json({ success: false, error: 'emails array is required' });
   if (!supabaseAdmin) return res.status(500).json({ success: false, error: 'supabase admin client not configured' });

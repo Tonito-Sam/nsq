@@ -189,8 +189,12 @@ const Auth = () => {
 
     setLoading(true);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
+      const normalizedEmail = email.trim();
+      const resetUrl = new URL('/reset-password', window.location.origin);
+      resetUrl.searchParams.set('email', normalizedEmail);
+
+      const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+        redirectTo: resetUrl.toString(),
       });
 
       if (error) throw error;
@@ -199,7 +203,7 @@ const Auth = () => {
         title: "Password reset email sent!",
         description: "Check your email for instructions to reset your password.",
       });
-      setShowForgotPassword(false);
+      navigate(`${resetUrl.pathname}${resetUrl.search}`, { replace: true });
     } catch (error: any) {
       toast({
         title: "Error",

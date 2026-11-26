@@ -8,6 +8,7 @@ import { PodcastEpisodeCard } from '@/components/podcast/PodcastEpisodeCard';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import { resolvePodcastEpisodeVideoUrl } from '@/utils/podcastRecordingStorage';
 
 type PodcastChannel = {
   id: string;
@@ -34,18 +35,6 @@ type PodcastEpisode = {
   shares: number | null;
   likes: number | null;
   is_active: boolean;
-};
-
-const PRIVATE_VIDEO_PREFIX = 'podcast-private://';
-
-const resolveEpisodeUrl = async (videoUrl: string) => {
-  if (!videoUrl.startsWith(PRIVATE_VIDEO_PREFIX)) return videoUrl;
-  const assetPath = videoUrl.slice(PRIVATE_VIDEO_PREFIX.length);
-  const { data, error } = await supabase.storage
-    .from('creator-podcast-drafts')
-    .createSignedUrl(assetPath, 60 * 60);
-  if (error) throw error;
-  return data.signedUrl;
 };
 
 export default function PodcastChannelPage() {
@@ -151,7 +140,7 @@ export default function PodcastChannelPage() {
       if (episodesError) throw episodesError;
       setEpisodes(await Promise.all((episodeRows || []).map(async (episode) => ({
         ...episode,
-        video_url: await resolveEpisodeUrl(episode.video_url),
+        video_url: await resolvePodcastEpisodeVideoUrl(episode.video_url),
       }))));
     } catch (loadError) {
       console.error('Could not load Podcast channel:', loadError);

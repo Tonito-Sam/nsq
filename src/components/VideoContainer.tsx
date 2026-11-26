@@ -30,6 +30,10 @@ import { cn } from '@/lib/utils';
 import apiUrl from '@/lib/api';
 import { getVodEpisodeQueue } from '@/utils/vodEpisodeQueue';
 import { getNextLinearTvPlaylistIndex } from '@/utils/linearTvSchedule';
+import {
+  PRIVATE_PODCAST_VIDEO_PREFIX,
+  resolvePodcastEpisodeVideoUrl,
+} from '@/utils/podcastRecordingStorage';
 
 interface StudioShow {
   id: string;
@@ -934,11 +938,26 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
         : selectedEpisode
           ? [selectedEpisode]
           : [];
-      let queue = getVodEpisodeQueue(
+      const episodesToPlay = getVodEpisodeQueue(
         fetchedEpisodes,
         startAtBeginning ? undefined : selectedEpisode?.id,
       );
-      if (!queue.length && selectedEpisode) queue = [selectedEpisode];
+      let queue = await Promise.all(
+        episodesToPlay.map(async (episode) => ({
+          ...episode,
+          video_url: episode.video_url
+            ? await resolvePodcastEpisodeVideoUrl(episode.video_url)
+            : episode.video_url,
+        })),
+      );
+      if (!queue.length && selectedEpisode) {
+        queue = [{
+          ...selectedEpisode,
+          video_url: selectedEpisode.video_url
+            ? await resolvePodcastEpisodeVideoUrl(selectedEpisode.video_url)
+            : selectedEpisode.video_url,
+        }];
+      }
       if (!queue.length) throw new Error('No aired episodes are available for this show.');
       if (modalQueueRequestRef.current !== requestId) return;
       const selectedIndex = selectedEpisode
@@ -958,6 +977,17 @@ export const VideoContainer: React.FC<VideoContainerProps> = ({
     } catch (error) {
       if (modalQueueRequestRef.current !== requestId) return;
       console.error('[VideoContainer] Could not load the Catch Up episode queue:', error);
+      if (selectedEpisode?.video_url?.startsWith(PRIVATE_PODCAST_VIDEO_PREFIX)) {
+        setModalQueue([]);
+        setModalQueueIndex(0);
+        setPlayingEpisode(null);
+        setModalQueueError(
+          `Could not authorize this private podcast episode for playback. ${
+            error instanceof Error ? error.message : ''
+          }`.trim(),
+        );
+        return;
+      }
       if (!selectedEpisode) {
         setModalQueue([]);
         setModalQueueIndex(0);

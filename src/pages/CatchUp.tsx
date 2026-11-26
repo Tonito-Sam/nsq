@@ -1,22 +1,73 @@
-import { useCallback, useState } from 'react';
-import { ArrowLeft, Clock3, Play, Tv } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, Loader2, Tv } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Layout } from '@/components/Layout';
 import VODLibrary, { VODEpisode } from '@/components/VODLibrary';
 import { LiveChat } from '@/components/LiveChat';
-import { getWatchHistory, recordWatchHistory, WatchHistoryItem } from '@/lib/watchHistory';
+import { recordWatchHistory, WatchHistoryItem } from '@/lib/watchHistory';
 import { getVodEpisodeArtwork } from '@/utils/vodEpisodeArtwork';
+import { resolvePodcastEpisodeVideoUrl } from '@/utils/podcastRecordingStorage';
 
-type CatchUpMedia = {
-  id: string;
-  show_id?: string;
-  show_title?: string;
-  title: string;
-  description?: string;
-  video_url?: string;
-  thumbnail_url?: string;
-  duration?: number;
-  category?: string;
+const CATCH_UP_RESUME_KEY = 'nexsq-catch-up-resume';
+
+type CatchUpResumeState = {
+  episode: VODEpisode;
+  currentTime: number;
+};
+
+const isVODEpisode = (value: unknown): value is VODEpisode => {
+  if (!value || typeof value !== 'object') return false;
+  const episode = value as Record<string, unknown>;
+  return (
+    typeof episode.id === 'string' &&
+    typeof episode.title === 'string' &&
+    typeof episode.created_at === 'string' &&
+    typeof episode.video_url === 'string'
+  );
+};
+
+const readCatchUpResume = (): CatchUpResumeState | null => {
+  try {
+    const stored = sessionStorage.getItem(CATCH_UP_RESUME_KEY);
+    if (!stored) return null;
+
+    const parsed: unknown = JSON.parse(stored);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const state = parsed as { episode?: unknown; currentTime?: unknown };
+    if (
+      !isVODEpisode(state.episode) ||
+      typeof state.currentTime !== 'number' ||
+      !Number.isFinite(state.currentTime) ||
+      state.currentTime < 0
+    ) {
+      return null;
+    }
+
+    return { episode: state.episode, currentTime: state.currentTime };
+  } catch (error) {
+    console.warn('Could not restore Catch Up playback position:', error);
+    return null;
+  }
+};
+
+const saveCatchUpResume = (episode: VODEpisode, currentTime: number) => {
+  if (!Number.isFinite(currentTime) || currentTime < 0) return;
+  try {
+    sessionStorage.setItem(
+      CATCH_UP_RESUME_KEY,
+      JSON.stringify({ episode, currentTime }),
+    );
+  } catch (error) {
+    console.warn('Could not save Catch Up playback position:', error);
+  }
+};
+
+const clearCatchUpResume = () => {
+  try {
+    sessionStorage.removeItem(CATCH_UP_RESUME_KEY);
+  } catch (error) {
+    console.warn('Could not clear Catch Up playback position:', error);
+  }
 };
 
 const getYouTubeId = (url: string) =>
@@ -25,65 +76,162 @@ const getYouTubeId = (url: string) =>
 const getVimeoId = (url: string) =>
   url.match(/vimeo\.com\/(?:video\/)?(\d+)/)?.[1];
 
-const formatDuration = (duration?: number) => {
-  if (!duration) return '';
-  const minutes = Math.floor(duration / 60);
-  const seconds = duration % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+const CatchUpPlayer = ({
+  episode,
+  resumeAt,
+  onEpisodePlay,
+  onProgress,
+  onEnded,
+}: {
+  episode: VODEpisode;
+  resumeAt: number;
+  onEpisodePlay: (episode: VODEpisode) => void;
+  onProgress: (episode: VODEpisode, currentTime: number) => void;
+  onEnded: () => void;
+}) => {
+  const [videoUrl, setVideoUrl] = useState('');
+  const [videoError, setVideoError] = useState('');
+  const lastSavedSecondRef = useRef(Math.floor(resumeAt));
+  const videoReadyRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setVideoUrl('');
+    setVideoError('');
+
+    if (!episode.video_url) return;
+
+    resolvePodcastEpisodeVideoUrl(episode.video_url)
+      .then((resolvedUrl) => {
+        if (!cancelled) setVideoUrl(resolvedUrl);
+      })
+      .catch((error) => {
+        console.error('Could not load Catch Up episode video:', error);
+        if (!cancelled) {
+          setVideoError(
+            error instanceof Error ? error.message : 'Could not load this video.',
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [episode.id, episode.video_url]);
+
+  const youtubeId = videoUrl ? getYouTubeId(videoUrl) : undefined;
+  const vimeoId = videoUrl ? getVimeoId(videoUrl) : undefined;
+  const saveProgress = (currentTime: number, force = false) => {
+    const currentSecond = Math.floor(currentTime);
+    if (!force && (!videoReadyRef.current || currentSecond - lastSavedSecondRef.current < 5)) {
+      return;
+    }
+    lastSavedSecondRef.current = currentSecond;
+    onProgress(episode, currentTime);
+  };
+
+  return (
+    <div className="relative aspect-video w-full overflow-hidden bg-black">
+      {episode.video_url && !videoUrl && !videoError ? (
+        <div className="flex h-full items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-white/70" />
+        </div>
+      ) : videoError ? (
+        <div className="flex h-full items-center justify-center px-6 text-center text-sm text-red-200">
+          {videoError}
+        </div>
+      ) : videoUrl && youtubeId ? (
+        <iframe
+          key={episode.id}
+          className="h-full w-full"
+          src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=1&rel=0${
+            resumeAt > 0 ? `&start=${Math.floor(resumeAt)}` : ''
+          }`}
+          title={episode.title}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
+        />
+      ) : videoUrl && vimeoId ? (
+        <iframe
+          key={episode.id}
+          className="h-full w-full"
+          src={`https://player.vimeo.com/video/${vimeoId}?autoplay=1${
+            resumeAt > 0 ? `#t=${Math.floor(resumeAt)}s` : ''
+          }`}
+          title={episode.title}
+          allow="autoplay; fullscreen; picture-in-picture"
+          allowFullScreen
+        />
+      ) : videoUrl ? (
+        <video
+          key={episode.id}
+          className="h-full w-full object-contain"
+          src={videoUrl}
+          poster={getVodEpisodeArtwork(episode) || undefined}
+          controls
+          autoPlay
+          playsInline
+          preload="metadata"
+          onLoadedMetadata={(event) => {
+            const video = event.currentTarget;
+            if (
+              resumeAt > 0 &&
+              Number.isFinite(video.duration) &&
+              resumeAt < video.duration
+            ) {
+              video.currentTime = resumeAt;
+            }
+            videoReadyRef.current = true;
+            saveProgress(video.currentTime, true);
+          }}
+          onPlay={(event) => {
+            onEpisodePlay(episode);
+            saveProgress(event.currentTarget.currentTime, true);
+          }}
+          onTimeUpdate={(event) => saveProgress(event.currentTarget.currentTime)}
+          onSeeked={(event) => saveProgress(event.currentTarget.currentTime, true)}
+          onPause={(event) => {
+            const video = event.currentTarget;
+            if (video.ended) onEnded();
+            else saveProgress(video.currentTime, true);
+          }}
+          onEnded={onEnded}
+          onError={() => setVideoError('This video could not be played.')}
+        />
+      ) : !episode.video_url ? (
+        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
+          <Tv className="h-10 w-10 text-muted-foreground/60" />
+          <p>No video source is available for this episode.</p>
+        </div>
+      ) : (
+        null
+      )}
+    </div>
+  );
 };
 
 const CatchUp = () => {
-  const [history, setHistory] = useState<WatchHistoryItem[]>(getWatchHistory);
-  const [selectedMedia, setSelectedMedia] = useState<CatchUpMedia | null>(history[0] || null);
+  const [resumeState] = useState(readCatchUpResume);
 
-  const selectEpisode = (episode: VODEpisode) => {
-    setSelectedMedia({
+  const recordEpisodePlayback = (episode: VODEpisode) => {
+    if (!episode.video_url) return;
+
+    const item: Omit<WatchHistoryItem, 'lastPlayedAt'> = {
       id: episode.id,
       show_id: episode.show_id,
-      show_title: episode.show_title,
       title: episode.title,
       description: episode.description,
       video_url: episode.video_url,
       thumbnail_url: getVodEpisodeArtwork(episode) || undefined,
       duration: episode.duration,
       category: episode.show_category || episode.category,
-    });
-  };
-
-  const selectInitialEpisode = useCallback((episode: VODEpisode) => {
-    setSelectedMedia((current) => current || {
-      id: episode.id,
-      show_id: episode.show_id,
-      show_title: episode.show_title,
-      title: episode.title,
-      description: episode.description,
-      video_url: episode.video_url,
-      thumbnail_url: getVodEpisodeArtwork(episode) || undefined,
-      duration: episode.duration,
-      category: episode.show_category || episode.category,
-    });
-  }, []);
-
-  const recordSelectedMedia = (media: CatchUpMedia) => {
-    if (!media.video_url) return;
-    const nextItem: WatchHistoryItem = {
-      id: media.id,
-      show_id: media.show_id,
-      title: media.title,
-      description: media.description,
-      video_url: media.video_url,
-      thumbnail_url: media.thumbnail_url,
-      duration: media.duration,
-      category: media.category,
-      lastPlayedAt: new Date().toISOString(),
     };
-    recordWatchHistory(nextItem);
-    const nextHistory = [nextItem, ...history.filter((item) => item.id !== media.id)];
-    setHistory(nextHistory);
+    recordWatchHistory(item);
   };
 
-  const youtubeId = selectedMedia?.video_url ? getYouTubeId(selectedMedia.video_url) : undefined;
-  const vimeoId = selectedMedia?.video_url ? getVimeoId(selectedMedia.video_url) : undefined;
+  const saveEpisodeProgress = (episode: VODEpisode, currentTime: number) => {
+    saveCatchUpResume(episode, currentTime);
+  };
 
   return (
     <Layout hideSidebar hideRightSidebar>
@@ -99,145 +247,43 @@ const CatchUp = () => {
                 <ArrowLeft className="h-5 w-5" />
               </Link>
               <div>
-                <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-fuchsia-700 dark:text-fuchsia-300">NexSq Video</p>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-fuchsia-700 dark:text-fuchsia-300">
+                  NexSq Video
+                </p>
                 <h1 className="text-2xl font-bold sm:text-3xl">Catch Up</h1>
               </div>
             </div>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Clock3 className="h-4 w-4" />
-              <span>{history.length} watched</span>
-            </div>
           </header>
 
-          <section className="grid gap-6 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.8fr)]">
-            <div className="min-w-0">
-              <div className="aspect-video overflow-hidden rounded-lg bg-black ring-1 ring-border">
-                {selectedMedia?.video_url ? (
-                  youtubeId ? (
-                    <iframe
-                      key={selectedMedia.id}
-                      className="h-full w-full"
-                      src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=0&rel=0`}
-                      title={selectedMedia.title}
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      allowFullScreen
-                    />
-                  ) : vimeoId ? (
-                    <iframe
-                      key={selectedMedia.id}
-                      className="h-full w-full"
-                      src={`https://player.vimeo.com/video/${vimeoId}?autoplay=0`}
-                      title={selectedMedia.title}
-                      allow="autoplay; fullscreen; picture-in-picture"
-                      allowFullScreen
-                    />
-                  ) : (
-                    <video
-                      key={selectedMedia.id}
-                      className="h-full w-full"
-                      src={selectedMedia.video_url}
-                      poster={selectedMedia.thumbnail_url}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      onPlay={() => recordSelectedMedia(selectedMedia)}
-                    />
-                  )
-                ) : (
-                  <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
-                    <Tv className="h-10 w-10 text-muted-foreground/60" />
-                    <p>Select a show or episode to start watching</p>
-                  </div>
-                )}
-              </div>
-              {selectedMedia && (
-                <div className="flex flex-wrap items-start justify-between gap-4 py-4">
-                  <div>
-                    {selectedMedia.category && (
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-fuchsia-700 dark:text-fuchsia-300">
-                        {selectedMedia.category}
-                      </p>
-                    )}
-                    <h2 className="text-xl font-semibold">{selectedMedia.title}</h2>
-                    {selectedMedia.description && (
-                      <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{selectedMedia.description}</p>
-                    )}
-                  </div>
-                  {selectedMedia.duration && (
-                    <span className="rounded bg-muted px-2.5 py-1 text-sm text-muted-foreground">
-                      {formatDuration(selectedMedia.duration)}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <aside className="min-w-0 border-t border-border pt-5 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
-              <div className="mb-4">
-                <h2 className="text-lg font-semibold">Program chat</h2>
-                <p className="mt-1 text-xs text-muted-foreground">Messages for the selected show</p>
-              </div>
-              <LiveChat
-                key={selectedMedia?.show_id || 'general-chat'}
-                showId={selectedMedia?.show_id}
-                showTitle={selectedMedia?.show_title || selectedMedia?.title}
-                showDescription={selectedMedia?.description}
+          <VODLibrary
+            showAllPastShows
+            initialEpisode={resumeState?.episode}
+            onEpisodeSelect={(episode) => saveCatchUpResume(episode, 0)}
+            onPlayerClose={clearCatchUpResume}
+            renderPlayer={(episode) => (
+              <CatchUpPlayer
+                key={episode.id}
+                episode={episode}
+                resumeAt={
+                  resumeState?.episode.id === episode.id
+                    ? resumeState.currentTime
+                    : 0
+                }
+                onEpisodePlay={recordEpisodePlayback}
+                onProgress={saveEpisodeProgress}
+                onEnded={clearCatchUpResume}
               />
-            </aside>
-          </section>
-
-          <section className="border-t border-border pt-7">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Recently Watched</h2>
-              <span className="text-xs text-muted-foreground">Feed history</span>
-            </div>
-            {history.length > 0 ? (
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                {history.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setSelectedMedia(item)}
-                    className={`group flex items-center gap-3 rounded-md p-2 text-left transition ${selectedMedia?.id === item.id ? 'bg-muted' : 'hover:bg-muted/60'}`}
-                  >
-                    <span className="relative aspect-video w-28 shrink-0 overflow-hidden rounded bg-muted">
-                      {item.thumbnail_url ? (
-                        <img src={item.thumbnail_url} alt="" className="h-full w-full object-cover" />
-                      ) : (
-                        <span className="flex h-full items-center justify-center"><Tv className="h-5 w-5 text-muted-foreground/60" /></span>
-                      )}
-                      <span className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition group-hover:opacity-100">
-                        <Play className="h-5 w-5 fill-current" />
-                      </span>
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium">{item.title}</span>
-                      <span className="mt-1 block truncate text-xs text-muted-foreground">
-                        {item.category || 'Show'}{item.duration ? ` · ${formatDuration(item.duration)}` : ''}
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="py-6 text-sm leading-6 text-muted-foreground">Videos you play in the feed will appear here.</p>
             )}
-          </section>
-
-          {/* On-demand catalog */}
-          <section className="border-t border-border pt-7">
-            <div className="mb-5 flex items-end justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-widest text-fuchsia-700 dark:text-fuchsia-300">On demand</p>
-                <h2 className="mt-1 text-xl font-bold sm:text-2xl">Shows & Episodes</h2>
-              </div>
-            </div>
-            <VODLibrary
-              showAllPastShows
-              onEpisodeSelect={selectEpisode}
-              onInitialEpisode={selectInitialEpisode}
-            />
-          </section>
+            renderChatPanel={(episode) => (
+              <LiveChat
+                key={episode.show_id || episode.id}
+                showId={episode.show_id}
+                showTitle={episode.show_title || episode.title}
+                showDescription={episode.description}
+                compact
+              />
+            )}
+          />
         </div>
       </div>
     </Layout>

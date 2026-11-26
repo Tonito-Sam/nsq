@@ -12,7 +12,7 @@ const ResetPassword = () => {
   const [searchParams] = useSearchParams();
   const emailParam = searchParams.get('email') || '';
   
-  const [email] = useState(emailParam);
+  const [email, setEmail] = useState(emailParam);
   const [otp, setOtp] = useState('');
   const [otpError, setOtpError] = useState('');
   const [password, setPassword] = useState('');
@@ -25,7 +25,7 @@ const ResetPassword = () => {
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
-    // For OTP-based reset, always show the form and clear any error
+    setEmail(searchParams.get('email') || '');
     setErrorMsg('');
     setShowForm(true);
   }, [searchParams]);
@@ -51,11 +51,17 @@ const ResetPassword = () => {
     setLoading(true);
     setOtpError('');
     try {
-      // Use the correct Supabase method for password reset with OTP
+      const normalizedEmail = email.trim();
+      const normalizedOtp = otp.trim();
+      if (!normalizedEmail || !normalizedOtp) {
+        setOtpError('Enter your email address and the reset code from your email.');
+        return;
+      }
+
       const { error } = await supabase.auth.verifyOtp({
         type: 'recovery',
-        token: otp,
-        email: email,
+        token: normalizedOtp,
+        email: normalizedEmail,
         options: {
           redirectTo: undefined
         }
@@ -219,8 +225,10 @@ const ResetPassword = () => {
                         <Input
                           type="email"
                           value={email}
-                          readOnly
-                          className="h-12 dark:bg-[#161616] dark:border-gray-600 bg-gray-100 cursor-not-allowed"
+                          onChange={(event) => setEmail(event.target.value)}
+                          required
+                          autoComplete="email"
+                          className="h-12 dark:bg-[#161616] dark:border-gray-600 bg-gray-100"
                         />
                       </div>
                       <div className="relative">
@@ -230,6 +238,8 @@ const ResetPassword = () => {
                           value={otp}
                           onChange={e => setOtp(e.target.value)}
                           required
+                          autoComplete="one-time-code"
+                          inputMode="numeric"
                           className="h-12 dark:bg-[#161616] dark:border-gray-600"
                         />
                       </div>
