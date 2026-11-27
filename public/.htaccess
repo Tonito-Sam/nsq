@@ -1,6 +1,8 @@
 RewriteEngine On
 RewriteBase /
 RewriteRule ^index\.html$ - [L]
+RewriteRule ^event/([a-zA-Z0-9][a-zA-Z0-9-]*)/?$ post-share.php?event_slug=$1 [L,QSA]
+RewriteRule ^post/([0-9a-fA-F-]{36})/?$ post-share.php?post_id=$1 [L,QSA]
 RewriteRule ^podcast/([0-9a-fA-F-]{36})/?$ podcast-share.php?show_id=$1 [L,QSA]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d

@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from 'react-router-dom';
 import EditProfile from '@/pages/EditProfile';
+import MyEventReports from '@/components/MyEventReports';
 import axios from 'axios';
 import apiUrl from '@/lib/api';
 import type { Organization } from '@/types/organization';
@@ -148,6 +149,8 @@ const ProfileRightSidebar: React.FC<ProfileRightSidebarProps> = ({
           </div>
         )}
       </Card>
+
+      {isOwnProfile && <MyEventReports userId={userId} />}
 
       {isOwnProfile && inlineEditorOpen && (
         <div className="min-w-0 rounded-md border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-800 dark:bg-[#161616]">

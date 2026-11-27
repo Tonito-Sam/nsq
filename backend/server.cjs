@@ -91,6 +91,14 @@ try {
   console.warn('⚠️ post-views route not available:', e?.message || e);
 }
 
+try {
+  const postOg = require('./routes/post-og.cjs');
+  app.use('/api/post-og', postOg);
+  console.log('✅ Mounted /api/post-og');
+} catch (e) {
+  console.warn('⚠️ post OG route not available:', e?.message || e);
+}
+
 // Stores (WhatsApp opt-in validation + user_stores updates)
 try {
   const stores = require('./routes/stores');

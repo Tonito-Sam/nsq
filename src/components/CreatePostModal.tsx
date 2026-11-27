@@ -1,5 +1,6 @@
 ﻿import React, { useState, useRef, useEffect } from 'react';
 import { LinkPreviewCard } from '@/components/LinkPreviewCard';
+import { createEventSlug } from '@/lib/eventSlug';
 // --- AI Helpers and imports only ---
 import axios from 'axios';
 import { extractHashtagsFromText as extractHashtagsUtil, escapeRegExp } from '@/utils/hashtagUtils';
@@ -157,15 +158,101 @@ import { uploadFile } from '@/utils/mediaUtils';
 import CameraCaptureModal from './CameraCaptureModal';
 import VideoRecorderModal from './VideoRecorderModal';
 
+function createVideoThumbnail(source: File | string): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const sourceUrl = typeof source === 'string' ? source : URL.createObjectURL(source);
+    const shouldRevokeUrl = typeof source !== 'string';
+    let timeoutId = 0;
+    let finished = false;
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      video.onloadedmetadata = null;
+      video.onloadeddata = null;
+      video.onseeked = null;
+      video.onerror = null;
+      if (shouldRevokeUrl) URL.revokeObjectURL(sourceUrl);
+    };
+
+    const fail = (error: Error) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(error);
+    };
+
+    const capture = () => {
+      if (finished || !video.videoWidth || !video.videoHeight) return;
+      const maxDimension = 1280;
+      const scale = Math.min(1, maxDimension / Math.max(video.videoWidth, video.videoHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+      const context = canvas.getContext('2d');
+      if (!context) {
+        fail(new Error('Could not create a canvas for the video thumbnail.'));
+        return;
+      }
+      try {
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (finished) return;
+          if (!blob) {
+            fail(new Error('Could not encode the video thumbnail.'));
+            return;
+          }
+          finished = true;
+          cleanup();
+          const baseName = typeof source === 'string' ? 'video' : source.name.replace(/\.[^.]+$/, '');
+          resolve(new File([blob], `${baseName}-thumbnail.jpg`, { type: 'image/jpeg' }));
+        }, 'image/jpeg', 0.86);
+      } catch {
+        fail(new Error('The video source does not allow thumbnail extraction.'));
+      }
+    };
+
+    timeoutId = window.setTimeout(() => fail(new Error('Timed out while creating the video thumbnail.')), 15000);
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      if (video.duration > 0) {
+        try {
+          video.currentTime = Math.min(1, video.duration / 2);
+        } catch {
+          fail(new Error('Could not seek the video to create a thumbnail.'));
+        }
+      }
+    };
+    video.onloadeddata = () => {
+      if (!video.duration || video.currentTime === 0) capture();
+    };
+    video.onseeked = capture;
+    video.onerror = () => fail(new Error('Could not read the video to create a thumbnail.'));
+    if (typeof source === 'string') video.crossOrigin = 'anonymous';
+    video.src = sourceUrl;
+    video.load();
+  });
+}
+
 interface CreatePostModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   groupId?: string;
   initialMediaUrls?: string[];
   initialContent?: string;
+  initialPostType?: 'text' | 'image' | 'video' | 'event' | 'voice' | 'poll';
 }
 
-export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls, initialContent }: CreatePostModalProps) => {
+export const CreatePostModal = ({
+  open,
+  onOpenChange,
+  groupId,
+  initialMediaUrls,
+  initialContent,
+  initialPostType,
+}: CreatePostModalProps) => {
   // --- AI UI State ---
   const [spamWarning, setSpamWarning] = useState<string | null>(null);
   const [hashtags, setHashtags] = useState<string[]>([]);
@@ -192,11 +279,12 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
   const [content, setContent] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [injectedMediaUrls, setInjectedMediaUrls] = useState<string[] | null>(null);
-  const [postType, setPostType] = useState<'text' | 'image' | 'video' | 'event' | 'voice' | 'poll'>('text');
+  const [postType, setPostType] = useState<'text' | 'image' | 'video' | 'event' | 'voice' | 'poll'>(initialPostType || 'text');
 
   // Apply initial injected media/content when modal opens via share-target
   useEffect(() => {
     if (open) {
+      if (initialPostType) setPostType(initialPostType);
       if (initialContent) setContent(initialContent);
       if (initialMediaUrls && initialMediaUrls.length > 0) {
         setInjectedMediaUrls(initialMediaUrls);
@@ -206,7 +294,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
     } else {
       setInjectedMediaUrls(null);
     }
-  }, [open, initialContent, initialMediaUrls]);
+  }, [open, initialContent, initialMediaUrls, initialPostType]);
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -223,7 +311,12 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
   ]);
   const [eventBanner, setEventBanner] = useState<File | null>(null);
   const [eventBannerUrl, setEventBannerUrl] = useState<string>('');
+  const [eventLogo, setEventLogo] = useState<File | null>(null);
+  const [eventLogoPreviewUrl, setEventLogoPreviewUrl] = useState('');
+  const [eventOrganizerPhone, setEventOrganizerPhone] = useState('');
+  const [eventOrganizerWebsite, setEventOrganizerWebsite] = useState('');
   const [eventDescription, setEventDescription] = useState('');
+  const [eventRegistrationFields, setEventRegistrationFields] = useState<string[]>([]);
   const [detectingLocation, setDetectingLocation] = useState(false);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   // Image filters
@@ -1326,6 +1419,18 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
     }
   };
 
+  const handleEventLogoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setEventLogo(file);
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => setEventLogoPreviewUrl(event.target?.result as string);
+      reader.readAsDataURL(file);
+    } else {
+      setEventLogoPreviewUrl('');
+    }
+  };
+
   const scanImageFile = async () => false;
 
   const scanVideoFile = async () => false;
@@ -1441,6 +1546,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
       let mediaUrl = '';
       let voiceNoteUrl = '';
       let bannerUrl = '';
+      let uploadedEventLogoUrl = '';
 
       // If modal was opened with injected media URLs from share-target, use them
       if (injectedMediaUrls && injectedMediaUrls.length > 0) {
@@ -1480,6 +1586,9 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
       // Upload event banner
       if (postType === 'event' && eventBanner) {
         bannerUrl = await uploadFile(eventBanner, 'event-banners', '', user.id);
+      }
+      if (postType === 'event' && eventLogo) {
+        uploadedEventLogoUrl = await uploadFile(eventLogo, 'event-banners', 'logos/', user.id);
       }
 
       // Prepare post data
@@ -1527,10 +1636,17 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
 
       // Add event-specific data
       if (postType === 'event') {
+        postData.event_slug = createEventSlug(cleanContent);
         postData.event_date = eventDate || null;
         postData.event_location = eventLocation || null;
         postData.event_banner = bannerUrl || null;
+        postData.event_logo = uploadedEventLogoUrl || null;
+        postData.event_organizer_phone = eventOrganizerPhone.trim() || null;
+        postData.event_organizer_website = eventOrganizerWebsite.trim() || null;
         postData.event_description = eventDescription || null;
+        postData.event_registration_fields = eventRegistrationFields
+          .map((field) => field.trim())
+          .filter(Boolean);
       }
 
       // Try inserting post. If the `hashtags` column does not exist in the remote
@@ -1614,7 +1730,7 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
       // --- MEDIA GRID LOGIC ---
       let mediaUrls: string[] = [];
       if (selectedFiles.length > 0) {
-  mediaUrls = await Promise.all(selectedFiles.map(async (file) => {
+        mediaUrls = await Promise.all(selectedFiles.map(async (file) => {
           // If file is an image and user selected a filter, upload the filtered image for each image
           if (file.type.startsWith('image/') && selectedFilter && selectedFilter !== 'none') {
             try {
@@ -1628,6 +1744,24 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
           }
           return await uploadFile(file, 'posts', 'media/', user.id);
         }));
+      }
+      const videoSource = selectedFiles.find((file) => file.type.startsWith('video/'))
+        || selectedFiles.find((file) => /\.(mp4|webm|mov|ogg|m4v)$/i.test(file.name))
+        || injectedMediaUrls?.find((url) => /\.(mp4|webm|mov|ogg|m4v)(\?|$)/i.test(url))
+        || (postType === 'video' ? injectedMediaUrls?.[0] : undefined);
+      let videoThumbnailUrl: string | null = null;
+      if (videoSource) {
+        try {
+          const thumbnailFile = await createVideoThumbnail(videoSource);
+          videoThumbnailUrl = await uploadFile(thumbnailFile, 'posts', 'thumbnails/', user.id);
+        } catch (error) {
+          console.error('Could not create or upload the video thumbnail:', error);
+          toast({
+            title: 'Video thumbnail unavailable',
+            description: 'The post will be created, but its shared preview may not show a video image.',
+            variant: 'destructive',
+          });
+        }
       }
       if (mediaUrls.length > 0) {
         await supabase.from('posts').update({ media_urls: mediaUrls }).eq('id', post.id);
@@ -1668,6 +1802,20 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
           });
         }
       }
+      if (videoThumbnailUrl) {
+        const { error: thumbnailUpdateError } = await supabase
+          .from('posts')
+          .update({ video_thumbnail_url: videoThumbnailUrl })
+          .eq('id', post.id);
+        if (thumbnailUpdateError) {
+          console.error('Could not save the video thumbnail URL:', thumbnailUpdateError);
+          toast({
+            title: 'Video thumbnail not saved',
+            description: 'Run the latest database migration to enable post video previews.',
+            variant: 'destructive',
+          });
+        }
+      }
 
       toast({
         description: "Post created successfully!",
@@ -1693,7 +1841,12 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
       ]);
       setEventBanner(null);
       setEventBannerUrl('');
+      setEventLogo(null);
+      setEventLogoPreviewUrl('');
+      setEventOrganizerPhone('');
+      setEventOrganizerWebsite('');
       setEventDescription('');
+      setEventRegistrationFields([]);
       onOpenChange(false);
 
     } catch (error: any) {
@@ -2573,30 +2726,84 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
                   className="border-2 border-green-200 dark:border-green-700 focus:border-green-500 dark:focus:border-green-400"
                 />
               </div>
-              
-              <Input
-                type="file"
-                accept="image/*"
-                onChange={handleEventBannerSelect}
-                className="border-2 border-green-200 dark:border-green-700"
-              />
-              
-              {eventBannerUrl && (
-                <div className="relative">
-                  <img src={eventBannerUrl} alt="Event Banner Preview" className="w-full h-48 object-cover rounded-lg" />
-                  <Button
-                    size="icon"
-                    variant="destructive"
-                    className="absolute top-2 right-2 h-6 w-6 rounded-full"
-                    onClick={() => {
-                      setEventBanner(null);
-                      setEventBannerUrl('');
-                    }}
-                  >
-                    <X className="h-3 w-3" />
-                  </Button>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="space-y-2 rounded-lg border border-green-200 p-3 dark:border-green-700">
+                  <label className="text-sm font-medium text-green-900 dark:text-green-100" htmlFor="event-logo-upload">
+                    Event logo
+                  </label>
+                  <Input
+                    id="event-logo-upload"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleEventLogoSelect}
+                    className="border-2 border-green-200 dark:border-green-700"
+                  />
+                  {eventLogoPreviewUrl && (
+                    <div className="flex items-center justify-between gap-2">
+                      <img src={eventLogoPreviewUrl} alt="Event logo preview" className="h-20 w-20 rounded-lg border bg-white object-contain p-1" />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setEventLogo(null);
+                          setEventLogoPreviewUrl('');
+                        }}
+                      >
+                        Remove logo
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              )}
+                <div className="space-y-2 rounded-lg border border-green-200 p-3 dark:border-green-700">
+                  <label className="text-sm font-medium text-green-900 dark:text-green-100" htmlFor="event-poster-upload">
+                    Event poster
+                  </label>
+                  <Input
+                    id="event-poster-upload"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleEventBannerSelect}
+                    className="border-2 border-green-200 dark:border-green-700"
+                  />
+                  {eventBannerUrl && (
+                    <div className="relative">
+                      <img src={eventBannerUrl} alt="Event poster preview" className="h-32 w-full rounded-lg object-cover" />
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="destructive"
+                        className="absolute right-2 top-2 h-6 w-6 rounded-full"
+                        aria-label="Remove event poster"
+                        onClick={() => {
+                          setEventBanner(null);
+                          setEventBannerUrl('');
+                        }}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <Input
+                  type="tel"
+                  placeholder="Organizer contact number"
+                  value={eventOrganizerPhone}
+                  onChange={(event) => setEventOrganizerPhone(event.target.value)}
+                  className="border-2 border-green-200 dark:border-green-700"
+                />
+                <Input
+                  type="url"
+                  placeholder="Organizer website (https://...)"
+                  value={eventOrganizerWebsite}
+                  onChange={(event) => setEventOrganizerWebsite(event.target.value)}
+                  className="border-2 border-green-200 dark:border-green-700"
+                />
+              </div>
               
               <Textarea
                 placeholder="Event Description"
@@ -2605,6 +2812,48 @@ export const CreatePostModal = ({ open, onOpenChange, groupId, initialMediaUrls,
                 className="border-2 border-green-200 dark:border-green-700 focus:border-green-500 dark:focus:border-green-400"
                 rows={3}
               />
+
+              <div className="space-y-3 rounded-lg border border-green-200 p-3 dark:border-green-700">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-green-900 dark:text-green-100">Registration questions</p>
+                    <p className="text-xs text-muted-foreground">Attendees will answer these when they register.</p>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setEventRegistrationFields((fields) => [...fields, ''])}
+                  >
+                    <Plus className="mr-1 h-4 w-4" />
+                    Add question
+                  </Button>
+                </div>
+                {eventRegistrationFields.map((field, index) => (
+                  <div key={index} className="flex gap-2">
+                    <Input
+                      value={field}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setEventRegistrationFields((fields) =>
+                          fields.map((current, currentIndex) => currentIndex === index ? value : current)
+                        );
+                      }}
+                      placeholder={`Question ${index + 1}`}
+                      aria-label={`Registration question ${index + 1}`}
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`Remove registration question ${index + 1}`}
+                      onClick={() => setEventRegistrationFields((fields) => fields.filter((_, currentIndex) => currentIndex !== index))}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

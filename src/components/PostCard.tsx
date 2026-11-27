@@ -14,6 +14,7 @@ import { EditPostModal } from './EditPostModal';
 import { EventCard } from './EventCard';
 import { LinkPreviewCard } from './LinkPreviewCard';
 import type { PlatformCelebrationSlide } from '@/lib/platformCelebrationGroups';
+import type { Json } from '@/integrations/supabase/types';
 
 interface PostCardProps {
   post: {
@@ -32,6 +33,7 @@ interface PostCardProps {
     poll_options?: string[];
     event_date?: string;
     event_location?: string;
+    event_slug?: string | null;
     user_has_liked?: boolean;
     user_has_bookmarked?: boolean;
     user?: {
@@ -59,6 +61,10 @@ interface PostCardProps {
     feeling?: string;
     event_banner?: string;
     event_description?: string;
+    event_registration_fields?: Json | null;
+    event_logo?: string | null;
+    event_organizer_phone?: string | null;
+    event_organizer_website?: string | null;
     // Moment-related fields (shared from Moments)
     moment_bg?: string | null;
     moment_font?: string | null;
@@ -387,6 +393,14 @@ export const PostCard: React.FC<PostCardProps> = ({ post, currentUser, reactionC
               eventLocation={post.event_location || ''}
               bannerUrl={post.event_banner || ''}
               description={post.event_description || ''}
+              eventLogoUrl={post.event_logo || ''}
+              organizerPhone={post.event_organizer_phone || ''}
+              organizerWebsite={post.event_organizer_website || ''}
+              eventUrl={`${window.location.origin}/event/${post.event_slug || post.id}`}
+              registrationFields={Array.isArray(post.event_registration_fields)
+                ? post.event_registration_fields.filter((field): field is string => typeof field === 'string')
+                : []}
+              isAuthor={currentUser?.id === post.user_id}
             />
           ) : (
             <PostContent

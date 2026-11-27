@@ -27,6 +27,7 @@ import Messages from "./pages/Messages";
 import Notifications from "./pages/Notifications";
 import Groups from "./pages/Groups";
 import Events from "./pages/Events";
+import PublicEventPage from "./pages/PublicEventPage";
 import Bookmarks from "./pages/Bookmarks";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
@@ -287,6 +288,7 @@ const App = () => {
                     <Route path="/groups" element={<Groups />} />
                     <Route path="/groups/:groupId" element={<GroupDetails />} />
                     <Route path="/events" element={<Events />} />
+                    <Route path="/event/:eventSlug" element={<PublicEventPage />} />
                     <Route path="/events/settings/:eventId" element={<EventSettingsPage />} />
                     <Route path="/bookmarks" element={<Bookmarks />} />
                     <Route path="/settings" element={<Settings />} />

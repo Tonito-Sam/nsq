@@ -1,22 +1,48 @@
  import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
-import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Header } from '@/components/Header';
 import { EventsSidebar } from '@/components/EventsSidebar';
 import { MobileOffcanvas } from '@/components/MobileOffcanvas';
 import { useAuth } from '@/hooks/useAuth';
 import { uploadFile, getMediaUrl } from '@/utils/mediaUtils';
+import { Download } from 'lucide-react';
+import {
+  downloadEventRegistrationsCsv,
+  type EventRegistrationExportRow,
+} from '@/lib/eventRegistrationCsv';
+
+interface EventRegistration extends EventRegistrationExportRow {
+  id: string;
+  post_id: string;
+  user_id: string | null;
+}
+
+const getStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+
+const getAnswers = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map((answer) => typeof answer === 'string' ? answer : '') : [];
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
+  return 'Failed to update event.';
+};
 
 const EventSettingsPage = () => {
   const { eventId } = useParams();
   const { user } = useAuth();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [events, setEvents] = useState<any[]>([]);
-  const [attendeesMap, setAttendeesMap] = useState<{[key: string]: any[]}>({});
+  const [attendeesMap, setAttendeesMap] = useState<Record<string, EventRegistration[]>>({});
   const [viewsMap, setViewsMap] = useState<{[key: string]: number}>({});
   const [editEventId, setEditEventId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any>({});
@@ -25,6 +51,8 @@ const EventSettingsPage = () => {
   const [showMobileOffcanvas, setShowMobileOffcanvas] = useState(false);
   const [bannerFile, setBannerFile] = useState<File | null>(null);
   const [bannerPreview, setBannerPreview] = useState<string | null>(null);
+  const [eventLogoFile, setEventLogoFile] = useState<File | null>(null);
+  const [eventLogoPreview, setEventLogoPreview] = useState<string | null>(null);
 
   useEffect(() => {
     if (user && user.id) {
@@ -52,10 +80,16 @@ const EventSettingsPage = () => {
   };
 
   const fetchAttendees = async (eventId: string) => {
-    const { data } = await supabase
-      .from('event_attendees')
-      .select('user_id, users (username, first_name, last_name, avatar_url)')
-      .eq('event_id', eventId);
+    const { data, error } = await supabase
+      .from('event_registrations')
+      .select('*')
+      .eq('post_id', eventId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      toast({ description: error.message, variant: 'destructive' });
+      setAttendeesMap(prev => ({ ...prev, [eventId]: [] }));
+      return;
+    }
     setAttendeesMap(prev => ({ ...prev, [eventId]: data || [] }));
   };
 
@@ -74,12 +108,18 @@ const EventSettingsPage = () => {
       date: ev.date || ev.event_date || '',
       location: ev.location || ev.event_location || '',
       event_banner: ev.event_banner || '',
+      event_logo: ev.event_logo || '',
+      event_organizer_website: ev.event_organizer_website || '',
       description: ev.description || ev.event_description || ''
     });
   };
   const handleCancel = () => {
     setEditEventId(null);
     setEditForm({});
+    setBannerFile(null);
+    setBannerPreview(null);
+    setEventLogoFile(null);
+    setEventLogoPreview(null);
   };
   const handleEditChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setEditForm({ ...editForm, [e.target.name]: e.target.value });
@@ -91,35 +131,60 @@ const EventSettingsPage = () => {
       setBannerPreview(URL.createObjectURL(file));
     }
   };
-  const handleSave = async (id: string) => {
-    let eventBannerUrl = editForm.event_banner;
-    if (bannerFile) {
-      eventBannerUrl = await uploadFile(bannerFile, 'posts', 'event-banners/', user.id);
+  const handleEventLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setEventLogoFile(file);
+      setEventLogoPreview(URL.createObjectURL(file));
     }
-    const { error } = await supabase
-      .from('posts')
-      .update({
-        title: editForm.title,
-        content: editForm.title,
-        description: editForm.description,
-        event_description: editForm.description,
-        date: editForm.date,
-        event_date: editForm.date,
-        location: editForm.location,
-        event_location: editForm.location,
-        event_banner: eventBannerUrl
-      })
-      .eq('id', id)
-      .eq('post_type', 'event');
-    if (error) {
-      toast({ description: error.message, variant: 'destructive' });
-    } else {
+  };
+  const handleSave = async (id: string) => {
+    if (!user) {
+      toast({ description: 'You must be signed in to edit this event.', variant: 'destructive' });
+      return;
+    }
+
+    try {
+      let eventBannerUrl = editForm.event_banner;
+      let eventLogoUrl = editForm.event_logo;
+      if (bannerFile) {
+        eventBannerUrl = await uploadFile(bannerFile, 'event-banners', '', user.id);
+      }
+      if (eventLogoFile) {
+        eventLogoUrl = await uploadFile(eventLogoFile, 'event-banners', 'logos/', user.id);
+      }
+
+      const { error } = await supabase
+        .from('posts')
+        .update({
+          content: editForm.title,
+          event_description: editForm.description,
+          event_date: editForm.date,
+          event_location: editForm.location,
+          event_banner: eventBannerUrl,
+          event_logo: eventLogoUrl,
+          event_organizer_website: editForm.event_organizer_website.trim() || null
+        })
+        .eq('id', id)
+        .eq('post_type', 'event');
+      if (error) throw error;
+
       toast({ description: 'Event updated!' });
       setEditEventId(null);
       setEditForm({});
       setBannerFile(null);
       setBannerPreview(null);
+      setEventLogoFile(null);
+      setEventLogoPreview(null);
       fetchOwnerEvents();
+      await queryClient.invalidateQueries({ queryKey: ['posts'], refetchType: 'all' });
+      window.dispatchEvent(new Event('event-post-updated'));
+    } catch (error) {
+      console.error('Error updating event:', error);
+      toast({
+        description: getErrorMessage(error),
+        variant: 'destructive'
+      });
     }
   };
   const handleInvite = async () => {
@@ -131,7 +196,8 @@ const EventSettingsPage = () => {
     }, 1000);
   };
   const handleCopyLink = (id: string) => {
-    navigator.clipboard.writeText(`${window.location.origin}/events/settings/${id}`);
+    const event = events.find((item) => item.id === id);
+    navigator.clipboard.writeText(`${window.location.origin}/event/${event?.event_slug || id}`);
     toast({ description: 'Event link copied!' });
   };
 
@@ -155,7 +221,10 @@ const EventSettingsPage = () => {
               <div className="text-muted-foreground">You have not created any events yet.</div>
             )}
             <div className="space-y-8">
-              {events.map(ev => (
+              {events.map(ev => {
+                const registrations = attendeesMap[ev.id] || [];
+                const questions = getStringArray(ev.event_registration_fields);
+                return (
                 <div key={ev.id} className="bg-card rounded-lg p-4 shadow mb-6">
                   {/* Event Banner */}
                   {ev.event_banner && (
@@ -195,18 +264,40 @@ const EventSettingsPage = () => {
                   </div>
                   {/* Attendees List */}
                   <div className="mb-4">
-                    <h4 className="font-semibold mb-2">Attendees</h4>
-                    <div className="flex flex-wrap gap-2">
-                      {(attendeesMap[ev.id] || []).map(a => (
-                        <div key={a.user_id} className="flex items-center gap-2 bg-muted rounded px-2 py-1">
-                          <Avatar className="w-6 h-6">
-                            <AvatarImage src={a.users?.avatar_url} />
-                            <AvatarFallback>{a.users?.first_name?.[0] || a.users?.username?.[0] || 'U'}</AvatarFallback>
-                          </Avatar>
-                          <span>{a.users?.first_name || ''} {a.users?.last_name || ''} (@{a.users?.username})</span>
-                        </div>
-                      ))}
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <h4 className="font-semibold">Registrations ({registrations.length})</h4>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={registrations.length === 0}
+                        onClick={() => downloadEventRegistrationsCsv(ev.content || 'event', ev.id, questions, registrations)}
+                      >
+                        <Download className="mr-1 h-4 w-4" />
+                        Download CSV
+                      </Button>
                     </div>
+                    {registrations.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No one has registered for this event yet.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {registrations.map((registration) => (
+                          <article key={registration.id} className="rounded-md bg-muted/50 p-3 text-sm">
+                            <p className="font-medium">
+                              {registration.full_name}{' '}
+                              <span className="font-normal text-muted-foreground">
+                                {registration.username ? `(@${registration.username})` : '(Guest registration)'}
+                              </span>
+                            </p>
+                            <p className="text-muted-foreground">{registration.email}{registration.phone ? ` · ${registration.phone}` : ''}</p>
+                            {questions.map((question, index) => (
+                              <p key={`${registration.id}-${index}`} className="mt-1">
+                                <span className="font-medium">{question}:</span> {getAnswers(registration.custom_answers)[index] || '—'}
+                              </p>
+                            ))}
+                          </article>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   {/* Edit Event */}
                   {editEventId === ev.id ? (
@@ -220,9 +311,30 @@ const EventSettingsPage = () => {
                         ) : null}
                         <input type="file" accept="image/*" onChange={handleBannerFileChange} />
                       </div>
+                      <div className="space-y-2">
+                        <label className="block text-sm font-medium" htmlFor={`event-logo-${ev.id}`}>Event logo</label>
+                        {eventLogoPreview ? (
+                          <img src={eventLogoPreview} alt="Event logo preview" className="h-20 w-20 rounded-lg border bg-white object-contain p-1" />
+                        ) : editForm.event_logo ? (
+                          <img src={editForm.event_logo} alt="Current event logo" className="h-20 w-20 rounded-lg border bg-white object-contain p-1" />
+                        ) : null}
+                        <Input
+                          id={`event-logo-${ev.id}`}
+                          type="file"
+                          accept="image/*"
+                          onChange={handleEventLogoFileChange}
+                        />
+                      </div>
                       <Input name="title" value={editForm.title} onChange={handleEditChange} placeholder="Title" />
                       <Input name="date" value={editForm.date} onChange={handleEditChange} placeholder="Date" />
                       <Input name="location" value={editForm.location} onChange={handleEditChange} placeholder="Location" />
+                      <Input
+                        name="event_organizer_website"
+                        type="url"
+                        value={editForm.event_organizer_website}
+                        onChange={handleEditChange}
+                        placeholder="Organizer website (https://...)"
+                      />
                       <textarea name="description" value={editForm.description} onChange={handleEditChange} placeholder="Description" className="w-full border rounded p-2" />
                       <div className="flex gap-2">
                         <Button onClick={() => handleSave(ev.id)} className="bg-gradient-to-r from-purple-600 to-pink-600 text-white">Save</Button>
@@ -233,7 +345,8 @@ const EventSettingsPage = () => {
                     <Button onClick={() => handleEdit(ev)} className="bg-gradient-to-r from-purple-600 to-pink-600 text-white">Edit Event</Button>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </main>

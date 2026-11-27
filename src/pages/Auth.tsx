@@ -8,6 +8,7 @@ import { toast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { Eye, EyeOff, User, Mail, Lock, UserCircle, Megaphone, Globe, Users } from 'lucide-react';
 import SkeletonLine from '@/components/skeletons/SkeletonLine';
+import { getPendingGuestEventSignup } from '@/lib/guestEventRegistration';
 
 // Typing animation for hero card with three sections
 function TypingHeroCard() {
@@ -108,14 +109,25 @@ function TypingHeroCard() {
 
 const Auth = () => {
   console.log('Auth component mount');
-  const [isLogin, setIsLogin] = useState(true);
+  const [pendingGuestSignup] = useState(getPendingGuestEventSignup);
+  const guestNameParts = pendingGuestSignup?.fullName.trim().split(/\s+/) || [];
+  const [isLogin, setIsLogin] = useState(!pendingGuestSignup);
   const [showConfirmation, setShowConfirmation] = useState(false);
-  const [email, setEmail] = useState('');
+  const [email, setEmail] = useState(pendingGuestSignup?.email || '');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [username, setUsername] = useState('');
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
+  const [username, setUsername] = useState(() => {
+    if (!pendingGuestSignup) return '';
+    const emailName = pendingGuestSignup.email
+      .split('@')[0]
+      .replace(/[^a-zA-Z0-9_-]/g, '')
+      .replace(/admin/gi, '')
+      .slice(0, 12);
+    const suffix = pendingGuestSignup.registrationId.replace(/[^a-f0-9]/gi, '').slice(-6);
+    return `${emailName || 'guest'}_${suffix}`;
+  });
+  const [firstName, setFirstName] = useState(guestNameParts[0] || '');
+  const [lastName, setLastName] = useState(guestNameParts.slice(1).join(' '));
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -149,6 +161,12 @@ const Auth = () => {
 
   useEffect(() => {
     if (user) {
+      const pendingSignup = getPendingGuestEventSignup();
+      if (pendingSignup) {
+        navigate(pendingSignup.returnTo);
+        return;
+      }
+
       // After login/session restore, try to return user to their last visited route
       try {
         const last = localStorage.getItem('last_route');
@@ -249,6 +267,11 @@ const Auth = () => {
         if (error) throw error;
         if (rememberMe) {
           localStorage.setItem('rememberMe', 'true');
+        }
+        const pendingSignup = getPendingGuestEventSignup();
+        if (pendingSignup) {
+          navigate(pendingSignup.returnTo);
+          return;
         }
         // Check if user profile is incomplete and redirect to edit profile
         const { data: userResult } = await supabase.auth.getUser();
@@ -435,7 +458,16 @@ const Auth = () => {
         <Card className="max-w-md w-full mx-auto p-8 text-center animate-fade-in-up">
           <img src="/lovable-uploads/9de584d8-1087-4e32-8971-c629229627e3.png" alt="1VoiceSquare" className="h-16 w-auto mx-auto mb-6" />
           <h2 className="text-2xl font-bold mb-4 text-gray-900 dark:text-gray-100">Account Created!</h2>
-          <p className="mb-6 text-gray-700 dark:text-gray-300">A confirmation email has been sent to <span className="font-semibold">your email address</span>.<br />Please check your inbox and follow the link to activate your account.</p>
+          <p className="mb-6 text-gray-700 dark:text-gray-300">A confirmation email has been sent to <span className="font-semibold">{email || pendingGuestSignup?.email || 'your email address'}</span>.<br />Please check your inbox and follow the link to activate your account.</p>
+          {pendingGuestSignup && (
+            <Button
+              variant="outline"
+              className="mb-3 w-full"
+              onClick={() => navigate(pendingGuestSignup.returnTo)}
+            >
+              Return to your event pass
+            </Button>
+          )}
           <Button
             className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold transition-all duration-300 hover:shadow-lg hover:-translate-y-0.5"
             onClick={() => {

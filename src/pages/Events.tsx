@@ -105,11 +105,17 @@ const Events = () => {
                     key={event.id}
                     postId={event.id}
                     title={event.title}
-                    eventDate={event.event_date}
-                    eventLocation={event.event_location}
-                    bannerUrl={event.banner_url}
-                    description={event.description}
-                    eventUrl={window.location.origin + '/events/' + event.id}
+                    eventDate={event.event_date || ''}
+                    eventLocation={event.event_location || ''}
+                    bannerUrl={event.event_banner || event.banner_url}
+                    eventLogoUrl={event.event_logo}
+                    description={event.event_description || event.description}
+                    organizerPhone={event.event_organizer_phone || ''}
+                    organizerWebsite={event.event_organizer_website || ''}
+                    registrationFields={Array.isArray(event.event_registration_fields)
+                      ? event.event_registration_fields.filter((field: unknown): field is string => typeof field === 'string')
+                      : []}
+                    eventUrl={`${window.location.origin}/event/${event.event_slug || event.id}`}
                     isAuthor={!!(user && event.user_id === user.id)}
                   />
                 ))

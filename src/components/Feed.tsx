@@ -540,7 +540,14 @@ const Feed: React.FC = () => {
             audio_mix_meta,
             poll_options,
             event_date,
+            event_slug,
             event_location,
+            event_banner,
+            event_description,
+            event_registration_fields,
+            event_logo,
+            event_organizer_phone,
+            event_organizer_website,
             location,
             feeling,
             user_id,
@@ -1708,16 +1715,26 @@ const Feed: React.FC = () => {
       <CreatePost onPostCreated={handleNewPost} />
       
       {postsError && (
-        <div className="mx-4 my-3 p-3 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl text-sm">
-          Failed to load posts. Pull down to refresh.
+        <div role="alert" className="mx-4 my-3 flex items-center justify-between gap-3 rounded-xl bg-red-50 p-3 text-sm text-red-600 dark:bg-red-900/20 dark:text-red-400">
+          <span>Failed to load posts.</span>
+          <button
+            type="button"
+            className="shrink-0 font-medium underline underline-offset-2"
+            onClick={() => void refetchPosts()}
+            disabled={isRefetching}
+          >
+            {isRefetching ? 'Retrying…' : 'Retry'}
+          </button>
         </div>
       )}
 
       <div className="space-y-4">
         {posts.length === 0 ? (
-          <div className="text-center py-10">
-            <div className="text-gray-500 dark:text-gray-400 text-sm">No posts yet. Be the first to share something!</div>
-          </div>
+          !postsError && (
+            <div className="text-center py-10">
+              <div className="text-gray-500 dark:text-gray-400 text-sm">No posts yet. Be the first to share something!</div>
+            </div>
+          )
         ) : (
           <>
             {/* Fullscreen overlay for reels */}

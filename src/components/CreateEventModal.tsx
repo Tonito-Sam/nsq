@@ -8,6 +8,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { uploadFile } from '@/utils/mediaUtils';
+import { createEventSlug } from '@/lib/eventSlug';
 
 interface CreateEventModalProps {
   open: boolean;
@@ -52,7 +53,9 @@ export const CreateEventModal = ({ open, onOpenChange }: CreateEventModalProps) 
       const postData: any = {
         user_id: user.id,
         post_type: 'event',
-        title: title.trim(),
+        content: title.trim(),
+        privacy: 'public',
+        event_slug: createEventSlug(title.trim()),
         event_date: eventDate || null,
         event_location: eventLocation || null,
         event_banner: bannerUrl || null,
